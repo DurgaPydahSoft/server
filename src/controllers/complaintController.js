@@ -336,12 +336,33 @@ export const listAllComplaints = async (req, res) => {
       limit = 10
     } = req.query;
 
+    console.log('Filtering complaints with:', {
+      status,
+      category,
+      subCategory,
+      fromDate,
+      toDate,
+      search,
+      page,
+      limit
+    });
+
     // Build query
     const query = {};
 
     // Status filter
     if (status && status !== 'All') {
-      query.currentStatus = status;
+      if (status === 'Active') {
+        query.currentStatus = { $in: ['Received', 'Pending', 'In Progress'] };
+      } else if (status === 'Resolved') {
+        query.currentStatus = 'Resolved';
+        query.isLockedForUpdates = false;
+      } else if (status === 'Closed') {
+        query.currentStatus = 'Resolved';
+        query.isLockedForUpdates = true;
+      } else {
+        query.currentStatus = status;
+      }
     }
 
     // Category filter
@@ -393,6 +414,36 @@ export const listAllComplaints = async (req, res) => {
       Complaint.countDocuments(query)
     ]);
 
+    // Get counts for each status
+    const statusCounts = await Complaint.aggregate([
+      {
+        $facet: {
+          active: [
+            { $match: { currentStatus: { $in: ['Received', 'Pending', 'In Progress'] } } },
+            { $count: 'count' }
+          ],
+          resolved: [
+            { $match: { currentStatus: 'Resolved', isLockedForUpdates: false } },
+            { $count: 'count' }
+          ],
+          closed: [
+            { $match: { currentStatus: 'Resolved', isLockedForUpdates: true } },
+            { $count: 'count' }
+          ],
+          total: [
+            { $count: 'count' }
+          ]
+        }
+      }
+    ]);
+
+    const counts = {
+      active: statusCounts[0].active[0]?.count || 0,
+      resolved: statusCounts[0].resolved[0]?.count || 0,
+      closed: statusCounts[0].closed[0]?.count || 0,
+      total: statusCounts[0].total[0]?.count || 0
+    };
+
     res.json({
       success: true,
       data: {
@@ -402,7 +453,8 @@ export const listAllComplaints = async (req, res) => {
           page: parseInt(page),
           limit: parseInt(limit),
           pages: Math.ceil(total / parseInt(limit))
-        }
+        },
+        counts
       }
     });
   } catch (error) {
