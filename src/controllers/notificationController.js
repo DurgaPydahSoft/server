@@ -91,20 +91,29 @@ export const markAsRead = async (req, res, next) => {
 // Mark all notifications as read
 export const markAllAsRead = async (req, res) => {
   try {
-    await Notification.updateMany(
-      { recipient: req.user._id, isRead: false },
-      { isRead: true }
+    const result = await Notification.updateMany(
+      { 
+        recipient: req.user._id, 
+        isRead: false 
+      },
+      { 
+        $set: { isRead: true } 
+      }
     );
+
+    console.log('Mark all as read result:', result);
 
     res.json({
       success: true,
-      message: 'All notifications marked as read'
+      message: `Marked ${result.modifiedCount} notifications as read`,
+      count: result.modifiedCount
     });
   } catch (err) {
     console.error('Error marking all notifications as read:', err);
     res.status(500).json({
       success: false,
-      message: 'Failed to mark all notifications as read'
+      message: 'Failed to mark all notifications as read',
+      error: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };

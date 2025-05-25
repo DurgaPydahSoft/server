@@ -203,12 +203,13 @@ export const giveFeedback = async (req, res) => {
         });
       }
     } else {
-      // If satisfied, close the complaint
+      // If satisfied, mark as closed and locked
       complaint.currentStatus = 'Closed';
+      complaint.isLockedForUpdates = true; // Lock the complaint
       complaint.statusHistory.push({
         status: 'Closed',
         timestamp: new Date(),
-        note: 'Complaint closed after positive feedback'
+        note: 'Complaint closed and locked after positive feedback'
       });
 
       // Notify admins
@@ -218,7 +219,7 @@ export const giveFeedback = async (req, res) => {
           type: 'complaint',
           recipient: admin._id,
           sender: req.user._id,
-          message: `Complaint closed by ${req.user.name} after positive feedback`,
+          message: `Complaint closed and locked by ${req.user.name} after positive feedback`,
           relatedId: complaint._id,
           onModel: 'Complaint'
         });
@@ -436,16 +437,8 @@ export const updateComplaintStatus = async (req, res, next) => {
       });
     }
 
+    // Check if complaint is locked
     if (complaint.isLockedForUpdates) {
-      // Delete image from S3 if exists
-      if (complaint.imageUrl) {
-        try {
-          await deleteFromS3(complaint.imageUrl);
-        } catch (deleteError) {
-          console.error('Error deleting image from S3:', deleteError);
-          // Continue with status update even if image deletion fails
-        }
-      }
       return res.status(403).json({ 
         success: false,
         message: 'This complaint has been closed after student satisfaction and can no longer be updated.'
