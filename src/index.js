@@ -32,9 +32,10 @@ const io = new Server(httpServer, {
     origin: [
       process.env.CLIENT_URL || "http://localhost:3000",
       "https://hostel-complaint-frontend.vercel.app",
-      "http://localhost:5173"
+      "http://localhost:5173",
+      "http://localhost:3000"
     ],
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"]
   }
@@ -45,12 +46,18 @@ app.use(cors({
   origin: [
     process.env.CLIENT_URL || "http://localhost:3000",
     "https://hostel-complaint-frontend.vercel.app",
-    "http://localhost:5173"
+    "http://localhost:5173",
+    "http://localhost:3000"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  allowedHeaders: ["Content-Type", "Authorization"],
+  exposedHeaders: ["Content-Range", "X-Content-Range"]
 }));
+
+// Add pre-flight OPTIONS handler
+app.options('*', cors());
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
