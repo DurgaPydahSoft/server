@@ -158,37 +158,85 @@ export const giveFeedback = async (req, res) => {
     const { id } = req.params;
     const { isSatisfied, comment } = req.body;
     const complaint = await Complaint.findOne({ _id: id, student: req.user._id });
-    if (!complaint) return res.status(404).json({ message: 'Complaint not found' });
+    
+    if (!complaint) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Complaint not found' 
+      });
+    }
 
-    console.log(`Status of complaint ${id} BEFORE calling addFeedback: ${complaint.currentStatus}`);
+    if (complaint.currentStatus !== 'Resolved') {
+      return res.status(400).json({
+        success: false,
+        message: 'Feedback can only be given for resolved complaints'
+      });
+    }
 
-    await complaint.addFeedback(isSatisfied, comment);
-    // Notify admin(s) if not satisfied
+    // Add feedback
+    complaint.feedback = {
+      isSatisfied,
+      comment,
+      timestamp: new Date()
+    };
+
+    // If not satisfied, reopen the complaint
     if (!isSatisfied) {
+      complaint.currentStatus = 'In Progress';
+      complaint.isReopened = true;
+      complaint.statusHistory.push({
+        status: 'In Progress',
+        timestamp: new Date(),
+        note: 'Complaint reopened due to negative feedback'
+      });
+
+      // Notify admins
       const admins = await User.find({ role: 'admin' });
       for (const admin of admins) {
-        await Notification.createNotification({
+        await createNotification({
+          type: 'complaint',
           recipient: admin._id,
-          type: 'complaint_status',
-          title: 'Complaint Reopened',
-          message: `Complaint by ${req.user.name} was reopened`,
-          relatedTo: complaint._id,
+          sender: req.user._id,
+          message: `Complaint reopened by ${req.user.name} due to negative feedback`,
+          relatedId: complaint._id,
+          onModel: 'Complaint'
+        });
+      }
+    } else {
+      // If satisfied, close the complaint
+      complaint.currentStatus = 'Closed';
+      complaint.statusHistory.push({
+        status: 'Closed',
+        timestamp: new Date(),
+        note: 'Complaint closed after positive feedback'
+      });
+
+      // Notify admins
+      const admins = await User.find({ role: 'admin' });
+      for (const admin of admins) {
+        await createNotification({
+          type: 'complaint',
+          recipient: admin._id,
+          sender: req.user._id,
+          message: `Complaint closed by ${req.user.name} after positive feedback`,
+          relatedId: complaint._id,
           onModel: 'Complaint'
         });
       }
     }
-    res.json({ success: true, data: complaint });
+
+    await complaint.save();
+
+    res.json({ 
+      success: true, 
+      data: complaint 
+    });
   } catch (error) {
-    console.error('Detailed error in giveFeedback:', error);
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    if (error.stack) {
-      console.error('Error stack:', error.stack);
-    }
+    console.error('Error in giveFeedback:', error);
     res.status(500).json({ 
-        success: false, 
-        message: 'Error giving feedback', 
-        error: { name: error.name, message: error.message } 
+      success: false, 
+      message: 'Error giving feedback', 
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
