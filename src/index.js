@@ -30,10 +30,10 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
     origin: [
-      process.env.CLIENT_URL || "http://localhost:3000",
+      process.env.CLIENT_URL || "https://hms.pydahsoft.in", 
+      "http://localhost:3000",
       "https://hostel-complaint-frontend.vercel.app",
-      "http://localhost:5173",
-      "http://localhost:3000"
+      "http://localhost:5173"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
