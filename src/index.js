@@ -35,11 +35,8 @@ const io = new Server(httpServer, {
   cors: {
     origin: [
       process.env.CLIENT_URL || "http://localhost:3000",
-      "http://192.168.3.160:3000",
-      "http://192.168.3.160:5000",
       "https://hostel-complaint-frontend.vercel.app",
-      "http://localhost:5173",
-      "http://localhost:3000"
+      "http://localhost:5173"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
@@ -50,8 +47,6 @@ const io = new Server(httpServer, {
 // Middleware
 app.use(cors({
   origin: [
-    "http://192.168.3.160:3000",
-    "http://192.168.3.160:5000",
     "https://hostel-complaint-frontend.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000"
