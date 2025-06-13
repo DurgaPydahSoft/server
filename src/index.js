@@ -36,7 +36,8 @@ const io = new Server(httpServer, {
     origin: [
       process.env.CLIENT_URL || "http://localhost:3000",
       "https://hostel-complaint-frontend.vercel.app",
-      "http://localhost:5173"
+      "http://localhost:5173",
+      "https://hms.pydahsoft.in"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
@@ -49,7 +50,8 @@ app.use(cors({
   origin: [
     "https://hostel-complaint-frontend.vercel.app",
     "http://localhost:5173",
-    "http://localhost:3000"
+    "http://localhost:3000",
+    "https://hms.pydahsoft.in"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
