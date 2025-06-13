@@ -14,10 +14,14 @@ import announcementRoutes from './routes/announcementRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
 import memberRoutes from './routes/memberRoutes.js';
 import pollRoutes from './routes/pollRoutes.js';
+import roomRoutes from './routes/roomRoutes.js';
+import outpassRoutes from './routes/outpassRoutes.js';
 // Import Notification model
 import Notification from './models/Notification.js';
 // Import error handler
 import { errorHandler } from './utils/error.js';
+
+
 
 // Load environment variables
 dotenv.config();
@@ -31,6 +35,8 @@ const io = new Server(httpServer, {
   cors: {
     origin: [
       process.env.CLIENT_URL || "http://localhost:3000",
+      "http://192.168.3.160:3000",
+      "http://192.168.3.160:5000",
       "https://hostel-complaint-frontend.vercel.app",
       "http://localhost:5173",
       "http://localhost:3000"
@@ -44,7 +50,8 @@ const io = new Server(httpServer, {
 // Middleware
 app.use(cors({
   origin: [
-    process.env.CLIENT_URL || "http://localhost:3000",
+    "http://192.168.3.160:3000",
+    "http://192.168.3.160:5000",
     "https://hostel-complaint-frontend.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000"
@@ -100,6 +107,10 @@ app.get('/', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/members', memberRoutes);
+app.use('/api/outpass', outpassRoutes); 
+app.use('/api/admin/outpass', outpassRoutes);
+app.use('/api/admin/rooms', roomRoutes);
+app.use('/api/rooms', roomRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/complaints', complaintRoutes);
 app.use('/api/announcements', announcementRoutes);

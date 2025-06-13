@@ -8,8 +8,15 @@ import {
   getBranchesByCourse,
   bulkAddStudents,
   getTempStudentsSummary,
-  getStudentsCount
+  getStudentsCount,
+  addElectricityBill,
+  getElectricityBills
 } from '../controllers/adminController.js';
+import { 
+  getAllOutpassRequests,
+  verifyOTPAndApprove,
+  rejectOutpassRequest
+} from '../controllers/outpassController.js';
 import { adminAuth } from '../middleware/authMiddleware.js';
 import multer from 'multer';
 
@@ -21,16 +28,22 @@ const upload = multer({
   storage: storage,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || file.mimetype === 'application/vnd.ms-excel') {
+    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+        file.mimetype === 'application/vnd.ms-excel') {
       cb(null, true);
     } else {
-      cb(new Error('Only .xlsx and .xls files are allowed!'), false);
+      cb(new Error('Only Excel files are allowed!'), false);
     }
   }
 });
 
 // All routes require admin authentication
 router.use(adminAuth);
+
+// Outpass management routes
+router.get('/outpass/all', getAllOutpassRequests);
+router.post('/outpass/verify-otp', verifyOTPAndApprove);
+router.post('/outpass/reject', rejectOutpassRequest);
 
 // Student management routes
 // Specific sub-paths of /students/ should come before dynamic /students/:id
@@ -55,5 +68,9 @@ router.delete('/students/:id', deleteStudent);
 
 // Utility routes
 router.get('/branches/:course', getBranchesByCourse);
+
+// Electricity bill routes
+router.post('/rooms/:roomId/electricity-bills', addElectricityBill);
+router.get('/rooms/:roomId/electricity-bills', getElectricityBills);
 
 export default router; 

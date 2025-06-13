@@ -2,6 +2,7 @@ import User, { COURSES, BRANCHES, ROOM_MAPPINGS } from '../models/User.js';
 import TempStudent from '../models/TempStudent.js';
 import { createError } from '../utils/error.js';
 import xlsx from 'xlsx';
+import Room from '../models/Room.js';
 
 // Add a new student
 export const addStudent = async (req, res, next) => {
@@ -30,6 +31,17 @@ export const addStudent = async (req, res, next) => {
     const validRooms = ROOM_MAPPINGS[gender]?.[category] || [];
     if (!validRooms.includes(roomNumber)) {
       throw createError(400, 'Invalid room number for the selected gender and category');
+    }
+
+    // Check bed count limit
+    const RoomModel = (await import('../models/Room.js')).default;
+    const roomDoc = await RoomModel.findOne({ roomNumber, gender, category });
+    if (!roomDoc) {
+      throw createError(400, 'Room not found');
+    }
+    const studentCount = await User.countDocuments({ roomNumber, gender, category, role: 'student' });
+    if (studentCount >= roomDoc.bedCount) {
+      throw createError(400, 'Room is full. Cannot register more students.');
     }
 
     // Generate random password
@@ -483,5 +495,88 @@ export const getStudentsCount = async (req, res, next) => {
   } catch (error) {
     console.error('Error fetching total student count:', error);
     next(createError(500, 'Failed to fetch total student count.'));
+  }
+};
+
+// Add electricity bill for a room
+export const addElectricityBill = async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+    const { month, startUnits, endUnits, rate } = req.body;
+
+    // Validate input
+    if (!month || !startUnits || !endUnits) {
+      throw createError(400, 'Month, startUnits, and endUnits are required');
+    }
+
+    if (endUnits < startUnits) {
+      throw createError(400, 'End units cannot be less than start units');
+    }
+
+    // Parse rate as number if provided
+    let billRate = Room.defaultElectricityRate;
+    if (rate !== undefined && rate !== null && rate !== '') {
+      const parsedRate = Number(rate);
+      if (!isNaN(parsedRate)) {
+        billRate = parsedRate;
+        if (parsedRate !== Room.defaultElectricityRate) {
+          Room.setDefaultElectricityRate(parsedRate);
+        }
+      }
+    }
+
+    const consumption = endUnits - startUnits;
+    const total = consumption * billRate;
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      throw createError(404, 'Room not found');
+    }
+
+    // Check if bill for this month already exists
+    const existingBill = room.electricityBills.find(bill => bill.month === month);
+    if (existingBill) {
+      throw createError(400, 'Bill for this month already exists');
+    }
+
+    // Add new bill
+    room.electricityBills.push({
+      month,
+      startUnits,
+      endUnits,
+      rate: billRate,
+      total
+    });
+
+    await room.save();
+
+    res.json({
+      success: true,
+      data: room.electricityBills[room.electricityBills.length - 1]
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get electricity bills for a room
+export const getElectricityBills = async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      throw createError(404, 'Room not found');
+    }
+
+    // Sort bills by month in descending order
+    const sortedBills = room.electricityBills.sort((a, b) => b.month.localeCompare(a.month));
+
+    res.json({
+      success: true,
+      data: sortedBills
+    });
+  } catch (error) {
+    next(error);
   }
 }; 

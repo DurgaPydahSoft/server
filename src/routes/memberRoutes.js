@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, restrictTo } from '../middleware/authMiddleware.js';
+import { adminAuth } from '../middleware/authMiddleware.js';
 import {
   getAllMembers,
   getMembersByCategory,
@@ -11,18 +11,14 @@ import {
 
 const router = express.Router();
 
-// Protect all routes
-router.use(protect);
-router.use(restrictTo('admin'));
-
 // Member routes
-router.get('/', getAllMembers);
-router.get('/category/:category', getMembersByCategory);
-router.post('/', addMember);
-router.put('/:id', updateMember);
-router.delete('/:id', deleteMember);
+router.get('/', adminAuth, getAllMembers);
+router.get('/category/:category', adminAuth, getMembersByCategory);
+router.post('/', adminAuth, addMember);
+router.put('/:id', adminAuth, updateMember);
+router.delete('/:id', adminAuth, deleteMember);
 
 router.route('/:id/reactivate')
-  .put(reactivateMember);
+  .put(adminAuth, reactivateMember);
 
 export default router; 
