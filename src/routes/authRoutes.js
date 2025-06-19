@@ -41,8 +41,8 @@ router.get('/validate', protect, (req, res) => {
   });
 });
 
-// Admin login
-router.post('/admin/login', adminLogin);
+// Admin login - DISABLED: Using new admin management system
+// router.post('/admin/login', adminLogin);
 // Student login
 router.post('/student/login', studentLogin);
 // Student registration step 1: verify roll number

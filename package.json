@@ -6,7 +6,11 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js"
+    "dev": "nodemon src/index.js",
+    "create-super-admin": "node src/scripts/createSuperAdmin.js",
+    "test-admin-management": "node src/scripts/testAdminManagement.js",
+    "test-admin-login": "node src/scripts/testAdminLogin.js",
+    "remove-old-admin": "node src/scripts/removeOldAdmin.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.812.0",

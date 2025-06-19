@@ -5,7 +5,10 @@ import {
   getAllOutpassRequests, 
   verifyOTPAndApprove, 
   rejectOutpassRequest, 
-  getOutpassById 
+  getOutpassById,
+  getApprovedOutpasses,
+  updateVerificationStatus,
+  requestQrView
 } from '../controllers/outpassController.js';
 import { adminAuth, authenticateStudent, protect } from '../middleware/authMiddleware.js';
 
@@ -15,10 +18,17 @@ const router = express.Router();
 router.post('/create', protect, authenticateStudent, createOutpassRequest);
 router.get('/my-requests', protect, authenticateStudent, getStudentOutpassRequests);
 
-// Admin routes
-router.get('/all', protect, adminAuth, getAllOutpassRequests);
-router.post('/verify-otp', protect, adminAuth, verifyOTPAndApprove);
-router.post('/reject', protect, adminAuth, rejectOutpassRequest);
+// Admin routes - removed 'protect' middleware
+router.get('/all', adminAuth, getAllOutpassRequests);
+router.post('/verify-otp', adminAuth, verifyOTPAndApprove);
+router.post('/reject', adminAuth, rejectOutpassRequest);
+
+// Security guard routes (public access)
+router.get('/approved', getApprovedOutpasses);
+router.post('/verify', updateVerificationStatus);
+
+// Student QR view limit route
+router.post('/qr-view/:id', protect, authenticateStudent, requestQrView);
 
 router.get('/:id', getOutpassById);
 

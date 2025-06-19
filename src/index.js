@@ -8,6 +8,7 @@ import path from 'path';
 // Import routes
 import authRoutes from './routes/authRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import adminManagementRoutes from './routes/adminManagementRoutes.js';
 import studentRoutes from './routes/studentRoutes.js';
 import complaintRoutes from './routes/complaintRoutes.js';
 import announcementRoutes from './routes/announcementRoutes.js';
@@ -51,7 +52,8 @@ app.use(cors({
     "https://hostel-complaint-frontend.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",
-    "https://hms.pydahsoft.in"
+    "https://hms.pydahsoft.in",
+    "http://192.168.232.93:3000"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -103,9 +105,9 @@ app.get('/', (req, res) => {
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin-management', adminManagementRoutes);
 app.use('/api/admin/members', memberRoutes);
 app.use('/api/outpass', outpassRoutes); 
-app.use('/api/admin/outpass', outpassRoutes);
 app.use('/api/admin/rooms', roomRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/students', studentRoutes);

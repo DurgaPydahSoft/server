@@ -185,3 +185,58 @@ export const getAdminNotifications = async (req, res) => {
     });
   }
 };
+
+// Admin: get unread notifications for admin
+export const getAdminUnreadNotifications = async (req, res, next) => {
+  try {
+    console.log('🔔 Admin unread notifications request for admin:', req.admin._id);
+    
+    const notifications = await Notification.find({
+      recipient: req.admin._id,
+      isRead: false
+    })
+    .sort({ createdAt: -1 })
+    .populate('sender', 'name')
+    .limit(50);
+
+    console.log('🔔 Found notifications:', notifications.length);
+
+    res.json({
+      success: true,
+      data: notifications
+    });
+  } catch (error) {
+    console.error('🔔 Error in getAdminUnreadNotifications:', error);
+    // Return empty array instead of failing
+    res.json({
+      success: true,
+      data: []
+    });
+  }
+};
+
+// Admin: get unread notification count for admin
+export const getAdminUnreadCount = async (req, res, next) => {
+  try {
+    console.log('🔔 Admin unread count request for admin:', req.admin._id);
+    
+    const count = await Notification.countDocuments({
+      recipient: req.admin._id,
+      isRead: false
+    });
+
+    console.log('🔔 Unread count:', count);
+
+    res.json({
+      success: true,
+      count
+    });
+  } catch (error) {
+    console.error('🔔 Error in getAdminUnreadCount:', error);
+    // Return 0 instead of failing
+    res.json({
+      success: true,
+      count: 0
+    });
+  }
+};

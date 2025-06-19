@@ -1,5 +1,4 @@
 import express from 'express';
-import { protect } from '../middleware/authMiddleware.js';
 import {
   getNotifications,
   markAsRead,
@@ -7,36 +6,27 @@ import {
   deleteNotification,
   getUnreadCount,
   getUnreadNotifications,
-  getAdminNotifications
+  getAdminNotifications,
+  getAdminUnreadNotifications,
+  getAdminUnreadCount
 } from '../controllers/notificationController.js';
-import { authenticateStudent, adminAuth } from '../middleware/authMiddleware.js';
+import { authenticateStudent, adminAuth, protect } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// All routes are protected
-router.use(protect);
+// Student routes - use protect middleware
+router.get('/', protect, getNotifications);
+router.get('/unread-count', protect, getUnreadCount);
+router.patch('/:id/read', protect, markAsRead);
+router.patch('/read-all', protect, markAllAsRead);
+router.delete('/:id', protect, deleteNotification);
+router.get('/unread', protect, getUnreadNotifications);
+router.get('/count', protect, getUnreadCount);
+router.delete('/:notificationId', protect, markAsRead);
 
-// Get user's notifications
-router.get('/', getNotifications);
-
-// Get unread count
-router.get('/unread-count', getUnreadCount);
-
-// Mark a notification as read
-router.patch('/:id/read', markAsRead);
-
-// Mark all notifications as read
-router.patch('/read-all', markAllAsRead);
-
-// Delete a notification
-router.delete('/:id', deleteNotification);
-
-// Routes for both admin and student
-router.get('/unread', getUnreadNotifications);
-router.get('/count', getUnreadCount);
-router.delete('/:notificationId', markAsRead);
-
-// Admin routes
+// Admin routes - use adminAuth middleware
 router.get('/admin/all', adminAuth, getAdminNotifications);
+router.get('/admin/unread-count', adminAuth, getAdminUnreadCount);
+router.get('/admin/unread', adminAuth, getAdminUnreadNotifications);
 
 export default router;

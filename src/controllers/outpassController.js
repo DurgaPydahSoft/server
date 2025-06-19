@@ -11,7 +11,7 @@ const generateOTP = () => {
 // Create new outpass request
 export const createOutpassRequest = async (req, res, next) => {
   try {
-    const { dateOfOutpass, reason } = req.body;
+    const { startDate, endDate, reason } = req.body;
     const studentId = req.user.id;
 
     // Get student details
@@ -20,12 +20,22 @@ export const createOutpassRequest = async (req, res, next) => {
       throw createError(404, 'Student not found');
     }
 
-    // Validate date
-    const outpassDate = new Date(dateOfOutpass);
+    // Validate dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
     const today = new Date();
-    if (outpassDate < today) {
-      throw createError(400, 'Outpass date cannot be in the past');
+    
+    if (start < today) {
+      throw createError(400, 'Start date cannot be in the past');
     }
+    
+    if (end <= start) {
+      throw createError(400, 'End date must be after start date');
+    }
+
+    // Calculate number of days
+    const timeDiff = end.getTime() - start.getTime();
+    const numberOfDays = Math.ceil(timeDiff / (1000 * 3600 * 24));
 
     // Generate OTP
     const otp = generateOTP();
@@ -34,7 +44,9 @@ export const createOutpassRequest = async (req, res, next) => {
     // Create outpass request
     const outpass = new Outpass({
       student: studentId,
-      dateOfOutpass,
+      startDate,
+      endDate,
+      numberOfDays,
       reason,
       otpCode: otp,
       otpExpiry,
@@ -200,7 +212,35 @@ export const rejectOutpassRequest = async (req, res, next) => {
   }
 };
 
-// Get outpass by ID (for QR code details)
+// Student requests to view QR code (increments view count)
+export const requestQrView = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const studentId = req.user.id;
+    const outpass = await Outpass.findById(id);
+    if (!outpass) {
+      return res.status(404).json({ success: false, message: 'Outpass not found' });
+    }
+    if (String(outpass.student) !== String(studentId)) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    }
+    if (outpass.qrLocked || outpass.qrViewCount >= 2) {
+      outpass.qrLocked = true;
+      await outpass.save();
+      return res.status(403).json({ success: false, message: 'QR code view limit reached', qrLocked: true });
+    }
+    outpass.qrViewCount += 1;
+    if (outpass.qrViewCount >= 2) {
+      outpass.qrLocked = true;
+    }
+    await outpass.save();
+    res.json({ success: true, qrLocked: outpass.qrLocked, qrViewCount: outpass.qrViewCount });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get outpass by ID (for QR code details, no scan logic)
 export const getOutpassById = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -209,6 +249,68 @@ export const getOutpassById = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Outpass not found' });
     }
     res.json({ success: true, data: outpass });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get all approved outpass requests for security guards
+export const getApprovedOutpasses = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    
+    const outpasses = await Outpass.find({ status: 'Approved' })
+      .populate('student', 'name rollNumber course branch year')
+      .populate('approvedBy', 'name')
+      .sort({ approvedAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const count = await Outpass.countDocuments({ status: 'Approved' });
+
+    res.json({
+      success: true,
+      data: {
+        outpasses,
+        totalPages: Math.ceil(count / limit),
+        currentPage: page,
+        totalRequests: count
+      }
+    });
+  } catch (error) {
+    console.error('Error in getApprovedOutpasses:', error);
+    next(error);
+  }
+};
+
+// Update verification status by security guard
+export const updateVerificationStatus = async (req, res, next) => {
+  try {
+    const { outpassId, verificationStatus } = req.body;
+
+    const outpass = await Outpass.findById(outpassId)
+      .populate('student', 'name rollNumber');
+      
+    if (!outpass) {
+      throw createError(404, 'Outpass request not found');
+    }
+
+    if (outpass.status !== 'Approved') {
+      throw createError(400, 'Only approved outpasses can be verified');
+    }
+
+    outpass.verificationStatus = verificationStatus;
+    outpass.verifiedAt = new Date();
+    
+    await outpass.save();
+
+    res.json({
+      success: true,
+      data: {
+        outpass,
+        message: `Outpass verification status updated to ${verificationStatus}`
+      }
+    });
   } catch (error) {
     next(error);
   }
