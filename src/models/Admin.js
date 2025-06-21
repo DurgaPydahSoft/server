@@ -23,9 +23,10 @@ const adminSchema = new mongoose.Schema({
       'room_management',
       'student_management',
       'complaint_management',
-      'outpass_management',
+      'leave_management',
       'announcement_management',
-      'poll_management'
+      'poll_management',
+      'member_management'
     ]
   }],
   isActive: {

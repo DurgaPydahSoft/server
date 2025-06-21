@@ -582,7 +582,7 @@ export const updateComplaintStatus = async (req, res, next) => {
     await createNotification({
       type: 'complaint',
       recipient: complaint.student,
-      sender: req.user._id,
+      sender: req.admin._id,
       message: `Your complaint "${complaint.description}" has been ${status}`,
       relatedId: complaint._id,
       onModel: 'Complaint'
