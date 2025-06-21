@@ -16,7 +16,7 @@ import notificationRoutes from './routes/notificationRoutes.js';
 import memberRoutes from './routes/memberRoutes.js';
 import pollRoutes from './routes/pollRoutes.js';
 import roomRoutes from './routes/roomRoutes.js';
-import outpassRoutes from './routes/outpassRoutes.js';
+import leaveRoutes from './routes/leaveRoutes.js';
 // Import Notification model
 import Notification from './models/Notification.js';
 // Import error handler
@@ -107,7 +107,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin-management', adminManagementRoutes);
 app.use('/api/admin/members', memberRoutes);
-app.use('/api/outpass', outpassRoutes); 
+app.use('/api/leave', leaveRoutes); 
 app.use('/api/admin/rooms', roomRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/students', studentRoutes);

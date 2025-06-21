@@ -13,10 +13,10 @@ import {
   getElectricityBills
 } from '../controllers/adminController.js';
 import { 
-  getAllOutpassRequests,
+  getAllLeaveRequests,
   verifyOTPAndApprove,
-  rejectOutpassRequest
-} from '../controllers/outpassController.js';
+  rejectLeaveRequest
+} from '../controllers/leaveController.js';
 import { adminAuth } from '../middleware/authMiddleware.js';
 import multer from 'multer';
 
@@ -40,10 +40,10 @@ const upload = multer({
 // All routes require admin authentication
 router.use(adminAuth);
 
-// Outpass management routes
-router.get('/outpass/all', getAllOutpassRequests);
-router.post('/outpass/verify-otp', verifyOTPAndApprove);
-router.post('/outpass/reject', rejectOutpassRequest);
+// Leave management routes
+router.get('/leave/all', getAllLeaveRequests);
+router.post('/leave/verify-otp', verifyOTPAndApprove);
+router.post('/leave/reject', rejectLeaveRequest);
 
 // Student management routes
 // Specific sub-paths of /students/ should come before dynamic /students/:id
