@@ -16,7 +16,7 @@ export const createPoll = async (req, res, next) => {
       status: scheduledTime ? 'scheduled' : 'active',
       isScheduled: !!scheduledTime,
       scheduledTime: scheduledTime ? new Date(scheduledTime) : null,
-      createdBy: req.user._id
+      createdBy: req.admin._id
     });
 
     await poll.save();
@@ -33,8 +33,8 @@ export const createPoll = async (req, res, next) => {
         await notificationService.sendPollNotification(
           studentIds,
           poll,
-          req.user.name,
-          req.user._id
+          req.admin.name,
+          req.admin._id
         );
       }
     }

@@ -7,16 +7,35 @@ import notificationService from '../utils/notificationService.js';
 // Admin: create announcement
 export const createAnnouncement = async (req, res) => {
   try {
-    const { title, content, priority, targetAudience } = req.body;
-    const adminId = req.user._id;
+    const { title, description, priority, targetAudience } = req.body;
+    const adminId = req.admin._id;
+    let imageUrl = null;
 
     console.log('📢 Creating announcement:', title);
 
+    // Handle image upload if a file is present
+    if (req.file) {
+      try {
+        console.log('🖼️ Uploading image to S3...');
+        imageUrl = await uploadToS3(req.file, 'announcements');
+        console.log('🖼️ Image uploaded successfully:', imageUrl);
+      } catch (uploadError) {
+        console.error('🖼️ S3 upload failed:', uploadError);
+        // Decide if you want to fail or continue without an image
+        return res.status(500).json({
+          success: false,
+          message: 'Image upload failed',
+          error: uploadError.message,
+        });
+      }
+    }
+
     const announcement = new Announcement({
       title,
-      content,
+      description,
       priority,
       targetAudience,
+      imageUrl,
       createdBy: adminId
     });
 
@@ -34,7 +53,7 @@ export const createAnnouncement = async (req, res) => {
         await notificationService.sendAnnouncementNotification(
           studentIds,
           announcement,
-          req.user.name,
+          req.admin.name,
           adminId
         );
 

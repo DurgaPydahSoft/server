@@ -26,7 +26,7 @@ const upload = multer({
 });
 
 // Routes
-router.post('/', adminAuth, upload.single('image'), createAnnouncement);
+router.post('/', upload.single('image'), adminAuth, createAnnouncement);
 router.get('/', authenticateStudent, listAnnouncements);
 router.get('/admin/all', adminAuth, listAllAnnouncements);
 router.delete('/:id', adminAuth, deleteAnnouncement);
