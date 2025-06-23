@@ -5,7 +5,7 @@ import { createError } from '../utils/error.js';
 // Get all rooms with optional filtering
 export const getRooms = async (req, res, next) => {
   try {
-    const { gender, category } = req.query;
+    const { gender, category, includeLastBill } = req.query;
     const query = {};
 
     if (gender) query.gender = gender;
@@ -13,8 +13,8 @@ export const getRooms = async (req, res, next) => {
 
     const rooms = await Room.find(query).sort({ roomNumber: 1 });
     
-    // Get student count for each room
-    const roomsWithStudentCount = await Promise.all(rooms.map(async (room) => {
+    // Get student count for each room and optionally the last bill
+    const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
       const studentCount = await User.countDocuments({
         gender: room.gender,
         category: room.category,
@@ -22,8 +22,15 @@ export const getRooms = async (req, res, next) => {
         role: 'student'
       });
       
+      const roomObject = room.toObject();
+
+      if (includeLastBill === 'true' && roomObject.electricityBills?.length > 0) {
+        // Sort by month to find the latest bill
+        roomObject.lastBill = [...roomObject.electricityBills].sort((a, b) => b.month.localeCompare(a.month))[0];
+      }
+
       return {
-        ...room.toObject(),
+        ...roomObject,
         studentCount
       };
     }));
@@ -31,7 +38,7 @@ export const getRooms = async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        rooms: roomsWithStudentCount
+        rooms: roomsWithDetails
       }
     });
   } catch (error) {
@@ -238,8 +245,91 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
       // Add new bill
       room.electricityBills.push({ month, startUnits, endUnits, consumption, rate: billRate, total });
     }
+
+    // Data migration: Ensure all bills have a consumption value before saving
+    room.electricityBills.forEach(bill => {
+      if (bill.consumption === undefined || bill.consumption === null) {
+        bill.consumption = bill.endUnits - bill.startUnits;
+      }
+    });
+    
     await room.save();
     res.json({ success: true, data: room.electricityBills });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Bulk add or update electricity bills for multiple rooms
+export const addBulkElectricityBills = async (req, res, next) => {
+  try {
+    const { month, bills } = req.body;
+
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      throw createError(400, 'A valid month in YYYY-MM format is required.');
+    }
+
+    if (!bills || !Array.isArray(bills) || bills.length === 0) {
+      throw createError(400, 'A non-empty array of bills is required.');
+    }
+
+    const bulkOps = [];
+    const defaultRate = Room.defaultElectricityRate;
+
+    for (const billData of bills) {
+      const { roomId, startUnits, endUnits, rate } = billData;
+
+      // Basic validation for each bill entry
+      if (!roomId || startUnits === undefined || endUnits === undefined) {
+        continue; // Skip entries that are not fully filled
+      }
+      
+      const start = Number(startUnits);
+      const end = Number(endUnits);
+
+      if (isNaN(start) || isNaN(end) || end < start) {
+        console.warn(`Skipping invalid bill data for room ${roomId}: start=${start}, end=${end}`);
+        continue;
+      }
+
+      const billRate = (rate !== undefined && rate !== null && !isNaN(Number(rate))) ? Number(rate) : defaultRate;
+      const consumption = end - start;
+      const total = consumption * billRate;
+
+      const newBillPayload = {
+        month,
+        startUnits: start,
+        endUnits: end,
+        consumption,
+        rate: billRate,
+        total,
+        createdAt: new Date()
+      };
+      
+      // Upsert logic: Pull the old bill for the month and push the new one
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: roomId },
+          update: { $pull: { electricityBills: { month: month } } }
+        }
+      });
+      bulkOps.push({
+        updateOne: {
+          filter: { _id: roomId },
+          update: { $push: { electricityBills: newBillPayload } }
+        }
+      });
+    }
+
+    if (bulkOps.length > 0) {
+      await Room.bulkWrite(bulkOps);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Processed ${bulkOps.length / 2} bills successfully.`,
+    });
+
   } catch (error) {
     next(error);
   }

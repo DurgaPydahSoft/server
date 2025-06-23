@@ -2,6 +2,7 @@ import Announcement from '../models/Announcement.js';
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
+import hybridNotificationService from '../utils/hybridNotificationService.js';
 
 // Admin: create announcement
 export const createAnnouncement = async (req, res) => {
@@ -29,8 +30,18 @@ export const createAnnouncement = async (req, res) => {
       createdBy: req.user._id
     });
 
-    // Notify all students
+    // Get all students
     const students = await User.find({ role: 'student' });
+    const studentIds = students.map(student => student._id);
+
+    // Send notifications to all students using hybrid service
+    await hybridNotificationService.sendAnnouncementNotification(
+      studentIds,
+      announcement,
+      req.user.name
+    );
+
+    // Also create database notifications for in-app display
     for (const student of students) {
       await Notification.createNotification({
         recipient: student._id,

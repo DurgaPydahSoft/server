@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { createError } from '../utils/error.js';
 import { createNotification } from './notificationController.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
+import hybridNotificationService from '../utils/hybridNotificationService.js';
 
 // Student: create complaint
 export const createComplaint = async (req, res, next) => {
@@ -81,7 +82,15 @@ export const createComplaint = async (req, res, next) => {
     // Get all admin users
     const admins = await User.find({ role: 'admin' });
     
-    // Create notifications for all admins
+    // Send notifications to all admins using hybrid service
+    const adminIds = admins.map(admin => admin._id);
+    await hybridNotificationService.sendComplaintNotification(
+      adminIds,
+      complaint,
+      student.name
+    );
+
+    // Also create database notifications for in-app display
     await Promise.all(admins.map(admin => 
       createNotification({
         type: 'complaint',
@@ -578,7 +587,15 @@ export const updateComplaintStatus = async (req, res, next) => {
       { path: 'assignedTo', select: 'name phoneNumber category' }
     ]);
 
-    // Create notification for student
+    // Send notification to student using hybrid service
+    await hybridNotificationService.sendComplaintStatusUpdate(
+      complaint.student,
+      complaint,
+      status,
+      req.admin.name
+    );
+
+    // Also create database notification for in-app display
     await createNotification({
       type: 'complaint',
       recipient: complaint.student,

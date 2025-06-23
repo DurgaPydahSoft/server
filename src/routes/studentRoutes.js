@@ -9,6 +9,7 @@ import {
   deleteStudent,
   updateProfile
 } from '../controllers/studentController.js';
+import { renewBatches } from '../controllers/adminController.js';
 
 const router = express.Router();
 const upload = multer({ dest: 'uploads/' });
@@ -19,6 +20,8 @@ router.post('/upload', adminAuth, upload.single('file'), uploadStudents);
 router.post('/add', adminAuth, addStudent);
 // List all
 router.get('/', adminAuth, listStudents);
+// Renew Batches
+router.post('/renew-batch', adminAuth, renewBatches);
 // Edit
 router.put('/:id', adminAuth, editStudent);
 // Delete

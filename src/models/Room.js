@@ -67,6 +67,11 @@ const roomSchema = new mongoose.Schema({
         required: true,
         min: 0
       },
+      consumption: {
+        type: Number,
+        required: true,
+        min: 0
+      },
       rate: {
         type: Number,
         required: true,

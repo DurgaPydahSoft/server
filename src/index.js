@@ -38,7 +38,9 @@ const io = new Server(httpServer, {
       process.env.CLIENT_URL || "http://localhost:3000",
       "https://hostel-complaint-frontend.vercel.app",
       "http://localhost:5173",
-      "https://hms.pydahsoft.in"
+      "https://hms.pydahsoft.in",
+      "http://192.168.3.148:3000",
+      "http://192.168.3.186:3000"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
@@ -53,7 +55,9 @@ app.use(cors({
     "http://localhost:5173",
     "http://localhost:3000",
     "https://hms.pydahsoft.in",
-    "http://192.168.232.93:3000"
+    "http://192.168.232.93:3000",
+    "http://192.168.3.186:3000",
+    "http://192.168.3.148:3000"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -100,6 +104,21 @@ Notification.watch().on('change', async (change) => {
 // Basic route for testing
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Hostel Management System API' });
+});
+
+// Test route for leave API
+app.get('/test-leave/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('Testing leave route with ID:', id);
+    res.json({ 
+      message: 'Test route working', 
+      id: id,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // API routes

@@ -10,7 +10,8 @@ import {
   addOrUpdateElectricityBill,
   getElectricityBills,
   getStudentRoomBills,
-  getDefaultElectricityRate
+  getDefaultElectricityRate,
+  addBulkElectricityBills
 } from '../controllers/roomController.js';
 
 const router = express.Router();
@@ -34,6 +35,7 @@ router.put('/:id', adminAuth, updateRoom);
 router.delete('/:id', adminAuth, deleteRoom);
 
 // Admin electricity bill routes
+router.post('/bulk-electricity-bills', adminAuth, addBulkElectricityBills);
 router.post('/:roomId/electricity-bill', adminAuth, addOrUpdateElectricityBill);
 router.get('/:roomId/electricity-bill', adminAuth, getElectricityBills);
 router.get('/electricity-default-rate', adminAuth, getDefaultElectricityRate);

@@ -8,7 +8,8 @@ import {
   getUnreadNotifications,
   getAdminNotifications,
   getAdminUnreadNotifications,
-  getAdminUnreadCount
+  getAdminUnreadCount,
+  testNotificationService
 } from '../controllers/notificationController.js';
 import { authenticateStudent, adminAuth, protect } from '../middleware/authMiddleware.js';
 
@@ -28,5 +29,8 @@ router.delete('/:notificationId', protect, markAsRead);
 router.get('/admin/all', adminAuth, getAdminNotifications);
 router.get('/admin/unread-count', adminAuth, getAdminUnreadCount);
 router.get('/admin/unread', adminAuth, getAdminUnreadNotifications);
+
+// Test notification service (admin only)
+router.get('/test-service', adminAuth, testNotificationService);
 
 export default router;

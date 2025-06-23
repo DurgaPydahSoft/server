@@ -6,11 +6,15 @@ import {
   updateStudent,
   deleteStudent,
   getBranchesByCourse,
-  bulkAddStudents,
   getTempStudentsSummary,
   getStudentsCount,
   addElectricityBill,
-  getElectricityBills
+  getElectricityBills,
+  previewBulkUpload,
+  bulkAddStudents,
+  clearTempStudents,
+  renewBatches,
+  searchStudentByRollNumber
 } from '../controllers/adminController.js';
 import { 
   getAllLeaveRequests,
@@ -48,8 +52,11 @@ router.post('/leave/reject', rejectLeaveRequest);
 // Student management routes
 // Specific sub-paths of /students/ should come before dynamic /students/:id
 
-// New route for bulk student upload
-router.post('/students/bulk-upload', upload.single('file'), bulkAddStudents);
+// New route for bulk student upload preview
+router.post('/students/bulk-upload-preview', upload.single('file'), previewBulkUpload);
+
+// New route for bulk student upload commit
+router.post('/students/bulk-upload-commit', bulkAddStudents);
 
 // New route to get temporary students for admin dashboard
 router.get('/students/temp-summary', getTempStudentsSummary);
@@ -57,9 +64,16 @@ router.get('/students/temp-summary', getTempStudentsSummary);
 // New route to get total student count
 router.get('/students/count', getStudentsCount);
 
+// New route for renewing student batches
+router.post('/students/renew-batch', renewBatches);
+
 // Routes for /students (exact path)
 router.post('/students', addStudent);
 router.get('/students', getStudents);
+
+// Specific sub-paths of /students/ should come before dynamic /students/:id
+router.delete('/students/temp-clear', clearTempStudents);
+router.get('/students/search/:rollNumber', searchStudentByRollNumber);
 
 // Dynamic routes for /students/:id
 router.get('/students/:id', getStudentById);
@@ -70,7 +84,7 @@ router.delete('/students/:id', deleteStudent);
 router.get('/branches/:course', getBranchesByCourse);
 
 // Electricity bill routes
-router.post('/rooms/:roomId/electricity-bills', addElectricityBill);
-router.get('/rooms/:roomId/electricity-bills', getElectricityBills);
+router.post('/rooms/:roomId/electricity', addElectricityBill);
+router.get('/rooms/:roomId/electricity', getElectricityBills);
 
 export default router; 

@@ -1,6 +1,6 @@
 import Notification from '../models/Notification.js';
 import { createError } from '../utils/error.js';
-import { sendNotification } from './pushSubscriptionController.js';
+import hybridNotificationService from '../utils/hybridNotificationService.js';
 
 // Get user's notifications
 export const getNotifications = async (req, res) => {
@@ -28,12 +28,17 @@ export const createNotification = async (data) => {
     const notification = new Notification(data);
     await notification.save();
 
-    // Send push notification
-    await sendNotification(data.recipient, {
+    // Send push notification using hybrid service
+    await hybridNotificationService.sendToUser(data.recipient, {
+      type: data.type,
       title: data.type.charAt(0).toUpperCase() + data.type.slice(1),
       message: data.message,
-      type: data.type,
-      url: `/notifications/${notification._id}`
+      relatedId: data.relatedId,
+      id: notification._id,
+      data: {
+        onModel: data.onModel,
+        sender: data.sender
+      }
     });
 
     return notification;
@@ -199,44 +204,47 @@ export const getAdminUnreadNotifications = async (req, res, next) => {
     .populate('sender', 'name')
     .limit(50);
 
-    console.log('🔔 Found notifications:', notifications.length);
-
     res.json({
       success: true,
       data: notifications
     });
   } catch (error) {
-    console.error('🔔 Error in getAdminUnreadNotifications:', error);
-    // Return empty array instead of failing
-    res.json({
-      success: true,
-      data: []
-    });
+    next(error);
   }
 };
 
 // Admin: get unread notification count for admin
 export const getAdminUnreadCount = async (req, res, next) => {
   try {
-    console.log('🔔 Admin unread count request for admin:', req.admin._id);
-    
     const count = await Notification.countDocuments({
       recipient: req.admin._id,
       isRead: false
     });
-
-    console.log('🔔 Unread count:', count);
 
     res.json({
       success: true,
       count
     });
   } catch (error) {
-    console.error('🔔 Error in getAdminUnreadCount:', error);
-    // Return 0 instead of failing
+    next(error);
+  }
+};
+
+// Test notification service
+export const testNotificationService = async (req, res) => {
+  try {
+    const status = hybridNotificationService.getStatus();
+    
     res.json({
       success: true,
-      count: 0
+      message: 'Notification service status',
+      status
+    });
+  } catch (error) {
+    console.error('Error testing notification service:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test notification service'
     });
   }
 };

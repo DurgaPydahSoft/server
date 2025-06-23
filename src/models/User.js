@@ -176,6 +176,25 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid batch format! Use format YYYY-YYYY (e.g., 2022-2026)`
     }
   },
+  academicYear: {
+    type: String,
+    required: function() { return this.role === 'student'; },
+    validate: {
+      validator: function(v) {
+        if (this.role !== 'student') return true;
+        // Validate academic year format (e.g., 2022-2023)
+        if (!/^\d{4}-\d{4}$/.test(v)) return false;
+        const [start, end] = v.split('-').map(Number);
+        return end === start + 1;
+      },
+      message: props => `${props.value} is not a valid academic year format! Use format YYYY-YYYY with a 1-year difference (e.g., 2022-2023)`
+    }
+  },
+  hostelStatus: {
+    type: String,
+    enum: ['Active', 'Inactive'],
+    default: 'Active'
+  },
   isPasswordChanged: {
     type: Boolean,
     default: false
