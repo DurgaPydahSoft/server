@@ -4,6 +4,9 @@ import axios from 'axios';
 const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID;
 const ONESIGNAL_REST_API_KEY = process.env.ONESIGNAL_REST_API_KEY;
 
+console.log('DEBUG ONESIGNAL_APP_ID:', process.env.ONESIGNAL_APP_ID);
+console.log('DEBUG ONESIGNAL_REST_API_KEY:', process.env.ONESIGNAL_REST_API_KEY);
+
 // Check if OneSignal is configured
 export const isOneSignalConfigured = () => {
   return !!(ONESIGNAL_APP_ID && ONESIGNAL_REST_API_KEY);
@@ -58,55 +61,6 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
   }
 };
 
-// Send notification to segment via OneSignal
-export const sendOneSignalSegmentNotification = async (segment, notificationData) => {
-  try {
-    if (!isOneSignalConfigured()) {
-      console.log('🔔 OneSignal not configured, skipping segment notification');
-      return false;
-    }
-
-    console.log('🔔 Sending OneSignal segment notification to:', segment);
-    console.log('🔔 Notification data:', notificationData);
-
-    const response = await axios.post(
-      'https://onesignal.com/api/v1/notifications',
-      {
-        app_id: ONESIGNAL_APP_ID,
-        included_segments: [segment],
-        headings: { en: notificationData.title },
-        contents: { en: notificationData.message },
-        url: notificationData.url || '/',
-        data: {
-          type: notificationData.type,
-          id: notificationData.id,
-          relatedId: notificationData.relatedId,
-          ...notificationData.data
-        },
-        chrome_web_image: notificationData.image,
-        chrome_web_icon: notificationData.icon || '/icon-192x192.png',
-        priority: notificationData.priority || 10,
-        ttl: notificationData.ttl || 86400,
-        collapse_id: notificationData.collapseId,
-        web_push_topic: notificationData.topic,
-        buttons: notificationData.buttons || []
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}`
-        }
-      }
-    );
-
-    console.log('🔔 OneSignal segment notification sent successfully:', response.data);
-    return true;
-  } catch (error) {
-    console.error('🔔 Error sending OneSignal segment notification:', error.response?.data || error.message);
-    return false;
-  }
-};
-
 // Send notification to multiple users via OneSignal
 export const sendOneSignalBulkNotification = async (userIds, notificationData) => {
   try {
@@ -157,6 +111,55 @@ export const sendOneSignalBulkNotification = async (userIds, notificationData) =
     return true;
   } catch (error) {
     console.error('🔔 Error sending OneSignal bulk notification:', error.response?.data || error.message);
+    return false;
+  }
+};
+
+// Send notification to segment via OneSignal
+export const sendOneSignalSegmentNotification = async (segment, notificationData) => {
+  try {
+    if (!isOneSignalConfigured()) {
+      console.log('🔔 OneSignal not configured, skipping segment notification');
+      return false;
+    }
+
+    console.log('🔔 Sending OneSignal segment notification to:', segment);
+    console.log('🔔 Notification data:', notificationData);
+
+    const response = await axios.post(
+      'https://onesignal.com/api/v1/notifications',
+      {
+        app_id: ONESIGNAL_APP_ID,
+        included_segments: [segment],
+        headings: { en: notificationData.title },
+        contents: { en: notificationData.message },
+        url: notificationData.url || '/',
+        data: {
+          type: notificationData.type,
+          id: notificationData.id,
+          relatedId: notificationData.relatedId,
+          ...notificationData.data
+        },
+        chrome_web_image: notificationData.image,
+        chrome_web_icon: notificationData.icon || '/icon-192x192.png',
+        priority: notificationData.priority || 10,
+        ttl: notificationData.ttl || 86400,
+        collapse_id: notificationData.collapseId,
+        web_push_topic: notificationData.topic,
+        buttons: notificationData.buttons || []
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}`
+        }
+      }
+    );
+
+    console.log('🔔 OneSignal segment notification sent successfully:', response.data);
+    return true;
+  } catch (error) {
+    console.error('🔔 Error sending OneSignal segment notification:', error.response?.data || error.message);
     return false;
   }
 };

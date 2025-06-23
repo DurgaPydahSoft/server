@@ -62,6 +62,9 @@ export const updateSubAdmin = async (req, res, next) => {
     const { id } = req.params;
     const { username, password, permissions, isActive } = req.body;
 
+    console.log('📝 Updating sub-admin:', id);
+    console.log('📝 Update data:', { username, permissions, isActive });
+
     const subAdmin = await Admin.findOne({ 
       _id: id,
       role: 'sub_admin',
@@ -71,6 +74,8 @@ export const updateSubAdmin = async (req, res, next) => {
     if (!subAdmin) {
       throw createError(404, 'Sub-admin not found');
     }
+
+    console.log('📝 Current sub-admin permissions:', subAdmin.permissions);
 
     // Update fields
     if (username && username !== subAdmin.username) {
@@ -83,24 +88,29 @@ export const updateSubAdmin = async (req, res, next) => {
     if (password) {
       subAdmin.password = password;
     }
-    if (permissions) {
+    if (permissions !== undefined) {
+      console.log('📝 Updating permissions from:', subAdmin.permissions, 'to:', permissions);
       subAdmin.permissions = permissions;
     }
     if (typeof isActive === 'boolean') {
       subAdmin.isActive = isActive;
     }
 
+    console.log('📝 Saving sub-admin with permissions:', subAdmin.permissions);
     const updatedAdmin = await subAdmin.save();
     
     // Remove password from response
     const adminResponse = updatedAdmin.toObject();
     delete adminResponse.password;
 
+    console.log('📝 Sub-admin updated successfully');
+
     res.json({
       success: true,
       data: adminResponse
     });
   } catch (error) {
+    console.error('📝 Error updating sub-admin:', error);
     next(error);
   }
 };
@@ -153,7 +163,7 @@ export const adminLogin = async (req, res, next) => {
     // Generate token
     const token = jwt.sign(
       { 
-        id: admin._id,
+        _id: admin._id,
         role: admin.role,
         permissions: admin.permissions
       },

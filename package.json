@@ -5,8 +5,8 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "node -r dotenv/config src/index.js",
+    "dev": "nodemon -r dotenv/config src/index.js",
     "create-super-admin": "node src/scripts/createSuperAdmin.js",
    
     "test-admin-management": "node src/scripts/testAdminManagement.js",

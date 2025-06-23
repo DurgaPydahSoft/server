@@ -4,121 +4,71 @@ import Notification from '../models/Notification.js';
 import Member from '../models/Member.js';
 import mongoose from 'mongoose';
 import { createError } from '../utils/error.js';
-import { createNotification } from './notificationController.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
-import hybridNotificationService from '../utils/hybridNotificationService.js';
+import notificationService from '../utils/notificationService.js';
 
 // Student: create complaint
 export const createComplaint = async (req, res, next) => {
   try {
-    const { category, subCategory, description } = req.body;
+    const { title, description, category, priority, roomNumber } = req.body;
     const studentId = req.user._id;
-    let imageUrl = null;
 
-    console.log('Creating complaint:', {
-      studentId,
+    console.log('📝 Creating complaint for student:', studentId);
+
+    const complaint = new Complaint({
+      title,
+      description,
       category,
-      subCategory,
-      descriptionLength: description?.length,
-      hasImage: !!req.file
-    });
-
-    // Handle image upload if present
-    if (req.file) {
-      try {
-        imageUrl = await uploadToS3(req.file, 'complaints');
-      } catch (uploadError) {
-        console.error('Error uploading image:', uploadError);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Error uploading image to S3' 
-        });
-      }
-    }
-
-    // Validate category and subcategory
-    if (!category) {
-      return res.status(400).json({
-        success: false,
-        message: 'Category is required'
-      });
-    }
-
-    if (category === 'Maintenance' && !subCategory) {
-      return res.status(400).json({
-        success: false,
-        message: 'Sub-category is required for Maintenance complaints'
-      });
-    }
-
-    if (!description || !description.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Description is required'
-      });
-    }
-
-    // Validate student exists
-    const student = await User.findById(studentId);
-    if (!student) {
-      console.error('Student not found:', studentId);
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found'
-      });
-    }
-
-    const complaint = await Complaint.create({
+      priority,
+      roomNumber,
       student: studentId,
-      category,
-      subCategory,
-      description: description.trim(),
-      imageUrl
+      status: 'pending'
     });
 
-    // Populate student details for response
-    await complaint.populate('student', 'name rollNumber');
+    await complaint.save();
 
-    // Get all admin users
-    const admins = await User.find({ role: 'admin' });
-    
-    // Send notifications to all admins using hybrid service
-    const adminIds = admins.map(admin => admin._id);
-    await hybridNotificationService.sendComplaintNotification(
-      adminIds,
-      complaint,
-      student.name
-    );
+    // Populate student details for notification
+    await complaint.populate('student', 'name email');
 
-    // Also create database notifications for in-app display
-    await Promise.all(admins.map(admin => 
-      createNotification({
-        type: 'complaint',
-        recipient: admin._id,
-        sender: req.user._id,
-        message: `New complaint received: ${complaint.description}`,
-        relatedId: complaint._id,
-        onModel: 'Complaint'
-      })
-    ));
+    console.log('📝 Complaint created successfully:', complaint._id);
+
+    // Send notification to all admins
+    try {
+      const admins = await User.find({ 
+        role: { $in: ['admin', 'super_admin', 'sub_admin'] } 
+      });
+
+      if (admins.length > 0) {
+        const adminIds = admins.map(admin => admin._id);
+        
+        // Send notification to all admins
+        for (const adminId of adminIds) {
+          await notificationService.sendComplaintNotification(
+            adminId,
+            complaint,
+            complaint.student.name,
+            studentId
+          );
+        }
+
+        console.log('🔔 Complaint notification sent to', adminIds.length, 'admins');
+      }
+    } catch (notificationError) {
+      console.error('🔔 Error sending complaint notification:', notificationError);
+      // Don't fail the complaint creation if notification fails
+    }
 
     res.status(201).json({
       success: true,
+      message: 'Complaint submitted successfully',
       data: complaint
     });
-  } catch (err) {
-    console.error('Error creating complaint:', err);
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        message: err.message,
-        errors: Object.values(err.errors).map(e => e.message)
-      });
-    }
+  } catch (error) {
+    console.error('📝 Error creating complaint:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to create complaint',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      message: 'Failed to submit complaint',
+      error: error.message
     });
   }
 };
@@ -200,16 +150,14 @@ export const giveFeedback = async (req, res) => {
       });
 
       // Notify admins
-      const admins = await User.find({ role: 'admin' });
+      const admins = await User.find({ role: { $in: ['admin', 'super_admin', 'sub_admin'] } });
       for (const admin of admins) {
-        await createNotification({
-          type: 'complaint',
-          recipient: admin._id,
-          sender: req.user._id,
-          message: `Complaint reopened by ${req.user.name} due to negative feedback`,
-          relatedId: complaint._id,
-          onModel: 'Complaint'
-        });
+        await notificationService.sendComplaintNotification(
+          admin._id,
+          complaint,
+          complaint.student.name,
+          req.user._id
+        );
       }
     } else {
       // If satisfied, keep status as Resolved but lock it
@@ -233,16 +181,14 @@ export const giveFeedback = async (req, res) => {
       }
 
       // Notify admins
-      const admins = await User.find({ role: 'admin' });
+      const admins = await User.find({ role: { $in: ['admin', 'super_admin', 'sub_admin'] } });
       for (const admin of admins) {
-        await createNotification({
-          type: 'complaint',
-          recipient: admin._id,
-          sender: req.user._id,
-          message: `Complaint resolved and locked by ${req.user.name} after positive feedback`,
-          relatedId: complaint._id,
-          onModel: 'Complaint'
-        });
+        await notificationService.sendComplaintNotification(
+          admin._id,
+          complaint,
+          complaint.student.name,
+          req.user._id
+        );
       }
     }
 
@@ -477,149 +423,75 @@ export const listAllComplaints = async (req, res) => {
 };
 
 // Admin: update complaint status
-export const updateComplaintStatus = async (req, res, next) => {
+export const updateComplaintStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, note, memberId } = req.body;
+    const { status, adminResponse } = req.body;
+    const adminId = req.admin ? req.admin._id : req.user._id;
 
-    console.log('Updating complaint status:', {
-      id,
-      status,
-      note,
-      memberId
-    });
+    console.log('📝 Updating complaint status:', id, 'to:', status);
 
-    // Validate ID format
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      console.log('Invalid complaint ID format:', id);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid complaint ID format'
-      });
-    }
-
-    const complaint = await Complaint.findById(id);
-    console.log('Found complaint:', complaint ? 'yes' : 'no');
+    const complaint = await Complaint.findById(id).populate('student', 'name email');
 
     if (!complaint) {
-      console.log('Complaint not found with ID:', id);
       return res.status(404).json({
         success: false,
         message: 'Complaint not found'
       });
     }
 
-    // Check if complaint is locked
+    // Check if complaint is locked for updates
     if (complaint.isLockedForUpdates) {
-      return res.status(403).json({ 
-        success: false,
-        message: 'This complaint has been resolved and locked after student satisfaction and can no longer be updated.'
-      });
-    }
-
-    // Validate status
-    const validStatuses = ['Received', 'Pending', 'In Progress', 'Resolved'];
-    if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`
+        message: 'Complaint is locked and cannot be updated'
       });
     }
 
-    // Validate assigned member if provided
-    if (memberId) {
-      if (!mongoose.Types.ObjectId.isValid(memberId)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid member ID format'
-        });
-      }
-
-      const member = await Member.findById(memberId);
-      if (!member || !member.isActive) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid or inactive member'
-        });
-      }
-
-      // Validate member category matches complaint category/subcategory
-      const validCategory = member.category === complaint.category || 
-                          (complaint.category === 'Maintenance' && member.category === complaint.subCategory);
-      
-      if (!validCategory) {
-        return res.status(400).json({
-          success: false,
-          message: 'Assigned member must belong to the same category/subcategory'
-        });
-      }
-
-      complaint.assignedTo = memberId;
-    }
-
-    // Update status
     const oldStatus = complaint.currentStatus;
-    complaint.currentStatus = status;
     
-    // Add to status history
-    complaint.statusHistory.push({
-      status,
-      note: note || '',
-      assignedTo: complaint.assignedTo,
-      timestamp: new Date()
-    });
+    // Use the built-in updateStatus method which handles validation and status history
+    const note = adminResponse ? `Admin response: ${adminResponse}` : `Status updated to ${status}`;
+    await complaint.updateStatus(status, note);
 
-    // Handle reopening and feedback clearing
-    if (status === 'Resolved') {
-      complaint.feedback = null;
-      complaint.isReopened = false;
-    } else if (status === 'Received' && oldStatus === 'Resolved') {
-      complaint.isReopened = true;
+    // Update additional fields
+    complaint.adminResponse = adminResponse;
+    complaint.resolvedBy = adminId;
+    complaint.resolvedAt = status === 'Resolved' ? new Date() : null;
+
+    await complaint.save();
+
+    console.log('📝 Complaint status updated successfully from', oldStatus, 'to', status);
+
+    // Send notification to student about status update
+    try {
+      const adminName = req.admin ? req.admin.username : req.user.name;
+      
+      await notificationService.sendComplaintStatusUpdate(
+        complaint.student._id,
+        complaint,
+        status,
+        adminName,
+        adminId
+      );
+
+      console.log('🔔 Status update notification sent to student');
+    } catch (notificationError) {
+      console.error('🔔 Error sending status update notification:', notificationError);
+      // Don't fail the status update if notification fails
     }
 
-    // Save the changes
-    await complaint.save();
-    console.log('Complaint updated successfully');
-
-    // Populate the response
-    await complaint.populate([
-      { path: 'student', select: 'name rollNumber' },
-      { path: 'assignedTo', select: 'name phoneNumber category' }
-    ]);
-
-    // Send notification to student using hybrid service
-    await hybridNotificationService.sendComplaintStatusUpdate(
-      complaint.student,
-      complaint,
-      status,
-      req.admin.name
-    );
-
-    // Also create database notification for in-app display
-    await createNotification({
-      type: 'complaint',
-      recipient: complaint.student,
-      sender: req.admin._id,
-      message: `Your complaint "${complaint.description}" has been ${status}`,
-      relatedId: complaint._id,
-      onModel: 'Complaint'
-    });
-
-    res.json({
+    res.status(200).json({
       success: true,
+      message: 'Complaint status updated successfully',
       data: complaint
     });
-  } catch (err) {
-    console.error('Error updating complaint status:', err);
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        message: err.message
-      });
-    }
+  } catch (error) {
+    console.error('📝 Error updating complaint status:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to update complaint status'
+      message: 'Failed to update complaint status',
+      error: error.message
     });
   }
 };
@@ -698,7 +570,7 @@ export const adminGetTimeline = async (req, res) => {
 // Get student's complaints
 export const getStudentComplaints = async (req, res) => {
   try {
-    const complaints = await Complaint.find({ student: req.user.id })
+    const complaints = await Complaint.find({ student: req.user._id })
       .populate('assignedTo', 'name phoneNumber category')
       .sort({ createdAt: -1 });
 
@@ -730,7 +602,7 @@ export const submitFeedback = async (req, res) => {
     }
 
     // Check if complaint belongs to student
-    if (complaint.student.toString() !== req.user.id) {
+    if (complaint.student.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to submit feedback for this complaint'
@@ -805,8 +677,9 @@ export const getComplaintDetails = async (req, res) => {
       });
     }
 
-    // Check if the complaint belongs to the student
-    if (complaint.student._id.toString() !== req.user._id.toString()) {
+    // Check if the complaint belongs to the student (only for student routes)
+    // Skip this check for admin routes (when req.admin exists)
+    if (!req.admin && complaint.student._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to view this complaint'

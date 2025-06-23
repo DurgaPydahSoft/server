@@ -1,8 +1,8 @@
 import Poll from '../models/Poll.js';
 import { createError } from '../utils/error.js';
-import { createNotification } from './notificationController.js';
 import User from '../models/User.js';
 import Notification from '../models/Notification.js';
+import notificationService from '../utils/notificationService.js';
 
 // Create a new poll
 export const createPoll = async (req, res, next) => {
@@ -26,17 +26,17 @@ export const createPoll = async (req, res, next) => {
       // Get all students
       const students = await User.find({ role: 'student' });
       
-      // Create notifications for all students
-      await Promise.all(students.map(student => 
-        createNotification({
-          type: 'poll',
-          recipient: student._id,
-          sender: req.user._id,
-          message: `New poll created: ${question}`,
-          relatedId: poll._id,
-          onModel: 'Poll'
-        })
-      ));
+      if (students.length > 0) {
+        const studentIds = students.map(student => student._id);
+        
+        // Send poll notification to all students
+        await notificationService.sendPollNotification(
+          studentIds,
+          poll,
+          req.user.name,
+          req.user._id
+        );
+      }
     }
 
     res.status(201).json({
@@ -66,16 +66,16 @@ export const getAllPolls = async (req, res, next) => {
         
         // Create notifications for all students when scheduled poll becomes active
         const students = await User.find({ role: 'student' });
-        await Promise.all(students.map(student => 
-          createNotification({
-            type: 'poll',
-            recipient: student._id,
-            sender: poll.createdBy,
-            message: `Scheduled poll is now active: ${poll.question}`,
-            relatedId: poll._id,
-            onModel: 'Poll'
-          })
-        ));
+        if (students.length > 0) {
+          const studentIds = students.map(student => student._id);
+          
+          await notificationService.sendPollNotification(
+            studentIds,
+            poll,
+            poll.createdBy.name,
+            poll.createdBy._id
+          );
+        }
       }
       
       // Handle active polls that have ended
@@ -136,13 +136,10 @@ export const getActivePolls = async (req, res, next) => {
 
       if (pollsNeedingNotification.length > 0) {
         await Promise.all(pollsNeedingNotification.map(poll =>
-          createNotification({
-            type: 'poll_ending',
-            recipient: poll.createdBy,
-            message: `Poll "${poll.question}" is ending within 1 hour`,
-            relatedId: poll._id,
-            onModel: 'Poll'
-          })
+          notificationService.sendPollEndingNotification(
+            [poll.createdBy._id],
+            poll
+          )
         ));
       }
     }

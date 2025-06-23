@@ -2,61 +2,61 @@ import Announcement from '../models/Announcement.js';
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
-import hybridNotificationService from '../utils/hybridNotificationService.js';
+import notificationService from '../utils/notificationService.js';
 
 // Admin: create announcement
 export const createAnnouncement = async (req, res) => {
   try {
-    const { title, description } = req.body;
-    let imageUrl = null;
+    const { title, content, priority, targetAudience } = req.body;
+    const adminId = req.user._id;
 
-    // Handle image upload if present
-    if (req.file) {
-      try {
-        imageUrl = await uploadToS3(req.file);
-      } catch (uploadError) {
-        console.error('Error uploading image:', uploadError);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Error uploading image to S3' 
-        });
-      }
-    }
+    console.log('📢 Creating announcement:', title);
 
-    const announcement = await Announcement.create({
+    const announcement = new Announcement({
       title,
-      description,
-      imageUrl,
-      createdBy: req.user._id
+      content,
+      priority,
+      targetAudience,
+      createdBy: adminId
     });
 
-    // Get all students
-    const students = await User.find({ role: 'student' });
-    const studentIds = students.map(student => student._id);
+    await announcement.save();
 
-    // Send notifications to all students using hybrid service
-    await hybridNotificationService.sendAnnouncementNotification(
-      studentIds,
-      announcement,
-      req.user.name
-    );
+    console.log('📢 Announcement created successfully:', announcement._id);
 
-    // Also create database notifications for in-app display
-    for (const student of students) {
-      await Notification.createNotification({
-        recipient: student._id,
-        type: 'announcement',
-        title: 'New Announcement',
-        message: title,
-        relatedTo: announcement._id,
-        onModel: 'Announcement'
-      });
+    // Send notification to all students
+    try {
+      const students = await User.find({ role: 'student' });
+      
+      if (students.length > 0) {
+        const studentIds = students.map(student => student._id);
+        
+        await notificationService.sendAnnouncementNotification(
+          studentIds,
+          announcement,
+          req.user.name,
+          adminId
+        );
+
+        console.log('🔔 Announcement notification sent to students:', studentIds.length);
+      }
+    } catch (notificationError) {
+      console.error('🔔 Error sending announcement notification:', notificationError);
+      // Don't fail the announcement creation if notification fails
     }
 
-    res.json({ success: true, data: announcement });
+    res.status(201).json({
+      success: true,
+      message: 'Announcement created successfully',
+      data: announcement
+    });
   } catch (error) {
-    console.error('Error creating announcement:', error);
-    res.status(500).json({ success: false, message: 'Error creating announcement', error: error.message });
+    console.error('📢 Error creating announcement:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create announcement',
+      error: error.message
+    });
   }
 };
 

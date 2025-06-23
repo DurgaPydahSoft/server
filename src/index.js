@@ -5,6 +5,15 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import path from 'path';
+
+// Load environment variables
+const dotenvResult = dotenv.config();
+if (dotenvResult.error) {
+  console.error('🔴 Error loading .env file:', dotenvResult.error);
+} else {
+  console.log('✅ .env file loaded successfully. Parsed variables:', Object.keys(dotenvResult.parsed || {}));
+}
+
 // Import routes
 import authRoutes from './routes/authRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
@@ -24,8 +33,7 @@ import { errorHandler } from './utils/error.js';
 
 
 
-// Load environment variables
-dotenv.config();
+
 
 // Create Express app
 const app = express();
@@ -118,6 +126,31 @@ app.get('/test-leave/:id', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Test route for notification system
+app.get('/test-notification', async (req, res) => {
+  try {
+    console.log('🔔 Testing notification system...');
+    
+    // Import the notification service
+    const notificationService = (await import('./utils/notificationService.js')).default;
+    
+    const status = notificationService.getStatus();
+    
+    res.json({ 
+      message: 'Notification system test', 
+      status: status,
+      timestamp: new Date().toISOString(),
+      oneSignalConfigured: !!process.env.ONESIGNAL_APP_ID
+    });
+  } catch (error) {
+    console.error('🔔 Notification test error:', error);
+    res.status(500).json({ 
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 

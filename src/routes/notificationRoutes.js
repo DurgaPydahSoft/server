@@ -1,36 +1,39 @@
 import express from 'express';
 import {
   getNotifications,
+  getUnreadNotifications,
+  getUnreadCount,
   markAsRead,
   markAllAsRead,
   deleteNotification,
-  getUnreadCount,
-  getUnreadNotifications,
   getAdminNotifications,
   getAdminUnreadNotifications,
   getAdminUnreadCount,
-  testNotificationService
+  sendTestNotification,
+  getNotificationStatus
 } from '../controllers/notificationController.js';
-import { authenticateStudent, adminAuth, protect } from '../middleware/authMiddleware.js';
+import { protect, adminAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-// Student routes - use protect middleware
+// Test and status routes (no auth required)
+router.post('/test', sendTestNotification);
+router.get('/status', getNotificationStatus);
+
+// Admin routes (adminAuth middleware)
+router.get('/admin', adminAuth, getAdminNotifications);
+router.get('/admin/unread', adminAuth, getAdminUnreadNotifications);
+router.get('/admin/count', adminAuth, getAdminUnreadCount);
+router.patch('/admin/read-all', adminAuth, markAllAsRead);
+router.patch('/admin/:id/read', adminAuth, markAsRead);
+router.delete('/admin/:id', adminAuth, deleteNotification);
+
+// Student routes (protect middleware)
 router.get('/', protect, getNotifications);
-router.get('/unread-count', protect, getUnreadCount);
-router.patch('/:id/read', protect, markAsRead);
-router.patch('/read-all', protect, markAllAsRead);
-router.delete('/:id', protect, deleteNotification);
 router.get('/unread', protect, getUnreadNotifications);
 router.get('/count', protect, getUnreadCount);
-router.delete('/:notificationId', protect, markAsRead);
-
-// Admin routes - use adminAuth middleware
-router.get('/admin/all', adminAuth, getAdminNotifications);
-router.get('/admin/unread-count', adminAuth, getAdminUnreadCount);
-router.get('/admin/unread', adminAuth, getAdminUnreadNotifications);
-
-// Test notification service (admin only)
-router.get('/test-service', adminAuth, testNotificationService);
+router.patch('/read-all', protect, markAllAsRead);
+router.patch('/:id/read', protect, markAsRead);
+router.delete('/:id', protect, deleteNotification);
 
 export default router;
