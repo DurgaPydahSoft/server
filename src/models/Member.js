@@ -25,8 +25,8 @@ const memberSchema = new mongoose.Schema({
     required: [true, 'Category is required'],
     trim: true,
     enum: {
-      values: ['Canteen', 'Internet', 'Housekeeping', 'Plumbing', 'Electricity', 'Others'],
-      message: props => `${props.value} is not a valid category! Must be one of: Canteen, Internet, Housekeeping, Plumbing, Electricity, Others`
+      values: ['Canteen', 'Internet', 'Housekeeping', 'Plumbing', 'Electricity', 'Others', 'Maintenance'],
+      message: props => `${props.value} is not a valid category! Must be one of: Canteen, Internet, Housekeeping, Plumbing, Electricity, Others, Maintenance`
     }
   },
   isActive: {

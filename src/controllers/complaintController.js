@@ -10,7 +10,7 @@ import notificationService from '../utils/notificationService.js';
 // Student: create complaint
 export const createComplaint = async (req, res, next) => {
   try {
-    const { title, description, category, priority, roomNumber } = req.body;
+    const { title, description, category, subCategory, priority, roomNumber } = req.body;
     const studentId = req.user._id;
 
     console.log('📝 Creating complaint for student:', studentId);
@@ -19,6 +19,7 @@ export const createComplaint = async (req, res, next) => {
       title,
       description,
       category,
+      subCategory, 
       priority,
       roomNumber,
       student: studentId,
