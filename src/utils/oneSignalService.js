@@ -23,28 +23,43 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
     console.log('🔔 Sending OneSignal notification to user:', userId);
     console.log('🔔 Notification data:', notificationData);
 
-    const response = await axios.post(
-      'https://onesignal.com/api/v1/notifications',
-      {
-        app_id: ONESIGNAL_APP_ID,
-        include_external_user_ids: [userId.toString()],
-        headings: { en: notificationData.title },
-        contents: { en: notificationData.message },
-        url: notificationData.url || '/',
-        data: {
-          type: notificationData.type,
-          id: notificationData.id,
-          relatedId: notificationData.relatedId,
-          ...notificationData.data
-        },
-        chrome_web_image: notificationData.image,
-        chrome_web_icon: notificationData.icon || '/icon-192x192.png',
-        priority: notificationData.priority || 10,
-        ttl: notificationData.ttl || 86400, // 24 hours
-        collapse_id: notificationData.collapseId,
-        web_push_topic: notificationData.topic,
-        buttons: notificationData.buttons || []
+    // Build the notification payload according to OneSignal documentation
+    const payload = {
+      app_id: ONESIGNAL_APP_ID,
+      include_external_user_ids: [userId.toString()],
+      headings: { en: notificationData.title || 'New Notification' },
+      contents: { en: notificationData.message },
+      url: notificationData.url || '/',
+      data: {
+        type: notificationData.type,
+        id: notificationData.id,
+        relatedId: notificationData.relatedId,
+        ...notificationData.data
       },
+      // Web push specific parameters
+      chrome_web_image: notificationData.image,
+      chrome_web_icon: notificationData.icon || '/icon-192x192.png',
+      // Priority and TTL
+      priority: notificationData.priority || 10,
+      ttl: notificationData.ttl || 86400, // 24 hours
+      // Collapse and topic
+      collapse_id: notificationData.collapseId,
+      web_push_topic: notificationData.topic,
+      // Action buttons
+      web_buttons: notificationData.buttons || [],
+      // Platform targeting - ensure web push is enabled
+      isAnyWeb: true,
+      // Additional required parameters
+      channel_for_external_user_ids: "push",
+      // Enable frequency capping
+      enable_frequency_cap: true
+    };
+
+    console.log('🔔 OneSignal payload:', JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      'https://api.onesignal.com/notifications',
+      payload,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -57,6 +72,13 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
     return true;
   } catch (error) {
     console.error('🔔 Error sending OneSignal notification:', error.response?.data || error.message);
+    if (error.response) {
+      console.error('🔔 OneSignal API Error Details:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
     return false;
   }
 };
@@ -77,28 +99,42 @@ export const sendOneSignalBulkNotification = async (userIds, notificationData) =
     console.log('🔔 Sending OneSignal bulk notification to users:', userIds.length);
     console.log('🔔 Notification data:', notificationData);
 
-    const response = await axios.post(
-      'https://onesignal.com/api/v1/notifications',
-      {
-        app_id: ONESIGNAL_APP_ID,
-        include_external_user_ids: userIds.map(id => id.toString()),
-        headings: { en: notificationData.title },
-        contents: { en: notificationData.message },
-        url: notificationData.url || '/',
-        data: {
-          type: notificationData.type,
-          id: notificationData.id,
-          relatedId: notificationData.relatedId,
-          ...notificationData.data
-        },
-        chrome_web_image: notificationData.image,
-        chrome_web_icon: notificationData.icon || '/icon-192x192.png',
-        priority: notificationData.priority || 10,
-        ttl: notificationData.ttl || 86400,
-        collapse_id: notificationData.collapseId,
-        web_push_topic: notificationData.topic,
-        buttons: notificationData.buttons || []
+    const payload = {
+      app_id: ONESIGNAL_APP_ID,
+      include_external_user_ids: userIds.map(id => id.toString()),
+      headings: { en: notificationData.title || 'New Notification' },
+      contents: { en: notificationData.message },
+      url: notificationData.url || '/',
+      data: {
+        type: notificationData.type,
+        id: notificationData.id,
+        relatedId: notificationData.relatedId,
+        ...notificationData.data
       },
+      // Web push specific parameters
+      chrome_web_image: notificationData.image,
+      chrome_web_icon: notificationData.icon || '/icon-192x192.png',
+      // Priority and TTL
+      priority: notificationData.priority || 10,
+      ttl: notificationData.ttl || 86400,
+      // Collapse and topic
+      collapse_id: notificationData.collapseId,
+      web_push_topic: notificationData.topic,
+      // Action buttons
+      web_buttons: notificationData.buttons || [],
+      // Platform targeting - ensure web push is enabled
+      isAnyWeb: true,
+      // Additional required parameters
+      channel_for_external_user_ids: "push",
+      // Enable frequency capping
+      enable_frequency_cap: true
+    };
+
+    console.log('🔔 OneSignal bulk payload:', JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      'https://api.onesignal.com/notifications',
+      payload,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -111,6 +147,13 @@ export const sendOneSignalBulkNotification = async (userIds, notificationData) =
     return true;
   } catch (error) {
     console.error('🔔 Error sending OneSignal bulk notification:', error.response?.data || error.message);
+    if (error.response) {
+      console.error('🔔 OneSignal API Error Details:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
     return false;
   }
 };
@@ -126,28 +169,40 @@ export const sendOneSignalSegmentNotification = async (segment, notificationData
     console.log('🔔 Sending OneSignal segment notification to:', segment);
     console.log('🔔 Notification data:', notificationData);
 
-    const response = await axios.post(
-      'https://onesignal.com/api/v1/notifications',
-      {
-        app_id: ONESIGNAL_APP_ID,
-        included_segments: [segment],
-        headings: { en: notificationData.title },
-        contents: { en: notificationData.message },
-        url: notificationData.url || '/',
-        data: {
-          type: notificationData.type,
-          id: notificationData.id,
-          relatedId: notificationData.relatedId,
-          ...notificationData.data
-        },
-        chrome_web_image: notificationData.image,
-        chrome_web_icon: notificationData.icon || '/icon-192x192.png',
-        priority: notificationData.priority || 10,
-        ttl: notificationData.ttl || 86400,
-        collapse_id: notificationData.collapseId,
-        web_push_topic: notificationData.topic,
-        buttons: notificationData.buttons || []
+    const payload = {
+      app_id: ONESIGNAL_APP_ID,
+      included_segments: [segment],
+      headings: { en: notificationData.title || 'New Notification' },
+      contents: { en: notificationData.message },
+      url: notificationData.url || '/',
+      data: {
+        type: notificationData.type,
+        id: notificationData.id,
+        relatedId: notificationData.relatedId,
+        ...notificationData.data
       },
+      // Web push specific parameters
+      chrome_web_image: notificationData.image,
+      chrome_web_icon: notificationData.icon || '/icon-192x192.png',
+      // Priority and TTL
+      priority: notificationData.priority || 10,
+      ttl: notificationData.ttl || 86400,
+      // Collapse and topic
+      collapse_id: notificationData.collapseId,
+      web_push_topic: notificationData.topic,
+      // Action buttons
+      web_buttons: notificationData.buttons || [],
+      // Platform targeting - ensure web push is enabled
+      isAnyWeb: true,
+      // Enable frequency capping
+      enable_frequency_cap: true
+    };
+
+    console.log('🔔 OneSignal segment payload:', JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      'https://api.onesignal.com/notifications',
+      payload,
       {
         headers: {
           'Content-Type': 'application/json',
@@ -160,6 +215,13 @@ export const sendOneSignalSegmentNotification = async (segment, notificationData
     return true;
   } catch (error) {
     console.error('🔔 Error sending OneSignal segment notification:', error.response?.data || error.message);
+    if (error.response) {
+      console.error('🔔 OneSignal API Error Details:', {
+        status: error.response.status,
+        statusText: error.response.statusText,
+        data: error.response.data
+      });
+    }
     return false;
   }
 };
@@ -273,7 +335,7 @@ export const testOneSignalConnection = async () => {
     }
 
     const response = await axios.get(
-      `https://onesignal.com/api/v1/apps/${ONESIGNAL_APP_ID}`,
+      `https://api.onesignal.com/apps/${ONESIGNAL_APP_ID}`,
       {
         headers: {
           'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}`

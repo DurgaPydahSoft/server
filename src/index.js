@@ -154,6 +154,83 @@ app.get('/test-notification', async (req, res) => {
   }
 });
 
+// Test OneSignal connection endpoint
+app.get('/test-onesignal', async (req, res) => {
+  try {
+    const { testOneSignalConnection } = await import('./utils/oneSignalService.js');
+    const result = await testOneSignalConnection();
+    
+    res.json({
+      success: true,
+      message: 'OneSignal connection test completed',
+      result
+    });
+  } catch (error) {
+    console.error('Error testing OneSignal connection:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test OneSignal connection',
+      error: error.message
+    });
+  }
+});
+
+// Test notification endpoint with detailed logging
+app.post('/test-push-notification', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    console.log('🔔 Testing push notification for user:', userId);
+
+    const { sendOneSignalNotification } = await import('./utils/oneSignalService.js');
+    
+    const testNotification = {
+      title: 'Test Push Notification',
+      message: 'This is a test push notification from the server',
+      type: 'system',
+      url: '/',
+      priority: 10,
+      data: {
+        test: true,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    console.log('🔔 Sending test notification with payload:', testNotification);
+
+    const result = await sendOneSignalNotification(userId, testNotification);
+    
+    if (result) {
+      console.log('🔔 Test push notification sent successfully');
+      res.json({
+        success: true,
+        message: 'Test push notification sent successfully',
+        notification: testNotification
+      });
+    } else {
+      console.log('🔔 Test push notification failed');
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send test push notification'
+      });
+    }
+  } catch (error) {
+    console.error('🔔 Error sending test push notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send test push notification',
+      error: error.message
+    });
+  }
+});
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
