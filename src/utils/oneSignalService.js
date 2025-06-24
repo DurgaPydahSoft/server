@@ -38,7 +38,7 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
       },
       // Web push specific parameters
       chrome_web_image: notificationData.image,
-      chrome_web_icon: notificationData.icon || '/icon-192x192.png',
+      chrome_web_icon: notificationData.icon || 'https://hms.pydahsoft.in/PYDAH_LOGO_PHOTO.jpg',
       // Priority and TTL
       priority: notificationData.priority || 10,
       ttl: notificationData.ttl || 86400, // 24 hours
