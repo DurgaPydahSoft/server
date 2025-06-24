@@ -41,7 +41,23 @@ const upload = multer({
   }
 });
 
-// All routes require admin authentication
+// Setup multer for image uploads
+const imageUpload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
+
+// Public search route for security dashboard
+router.get('/students/search/:rollNumber', searchStudentByRollNumber);
+
+// All routes below require admin authentication
 router.use(adminAuth);
 
 // Leave management routes
@@ -68,16 +84,23 @@ router.get('/students/count', getStudentsCount);
 router.post('/students/renew-batch', renewBatches);
 
 // Routes for /students (exact path)
-router.post('/students', addStudent);
+router.post('/students', imageUpload.fields([
+  { name: 'studentPhoto', maxCount: 1 },
+  { name: 'guardianPhoto1', maxCount: 1 },
+  { name: 'guardianPhoto2', maxCount: 1 }
+]), addStudent);
 router.get('/students', getStudents);
 
 // Specific sub-paths of /students/ should come before dynamic /students/:id
 router.delete('/students/temp-clear', clearTempStudents);
-router.get('/students/search/:rollNumber', searchStudentByRollNumber);
 
 // Dynamic routes for /students/:id
 router.get('/students/:id', getStudentById);
-router.put('/students/:id', updateStudent);
+router.put('/students/:id', imageUpload.fields([
+  { name: 'studentPhoto', maxCount: 1 },
+  { name: 'guardianPhoto1', maxCount: 1 },
+  { name: 'guardianPhoto2', maxCount: 1 }
+]), updateStudent);
 router.delete('/students/:id', deleteStudent);
 
 // Utility routes

@@ -1,4 +1,5 @@
 import User from '../models/User.js';
+import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import XLSX from 'xlsx';
 import fs from 'fs';
 
@@ -134,6 +135,79 @@ export const updateProfile = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error updating profile'
+    });
+  }
+};
+
+// Update student profile photos
+export const updateProfilePhotos = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const student = await User.findById(studentId);
+    
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Handle photo uploads
+    if (req.files) {
+      if (req.files.studentPhoto && req.files.studentPhoto[0]) {
+        // Delete old photo if exists
+        if (student.studentPhoto) {
+          try {
+            await deleteFromS3(student.studentPhoto);
+          } catch (error) {
+            console.error('Error deleting old student photo:', error);
+          }
+        }
+        // Upload new photo
+        student.studentPhoto = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
+      }
+      if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
+        // Delete old photo if exists
+        if (student.guardianPhoto1) {
+          try {
+            await deleteFromS3(student.guardianPhoto1);
+          } catch (error) {
+            console.error('Error deleting old guardian photo 1:', error);
+          }
+        }
+        // Upload new photo
+        student.guardianPhoto1 = await uploadToS3(req.files.guardianPhoto1[0], 'guardian-photos');
+      }
+      if (req.files.guardianPhoto2 && req.files.guardianPhoto2[0]) {
+        // Delete old photo if exists
+        if (student.guardianPhoto2) {
+          try {
+            await deleteFromS3(student.guardianPhoto2);
+          } catch (error) {
+            console.error('Error deleting old guardian photo 2:', error);
+          }
+        }
+        // Upload new photo
+        student.guardianPhoto2 = await uploadToS3(req.files.guardianPhoto2[0], 'guardian-photos');
+      }
+    }
+
+    await student.save();
+
+    res.json({
+      success: true,
+      message: 'Profile photos updated successfully',
+      data: {
+        studentPhoto: student.studentPhoto,
+        guardianPhoto1: student.guardianPhoto1,
+        guardianPhoto2: student.guardianPhoto2
+      }
+    });
+  } catch (error) {
+    console.error('Error updating profile photos:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error updating profile photos'
     });
   }
 }; 

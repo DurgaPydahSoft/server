@@ -198,6 +198,19 @@ const userSchema = new mongoose.Schema({
   isPasswordChanged: {
     type: Boolean,
     default: false
+  },
+  // Photo fields for students
+  studentPhoto: {
+    type: String,
+    required: false
+  },
+  guardianPhoto1: {
+    type: String,
+    required: false
+  },
+  guardianPhoto2: {
+    type: String,
+    required: false
   }
 }, {
   timestamps: true

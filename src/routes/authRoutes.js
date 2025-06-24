@@ -34,7 +34,12 @@ router.get('/validate', protect, (req, res) => {
           category: req.user.category,
           year: req.user.year,
           studentPhone: req.user.studentPhone,
-          parentPhone: req.user.parentPhone
+          parentPhone: req.user.parentPhone,
+          batch: req.user.batch,
+          academicYear: req.user.academicYear,
+          studentPhoto: req.user.studentPhoto,
+          guardianPhoto1: req.user.guardianPhoto1,
+          guardianPhoto2: req.user.guardianPhoto2
         })
       }
     }

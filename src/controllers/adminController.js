@@ -1,6 +1,7 @@
 import User, { COURSES, BRANCHES, ROOM_MAPPINGS } from '../models/User.js';
 import TempStudent from '../models/TempStudent.js';
 import { createError } from '../utils/error.js';
+import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import xlsx from 'xlsx';
 import Room from '../models/Room.js';
 
@@ -48,6 +49,23 @@ export const addStudent = async (req, res, next) => {
     // Generate random password
     const generatedPassword = User.generateRandomPassword();
 
+    // Handle photo uploads
+    let studentPhotoUrl = null;
+    let guardianPhoto1Url = null;
+    let guardianPhoto2Url = null;
+
+    if (req.files) {
+      if (req.files.studentPhoto && req.files.studentPhoto[0]) {
+        studentPhotoUrl = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
+      }
+      if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
+        guardianPhoto1Url = await uploadToS3(req.files.guardianPhoto1[0], 'guardian-photos');
+      }
+      if (req.files.guardianPhoto2 && req.files.guardianPhoto2[0]) {
+        guardianPhoto2Url = await uploadToS3(req.files.guardianPhoto2[0], 'guardian-photos');
+      }
+    }
+
     // Create new student
     const student = new User({
       name,
@@ -64,7 +82,10 @@ export const addStudent = async (req, res, next) => {
       parentPhone,
       batch,
       academicYear,
-      isPasswordChanged: false
+      isPasswordChanged: false,
+      studentPhoto: studentPhotoUrl,
+      guardianPhoto1: guardianPhoto1Url,
+      guardianPhoto2: guardianPhoto2Url
     });
 
     const savedStudent = await student.save();
@@ -409,6 +430,46 @@ export const updateStudent = async (req, res, next) => {
       throw createError(400, 'Parent phone number must be 10 digits.');
     }
 
+    // Handle photo uploads
+    if (req.files) {
+      if (req.files.studentPhoto && req.files.studentPhoto[0]) {
+        // Delete old photo if exists
+        if (student.studentPhoto) {
+          try {
+            await deleteFromS3(student.studentPhoto);
+          } catch (error) {
+            console.error('Error deleting old student photo:', error);
+          }
+        }
+        // Upload new photo
+        student.studentPhoto = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
+      }
+      if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
+        // Delete old photo if exists
+        if (student.guardianPhoto1) {
+          try {
+            await deleteFromS3(student.guardianPhoto1);
+          } catch (error) {
+            console.error('Error deleting old guardian photo 1:', error);
+          }
+        }
+        // Upload new photo
+        student.guardianPhoto1 = await uploadToS3(req.files.guardianPhoto1[0], 'guardian-photos');
+      }
+      if (req.files.guardianPhoto2 && req.files.guardianPhoto2[0]) {
+        // Delete old photo if exists
+        if (student.guardianPhoto2) {
+          try {
+            await deleteFromS3(student.guardianPhoto2);
+          } catch (error) {
+            console.error('Error deleting old guardian photo 2:', error);
+          }
+        }
+        // Upload new photo
+        student.guardianPhoto2 = await uploadToS3(req.files.guardianPhoto2[0], 'guardian-photos');
+      }
+    }
+
     // Update fields
     if (name) student.name = name;
     if (course) student.course = course;
@@ -440,7 +501,10 @@ export const updateStudent = async (req, res, next) => {
           studentPhone: student.studentPhone,
           parentPhone: student.parentPhone,
           batch: student.batch,
-          academicYear: student.academicYear
+          academicYear: student.academicYear,
+          studentPhoto: student.studentPhoto,
+          guardianPhoto1: student.guardianPhoto1,
+          guardianPhoto2: student.guardianPhoto2
         }
       }
     });
@@ -452,11 +516,25 @@ export const updateStudent = async (req, res, next) => {
 // Delete student
 export const deleteStudent = async (req, res, next) => {
   try {
-    const student = await User.findOneAndDelete({ _id: req.params.id, role: 'student' });
+    const student = await User.findOne({ _id: req.params.id, role: 'student' });
     
     if (!student) {
       throw createError(404, 'Student not found');
     }
+
+    // Delete photos from S3
+    const photosToDelete = [student.studentPhoto, student.guardianPhoto1, student.guardianPhoto2].filter(Boolean);
+    
+    for (const photoUrl of photosToDelete) {
+      try {
+        await deleteFromS3(photoUrl);
+      } catch (error) {
+        console.error('Error deleting photo from S3:', error);
+      }
+    }
+
+    // Delete the student
+    await User.findByIdAndDelete(req.params.id);
 
     // Also delete the corresponding TempStudent record
     await TempStudent.deleteOne({ mainStudentId: student._id });
