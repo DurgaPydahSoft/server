@@ -38,7 +38,7 @@ export const protect = async (req, res, next) => {
   }
 };
 
-// Admin-only middleware
+// Admin-only middleware (includes super_admin, sub_admin, and warden)
 export const adminAuth = async (req, res, next) => {
   try {
     console.log('🔐 AdminAuth middleware called for:', req.method, req.path);
@@ -77,6 +77,45 @@ export const adminAuth = async (req, res, next) => {
   }
 };
 
+// Warden-only middleware
+export const wardenAuth = async (req, res, next) => {
+  try {
+    console.log('🏠 WardenAuth middleware called for:', req.method, req.path);
+    
+    let token;
+    if (req.headers.authorization?.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      console.log('🏠 No token found in wardenAuth middleware');
+      return next(createError(401, 'Not authorized, no token'));
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log('🏠 Token decoded in wardenAuth middleware:', { _id: decoded._id, role: decoded.role });
+
+    const admin = await Admin.findById(decoded._id).select('-password');
+
+    if (!admin || !admin.isActive || admin.role !== 'warden') {
+      console.log('🏠 Warden not found or inactive in wardenAuth middleware:', { 
+        found: !!admin, 
+        isActive: admin?.isActive, 
+        role: admin?.role,
+        _id: decoded._id 
+      });
+      return next(createError(401, 'Warden not found or is not active'));
+    }
+    
+    console.log('🏠 Warden found in wardenAuth middleware:', { _id: admin._id, role: admin.role, isActive: admin.isActive });
+    req.warden = admin; // Attach the warden object to the request
+    next();
+  } catch (error) {
+    console.log('🏠 Token verification failed in wardenAuth middleware:', error.message);
+    return next(createError(401, 'Not authorized, token failed'));
+  }
+};
+
 // Role-based access control middleware for admins
 export const restrictTo = (...roles) => {
   return (req, res, next) => {
@@ -93,11 +132,26 @@ export const restrictTo = (...roles) => {
 // Middleware to check if admin is super admin
 export const superAdminAuth = [adminAuth, restrictTo('super_admin')];
 
+// Middleware to check if admin is super admin or sub admin (excludes warden)
+export const adminOnlyAuth = [adminAuth, restrictTo('super_admin', 'sub_admin')];
+
 // Middleware to check specific permissions
 export const checkPermission = (permission) => {
   return (req, res, next) => {
     // This middleware assumes adminAuth has already run
     if (req.admin?.role === 'super_admin' || req.admin?.permissions?.includes(permission)) {
+      next();
+    } else {
+      return next(createError(403, 'Access denied. You do not have the required permission.'));
+    }
+  };
+};
+
+// Middleware to check warden-specific permissions
+export const checkWardenPermission = (permission) => {
+  return (req, res, next) => {
+    // This middleware assumes wardenAuth has already run
+    if (req.warden?.permissions?.includes(permission)) {
       next();
     } else {
       return next(createError(403, 'Access denied. You do not have the required permission.'));

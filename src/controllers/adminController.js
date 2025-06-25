@@ -1,9 +1,12 @@
 import User, { COURSES, BRANCHES, ROOM_MAPPINGS } from '../models/User.js';
 import TempStudent from '../models/TempStudent.js';
+import Complaint from '../models/Complaint.js';
+import Leave from '../models/Leave.js';
+import Room from '../models/Room.js';
+import SecuritySettings from '../models/SecuritySettings.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import xlsx from 'xlsx';
-import Room from '../models/Room.js';
 
 // Add a new student
 export const addStudent = async (req, res, next) => {
@@ -132,6 +135,13 @@ const validateBatch = (batch, course) => {
 
   return false;
 };
+
+// Helper to extract end year from batch or academic year
+function getEndYear(str) {
+  if (!str) return null;
+  const parts = str.split('-');
+  return parts.length === 2 ? parseInt(parts[1], 10) : null;
+}
 
 // Validate academic year
 const validateAcademicYear = (year) => {
@@ -303,7 +313,7 @@ export const bulkAddStudents = async (req, res, next) => {
 // Get all students with pagination and filters
 export const getStudents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, search } = req.query;
+    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, search, hostelStatus } = req.query;
     const query = { role: 'student' };
 
     // Add filters if provided
@@ -314,6 +324,7 @@ export const getStudents = async (req, res, next) => {
     if (roomNumber) query.roomNumber = roomNumber;
     if (batch) query.batch = batch;
     if (academicYear) query.academicYear = academicYear;
+    if (hostelStatus) query.hostelStatus = hostelStatus;
 
     // Add search functionality if search term is provided
     if (search) {
@@ -381,9 +392,11 @@ export const updateStudent = async (req, res, next) => {
       studentPhone, 
       parentPhone,
       batch,
-      academicYear
+      academicYear,
+      hostelStatus
     } = req.body;
     
+    console.log('Update payload (adminController):', req.body); // Debug log
     const student = await User.findOne({ _id: req.params.id, role: 'student' });
     if (!student) {
       throw createError(404, 'Student not found');
@@ -428,6 +441,11 @@ export const updateStudent = async (req, res, next) => {
     }
     if (parentPhone && !/^[0-9]{10}$/.test(parentPhone)) {
       throw createError(400, 'Parent phone number must be 10 digits.');
+    }
+
+    // Validate hostelStatus if present
+    if (hostelStatus && !['Active', 'Inactive'].includes(hostelStatus)) {
+      throw createError(400, 'Invalid hostel status');
     }
 
     // Handle photo uploads
@@ -482,6 +500,23 @@ export const updateStudent = async (req, res, next) => {
     if (parentPhone) student.parentPhone = parentPhone;
     if (batch) student.batch = batch;
     if (academicYear) student.academicYear = academicYear;
+    if (hostelStatus) student.hostelStatus = hostelStatus;
+
+    // Graduation status auto-update on manual edit
+    const courseKey = Object.keys(COURSES).find(key => COURSES[key] === (course || student.course));
+    const maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
+    const batchEndYear = getEndYear(student.batch);
+    const academicEndYear = getEndYear(student.academicYear);
+    if (
+      student.year >= maxYear &&
+      batchEndYear &&
+      academicEndYear &&
+      batchEndYear === academicEndYear
+    ) {
+      student.graduationStatus = 'Graduated';
+    } else {
+      student.graduationStatus = 'Enrolled';
+    }
 
     await student.save();
 
@@ -502,6 +537,7 @@ export const updateStudent = async (req, res, next) => {
           parentPhone: student.parentPhone,
           batch: student.batch,
           academicYear: student.academicYear,
+          hostelStatus: student.hostelStatus,
           studentPhoto: student.studentPhoto,
           guardianPhoto1: student.guardianPhoto1,
           guardianPhoto2: student.guardianPhoto2
@@ -533,8 +569,19 @@ export const deleteStudent = async (req, res, next) => {
       }
     }
 
+    // Delete related records first
+    // Delete complaints
+    await Complaint.deleteMany({ student: student._id });
+    
+    // Delete leave requests
+    await Leave.deleteMany({ student: student._id });
+
     // Delete the student
-    await User.findByIdAndDelete(req.params.id);
+    const deleteResult = await User.findByIdAndDelete(req.params.id);
+
+    if (!deleteResult) {
+      throw createError(500, 'Failed to delete student from database');
+    }
 
     // Also delete the corresponding TempStudent record
     await TempStudent.deleteOne({ mainStudentId: student._id });
@@ -717,7 +764,11 @@ export const renewBatches = async (req, res, next) => {
     }
 
     // Find all students in the 'from' academic year to know who to deactivate
-    const allStudentsInYear = await User.find({ academicYear: fromAcademicYear, role: 'student' });
+    const allStudentsInYear = await User.find({ 
+      academicYear: fromAcademicYear, 
+      role: 'student',
+      hostelStatus: 'Active' // Only consider active students
+    });
     const allStudentIdsInYear = allStudentsInYear.map(s => s._id.toString());
 
     // Determine who was unchecked
@@ -727,6 +778,7 @@ export const renewBatches = async (req, res, next) => {
     let graduatedCount = 0;
     let deactivatedCount = 0;
     const errors = [];
+    const graduationDetails = [];
 
     // Renew selected students
     for (const studentId of studentIds) {
@@ -739,16 +791,41 @@ export const renewBatches = async (req, res, next) => {
 
         const courseKey = Object.keys(COURSES).find(key => COURSES[key] === student.course);
         const maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
-        
-        if (student.year >= maxYear) {
+
+        // Graduation logic: only if final year AND batch end year matches new academic year end year
+        const batchEndYear = getEndYear(student.batch);
+        const toAcademicEndYear = getEndYear(toAcademicYear);
+
+        if (
+          student.year >= maxYear &&
+          batchEndYear &&
+          toAcademicEndYear &&
+          batchEndYear === toAcademicEndYear
+        ) {
           graduatedCount++;
-          student.hostelStatus = 'Inactive'; // Mark as inactive upon graduation
+          // Mark as graduated but KEEP hostel access active
+          student.graduationStatus = 'Graduated';
+          student.academicYear = toAcademicYear; // Update to new academic year for graduation records
+          // Keep hostelStatus as 'Active' - they're still in hostel until they physically leave
           await student.save();
+
+          graduationDetails.push({
+            studentId: student._id,
+            name: student.name,
+            rollNumber: student.rollNumber,
+            course: student.course,
+            year: student.year,
+            status: 'Graduated (Hostel Access Active)',
+            note: 'Student has graduated (batch end year matches academic year) but retains hostel access until physical departure'
+          });
           continue;
         }
 
+        // Regular renewal for non-final year students
         student.year += 1;
         student.academicYear = toAcademicYear;
+        student.hostelStatus = 'Active'; // Ensure they remain active
+        student.graduationStatus = 'Enrolled'; // Ensure they remain enrolled
         await student.save();
         renewedCount++;
       } catch (error) {
@@ -759,8 +836,13 @@ export const renewBatches = async (req, res, next) => {
     // Deactivate unselected students
     for (const studentId of uncheckedStudentIds) {
       try {
-        await User.findByIdAndUpdate(studentId, { hostelStatus: 'Inactive' });
-        deactivatedCount++;
+        const student = await User.findById(studentId);
+        if (student) {
+          student.hostelStatus = 'Inactive';
+          // Don't change graduation status for unselected students
+          await student.save();
+          deactivatedCount++;
+        }
       } catch (error) {
         errors.push({ id: studentId, error: `Failed to deactivate: ${error.message}` });
       }
@@ -774,6 +856,7 @@ export const renewBatches = async (req, res, next) => {
         graduatedCount,
         deactivatedCount,
         errors,
+        graduationDetails
       },
     });
   } catch (error) {
@@ -810,10 +893,30 @@ export const searchStudentByRollNumber = async (req, res, next) => {
     if (!student) {
       return next(createError(404, 'Student with this roll number not found.'));
     }
-    
+
+    // Fetch security settings
+    let settings = await SecuritySettings.findOne();
+    if (!settings) {
+      settings = await SecuritySettings.create({});
+    }
+
+    // Prepare student data based on settings
+    const studentObj = student.toObject();
+    if (!settings.viewProfilePictures) {
+      studentObj.studentPhoto = undefined;
+    }
+    if (!settings.viewPhoneNumbers) {
+      studentObj.studentPhone = undefined;
+      studentObj.parentPhone = undefined;
+    }
+    if (!settings.viewGuardianImages) {
+      studentObj.guardianPhoto1 = undefined;
+      studentObj.guardianPhoto2 = undefined;
+    }
+
     res.status(200).json({
       success: true,
-      data: student
+      data: studentObj
     });
   } catch (error) {
     next(error);

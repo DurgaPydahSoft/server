@@ -40,7 +40,8 @@ const createSuperAdmin = async () => {
         'leave_management',
         'announcement_management',
         'poll_management',
-        'member_management'
+        'member_management',
+        'menu_management'
       ],
       isActive: true
     });

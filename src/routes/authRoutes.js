@@ -1,6 +1,5 @@
 import express from 'express';
 import {
-  adminLogin,
   studentLogin,
   verifyRollNumber,
   completeRegistration,
@@ -17,6 +16,14 @@ router.get('/test', (req, res) => {
 
 // Token validation endpoint
 router.get('/validate', protect, (req, res) => {
+  // Check hostel status for students - if inactive, return error
+  if (req.user.role === 'student' && req.user.hostelStatus === 'Inactive') {
+    return res.status(403).json({
+      success: false,
+      message: 'Your hostel access has been deactivated. Please contact the administration for assistance.'
+    });
+  }
+
   res.json({
     success: true,
     data: {
@@ -37,6 +44,7 @@ router.get('/validate', protect, (req, res) => {
           parentPhone: req.user.parentPhone,
           batch: req.user.batch,
           academicYear: req.user.academicYear,
+          hostelStatus: req.user.hostelStatus,
           studentPhoto: req.user.studentPhoto,
           guardianPhoto1: req.user.guardianPhoto1,
           guardianPhoto2: req.user.guardianPhoto2

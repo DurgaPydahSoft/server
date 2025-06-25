@@ -96,7 +96,7 @@ export const getAllPolls = async (req, res, next) => {
   }
 };
 
-// Get active polls (student)
+// Get active polls (student/warden)
 export const getActivePolls = async (req, res, next) => {
   try {
     // First update any polls that have passed their end time or scheduled time
@@ -145,12 +145,21 @@ export const getActivePolls = async (req, res, next) => {
     }
 
     // Add hasVoted flag for each poll and sort by creation date (newest first)
-    const pollsWithVoteStatus = polls
-      .map(poll => ({
+    let pollsWithVoteStatus = polls.map(poll => ({
+      ...poll.toObject(),
+      hasVoted: false // Default for wardens
+    }));
+
+    // If it's a student request, check voting status
+    if (req.user) {
+      pollsWithVoteStatus = polls.map(poll => ({
         ...poll.toObject(),
         hasVoted: poll.voters.some(voter => voter.student.toString() === req.user._id.toString())
-      }))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      }));
+    }
+
+    // Sort by creation date (newest first)
+    pollsWithVoteStatus.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     res.json({
       success: true,

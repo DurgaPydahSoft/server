@@ -186,6 +186,9 @@ export const getAllLeaveRequests = async (req, res, next) => {
       query.applicationType = applicationType;
     }
 
+    // Exclude bulk outing leave records (identified by reason starting with "Bulk outing:")
+    query.reason = { $not: /^Bulk outing:/ };
+
     console.log('MongoDB query:', query);
 
     const leaves = await Leave.find(query)

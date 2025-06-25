@@ -4,6 +4,10 @@ import {
   getSubAdmins,
   updateSubAdmin,
   deleteSubAdmin,
+  createWarden,
+  getWardens,
+  updateWarden,
+  deleteWarden,
   adminLogin
 } from '../controllers/adminManagementController.js';
 import { adminAuth, superAdminAuth } from '../middleware/authMiddleware.js';
@@ -37,9 +41,17 @@ router.get('/validate', adminAuth, (req, res) => {
 
 // Protected routes - only super admin can access
 router.use(superAdminAuth);
+
+// Sub-admin routes
 router.post('/sub-admins', createSubAdmin);
 router.get('/sub-admins', getSubAdmins);
 router.put('/sub-admins/:id', updateSubAdmin);
 router.delete('/sub-admins/:id', deleteSubAdmin);
+
+// Warden routes
+router.post('/wardens', createWarden);
+router.get('/wardens', getWardens);
+router.put('/wardens/:id', updateWarden);
+router.delete('/wardens/:id', deleteWarden);
 
 export default router; 

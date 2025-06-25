@@ -14,8 +14,15 @@ const adminSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['super_admin', 'sub_admin'],
+    enum: ['super_admin', 'sub_admin', 'warden'],
     default: 'sub_admin'
+  },
+  hostelType: {
+    type: String,
+    enum: ['boys', 'girls'],
+    required: function() {
+      return this.role === 'warden';
+    }
   },
   permissions: [{
     type: String,
@@ -26,7 +33,15 @@ const adminSchema = new mongoose.Schema({
       'leave_management',
       'announcement_management',
       'poll_management',
-      'member_management'
+      'member_management',
+      'menu_management',
+      'warden_student_oversight',
+      'warden_complaint_oversight',
+      'warden_leave_oversight',
+      'warden_room_oversight',
+      'warden_announcement_oversight',
+      'warden_discipline_management',
+      'warden_attendance_tracking'
     ]
   }],
   isActive: {
@@ -70,6 +85,16 @@ adminSchema.methods.comparePassword = async function(candidatePassword) {
 adminSchema.methods.hasPermission = function(permission) {
   if (this.role === 'super_admin') return true;
   return this.permissions.includes(permission);
+};
+
+// Method to check if user is a warden
+adminSchema.methods.isWarden = function() {
+  return this.role === 'warden';
+};
+
+// Method to check if user is an admin (super_admin or sub_admin)
+adminSchema.methods.isAdmin = function() {
+  return this.role === 'super_admin' || this.role === 'sub_admin';
 };
 
 const Admin = mongoose.model('Admin', adminSchema);

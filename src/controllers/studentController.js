@@ -72,7 +72,12 @@ export const editStudent = async (req, res) => {
   try {
     const { id } = req.params;
     const update = req.body;
+    console.log('Update payload:', update); // Debug log
     delete update.password;
+    // Validate hostelStatus if present
+    if (update.hostelStatus && !['Active', 'Inactive'].includes(update.hostelStatus)) {
+      return res.status(400).json({ message: 'Invalid hostel status' });
+    }
     const student = await User.findByIdAndUpdate(id, update, { new: true }).select('-password');
     if (!student) return res.status(404).json({ message: 'Student not found' });
     res.json(student);

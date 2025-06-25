@@ -12,60 +12,6 @@ const generateToken = (user) => {
   );
 };
 
-// Admin login
-export const adminLogin = async (req, res, next) => {
-  try {
-    console.log('Admin login attempt:', req.body);
-    const { username, password } = req.body;
-
-    // Find admin user using rollNumber (which is set to 'ADMIN' for admin user)
-    const admin = await User.findOne({ 
-      rollNumber: username.toUpperCase(),
-      role: 'admin' 
-    });
-    
-    console.log('Admin user found:', admin ? {
-      id: admin._id,
-      name: admin.name,
-      rollNumber: admin.rollNumber,
-      role: admin.role
-    } : 'No admin found');
-
-    if (!admin) {
-      console.log('Admin not found with username:', username);
-      throw createError(401, 'Invalid credentials');
-    }
-
-    // Verify password
-    const isMatch = await admin.comparePassword(password);
-    console.log('Password match result:', isMatch);
-
-    if (!isMatch) {
-      console.log('Password mismatch for admin:', username);
-      throw createError(401, 'Invalid credentials');
-    }
-
-    // Generate token
-    const token = generateToken(admin);
-    console.log('Token generated successfully');
-
-    res.json({
-      success: true,
-      data: {
-        token,
-        admin: {
-          id: admin._id,
-          name: admin.name,
-          role: admin.role
-        }
-      }
-    });
-  } catch (error) {
-    console.error('Admin login error:', error);
-    next(error);
-  }
-};
-
 // Student login
 export const studentLogin = async (req, res, next) => {
   try {
@@ -79,6 +25,11 @@ export const studentLogin = async (req, res, next) => {
     
     if (!student) {
       throw createError(401, 'Invalid roll number or password');
+    }
+
+    // Check hostel status - prevent inactive students from logging in
+    if (student.hostelStatus === 'Inactive') {
+      throw createError(403, 'Your hostel access has been deactivated. Please contact the administration for assistance.');
     }
 
     // Verify password
@@ -106,7 +57,8 @@ export const studentLogin = async (req, res, next) => {
           category: student.category,
           year: student.year,
           studentPhone: student.studentPhone,
-          parentPhone: student.parentPhone
+          parentPhone: student.parentPhone,
+          hostelStatus: student.hostelStatus
         },
         requiresPasswordChange: !student.isPasswordChanged
       }
@@ -179,6 +131,11 @@ export const verifyRollNumber = async (req, res) => {
       return res.status(404).json({ message: 'Roll number not found' });
     }
 
+    // Check hostel status - prevent inactive students from registering
+    if (student.hostelStatus === 'Inactive') {
+      return res.status(403).json({ message: 'Your hostel access has been deactivated. Please contact the administration for assistance.' });
+    }
+
     if (student.isRegistered) {
       return res.status(400).json({ message: 'Student already registered' });
     }
@@ -204,6 +161,11 @@ export const completeRegistration = async (req, res) => {
     
     if (!student) {
       return res.status(404).json({ message: 'Roll number not found' });
+    }
+
+    // Check hostel status - prevent inactive students from registering
+    if (student.hostelStatus === 'Inactive') {
+      return res.status(403).json({ message: 'Your hostel access has been deactivated. Please contact the administration for assistance.' });
     }
 
     if (student.isRegistered) {

@@ -8,11 +8,11 @@ import path from 'path';
 
 // Load environment variables
 const dotenvResult = dotenv.config();
-if (dotenvResult.error) {
-  console.error('🔴 Error loading .env file:', dotenvResult.error);
-} else {
-  console.log('✅ .env file loaded successfully. Parsed variables:', Object.keys(dotenvResult.parsed || {}));
-}
+// if (dotenvResult.error) {
+//   console.error('🔴 Error loading .env file:', dotenvResult.error);
+// } else {
+//   console.log('✅ .env file loaded successfully. Parsed variables:', Object.keys(dotenvResult.parsed || {}));
+// }
 
 // Import routes
 import authRoutes from './routes/authRoutes.js';
@@ -26,6 +26,9 @@ import memberRoutes from './routes/memberRoutes.js';
 import pollRoutes from './routes/pollRoutes.js';
 import roomRoutes from './routes/roomRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
+import menuRoutes from './routes/menuRoutes.js';
+import bulkOutingRoutes from './routes/bulkOutingRoutes.js';
+import apiRouter from './routes/index.js';
 // Import Notification model
 import Notification from './models/Notification.js';
 // Import error handler
@@ -232,6 +235,7 @@ app.post('/test-push-notification', async (req, res) => {
 });
 
 // API routes
+app.use('/api', apiRouter);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin-management', adminManagementRoutes);
@@ -244,6 +248,8 @@ app.use('/api/complaints', complaintRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/polls', pollRoutes);
+app.use('/api/menu', menuRoutes);
+app.use('/api/bulk-outing', bulkOutingRoutes);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {

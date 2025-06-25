@@ -8,7 +8,7 @@ import {
   deletePoll,
   getPollResults
 } from '../controllers/pollController.js';
-import { adminAuth, authenticateStudent } from '../middleware/authMiddleware.js';
+import { adminAuth, authenticateStudent, wardenAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -22,5 +22,8 @@ router.delete('/:pollId', adminAuth, deletePoll);
 router.get('/active', authenticateStudent, getActivePolls);
 router.post('/:pollId/vote', authenticateStudent, votePoll);
 router.get('/:pollId/results', authenticateStudent, getPollResults);
+
+// Warden routes
+router.get('/warden/active', wardenAuth, getActivePolls);
 
 export default router; 

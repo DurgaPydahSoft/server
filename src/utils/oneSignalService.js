@@ -4,8 +4,8 @@ import axios from 'axios';
 const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID;
 const ONESIGNAL_REST_API_KEY = process.env.ONESIGNAL_REST_API_KEY;
 
-console.log('DEBUG ONESIGNAL_APP_ID:', process.env.ONESIGNAL_APP_ID);
-console.log('DEBUG ONESIGNAL_REST_API_KEY:', process.env.ONESIGNAL_REST_API_KEY);
+// console.log('DEBUG ONESIGNAL_APP_ID:', process.env.ONESIGNAL_APP_ID);
+// console.log('DEBUG ONESIGNAL_REST_API_KEY:', process.env.ONESIGNAL_REST_API_KEY);
 
 // Check if OneSignal is configured
 export const isOneSignalConfigured = () => {

@@ -195,6 +195,11 @@ const userSchema = new mongoose.Schema({
     enum: ['Active', 'Inactive'],
     default: 'Active'
   },
+  graduationStatus: {
+    type: String,
+    enum: ['Enrolled', 'Graduated', 'Dropped'],
+    default: 'Enrolled'
+  },
   isPasswordChanged: {
     type: Boolean,
     default: false

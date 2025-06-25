@@ -21,7 +21,7 @@ import {
   verifyOTPAndApprove,
   rejectLeaveRequest
 } from '../controllers/leaveController.js';
-import { adminAuth } from '../middleware/authMiddleware.js';
+import { adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
 import multer from 'multer';
 
 const router = express.Router();
@@ -56,6 +56,9 @@ const imageUpload = multer({
 
 // Public search route for security dashboard
 router.get('/students/search/:rollNumber', searchStudentByRollNumber);
+
+// Warden routes for viewing students (read-only)
+router.get('/warden/students', wardenAuth, getStudents);
 
 // All routes below require admin authentication
 router.use(adminAuth);
