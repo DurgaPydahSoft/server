@@ -164,6 +164,20 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid phone number!`
     }
   },
+  email: {
+    type: String,
+    required: function() { return this.role === 'student'; },
+    trim: true,
+    lowercase: true,
+    validate: {
+      validator: function(v) {
+        if (this.role !== 'student') return true;
+        // Basic email validation regex
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+      },
+      message: props => `${props.value} is not a valid email address!`
+    }
+  },
   batch: {
     type: String,
     required: function() { return this.role === 'student'; },

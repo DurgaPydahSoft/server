@@ -23,7 +23,8 @@ export const addStudent = async (req, res, next) => {
       studentPhone,
       parentPhone,
       batch,
-      academicYear
+      academicYear,
+      email
     } = req.body;
 
     // Check if student already exists
@@ -85,6 +86,7 @@ export const addStudent = async (req, res, next) => {
       parentPhone,
       batch,
       academicYear,
+      email,
       isPasswordChanged: false,
       studentPhoto: studentPhotoUrl,
       guardianPhoto1: guardianPhoto1Url,
@@ -98,6 +100,7 @@ export const addStudent = async (req, res, next) => {
       name: savedStudent.name,
       rollNumber: savedStudent.rollNumber,
       studentPhone: savedStudent.studentPhone,
+      email: savedStudent.email,
       generatedPassword: generatedPassword,
       isFirstLogin: true,
       mainStudentId: savedStudent._id,
@@ -236,6 +239,7 @@ export const bulkAddStudents = async (req, res, next) => {
     const ParentPhone = studentData.ParentPhone || studentData.parentPhone || studentData['Parent Phone'] || studentData['PARENT PHONE'] || studentData['Guardian Phone'] || studentData['GUARDIAN PHONE'];
     const Batch = studentData.Batch || studentData.batch || studentData['Batch Year'] || studentData['BATCH YEAR'] || studentData['Admission Batch'] || studentData['ADMISSION BATCH'];
     const AcademicYear = studentData.AcademicYear || studentData.academicYear || studentData['Academic Year'] || studentData['ACADEMIC YEAR'] || studentData['Current Academic Year'] || studentData['CURRENT ACADEMIC YEAR'];
+    const Email = studentData.Email || studentData.email || studentData['Email'] || studentData['EMAIL'];
 
     try {
       const rollNumberUpper = String(RollNumber).trim().toUpperCase();
@@ -275,6 +279,7 @@ export const bulkAddStudents = async (req, res, next) => {
         parentPhone: String(ParentPhone).trim(),
         batch: String(Batch).trim(),
         academicYear: String(AcademicYear).trim(),
+        email: String(Email).trim(),
         isPasswordChanged: false,
       });
 
@@ -284,6 +289,7 @@ export const bulkAddStudents = async (req, res, next) => {
         name: savedStudent.name,
         rollNumber: savedStudent.rollNumber,
         studentPhone: savedStudent.studentPhone,
+        email: savedStudent.email,
         generatedPassword: generatedPassword,
         isFirstLogin: true,
         mainStudentId: savedStudent._id,
@@ -393,7 +399,8 @@ export const updateStudent = async (req, res, next) => {
       parentPhone,
       batch,
       academicYear,
-      hostelStatus
+      hostelStatus,
+      email
     } = req.body;
     
     console.log('Update payload (adminController):', req.body); // Debug log
@@ -441,6 +448,11 @@ export const updateStudent = async (req, res, next) => {
     }
     if (parentPhone && !/^[0-9]{10}$/.test(parentPhone)) {
       throw createError(400, 'Parent phone number must be 10 digits.');
+    }
+
+    // Validate email if provided
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw createError(400, 'Invalid email address format.');
     }
 
     // Validate hostelStatus if present
@@ -501,6 +513,7 @@ export const updateStudent = async (req, res, next) => {
     if (batch) student.batch = batch;
     if (academicYear) student.academicYear = academicYear;
     if (hostelStatus) student.hostelStatus = hostelStatus;
+    if (email) student.email = email;
 
     // Graduation status auto-update on manual edit
     const courseKey = Object.keys(COURSES).find(key => COURSES[key] === (course || student.course));
@@ -535,6 +548,7 @@ export const updateStudent = async (req, res, next) => {
           roomNumber: student.roomNumber,
           studentPhone: student.studentPhone,
           parentPhone: student.parentPhone,
+          email: student.email,
           batch: student.batch,
           academicYear: student.academicYear,
           hostelStatus: student.hostelStatus,

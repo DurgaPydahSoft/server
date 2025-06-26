@@ -23,6 +23,19 @@ const tempStudentSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid phone number!`
     }
   },
+  email: {
+    type: String,
+    required: true,
+    trim: true,
+    lowercase: true,
+    validate: {
+      validator: function(v) {
+        // Basic email validation regex
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+      },
+      message: props => `${props.value} is not a valid email address!`
+    }
+  },
   generatedPassword: {
     type: String,
     required: true
