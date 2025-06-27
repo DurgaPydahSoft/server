@@ -935,4 +935,53 @@ export const searchStudentByRollNumber = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+// Admin password reset for students
+export const resetStudentPassword = async (req, res, next) => {
+  try {
+    const { newPassword } = req.body;
+    const studentId = req.params.id;
+
+    // Validate password length
+    if (!newPassword || newPassword.length < 6) {
+      throw createError(400, 'Password must be at least 6 characters long');
+    }
+
+    // Find student
+    const student = await User.findOne({ _id: studentId, role: 'student' });
+    if (!student) {
+      throw createError(404, 'Student not found');
+    }
+
+    // Update password
+    student.password = newPassword;
+    student.isPasswordChanged = true;
+    
+    await student.save();
+
+    // Attempt to delete TempStudent record if exists
+    try {
+      await TempStudent.deleteOne({ mainStudentId: student._id });
+      console.log(`TempStudent record processed for student ID: ${student._id}`);
+    } catch (tempStudentError) {
+      console.error(`Error deleting TempStudent for student ID ${student._id}:`, tempStudentError);
+    }
+
+    res.json({
+      success: true,
+      message: 'Student password reset successfully',
+      data: {
+        student: {
+          id: student._id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          isPasswordChanged: true
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Admin password reset error:', error);
+    next(error);
+  }
 }; 

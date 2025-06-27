@@ -8,6 +8,7 @@ import {
   editStudent,
   deleteStudent,
   updateProfile,
+  getProfile,
   updateProfilePhotos
 } from '../controllers/studentController.js';
 import { renewBatches } from '../controllers/adminController.js';
@@ -44,6 +45,7 @@ router.put('/:id', adminAuth, editStudent);
 router.delete('/:id', adminAuth, deleteStudent);
 
 // Update profile
+router.get('/profile', authenticateStudent, getProfile);
 router.put('/profile', authenticateStudent, updateProfile);
 
 // Update profile photos

@@ -144,6 +144,32 @@ export const updateProfile = async (req, res) => {
   }
 };
 
+// Get student profile
+export const getProfile = async (req, res) => {
+  try {
+    const studentId = req.user.id;
+    const student = await User.findById(studentId).select('-password');
+    
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: student
+    });
+  } catch (error) {
+    console.error('Error fetching profile:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching profile'
+    });
+  }
+};
+
 // Update student profile photos
 export const updateProfilePhotos = async (req, res) => {
   try {

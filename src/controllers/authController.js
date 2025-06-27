@@ -58,7 +58,13 @@ export const studentLogin = async (req, res, next) => {
           year: student.year,
           studentPhone: student.studentPhone,
           parentPhone: student.parentPhone,
-          hostelStatus: student.hostelStatus
+          hostelStatus: student.hostelStatus,
+          batch: student.batch,
+          academicYear: student.academicYear,
+          email: student.email,
+          studentPhoto: student.studentPhoto,
+          guardianPhoto1: student.guardianPhoto1,
+          guardianPhoto2: student.guardianPhoto2
         },
         requiresPasswordChange: !student.isPasswordChanged
       }

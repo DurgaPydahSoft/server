@@ -14,7 +14,8 @@ import {
   bulkAddStudents,
   clearTempStudents,
   renewBatches,
-  searchStudentByRollNumber
+  searchStudentByRollNumber,
+  resetStudentPassword
 } from '../controllers/adminController.js';
 import { 
   getAllLeaveRequests,
@@ -105,6 +106,9 @@ router.put('/students/:id', imageUpload.fields([
   { name: 'guardianPhoto2', maxCount: 1 }
 ]), updateStudent);
 router.delete('/students/:id', deleteStudent);
+
+// Admin password reset for students
+router.post('/students/:id/reset-password', resetStudentPassword);
 
 // Utility routes
 router.get('/branches/:course', getBranchesByCourse);
