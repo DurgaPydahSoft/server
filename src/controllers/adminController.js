@@ -6,6 +6,7 @@ import Room from '../models/Room.js';
 import SecuritySettings from '../models/SecuritySettings.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
+import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
 import xlsx from 'xlsx';
 
 // Add a new student
@@ -107,11 +108,36 @@ export const addStudent = async (req, res, next) => {
     });
     await tempStudent.save();
 
+    // Send email notification to student
+    let emailSent = false;
+    let emailError = null;
+    
+    if (email) {
+      try {
+        const loginUrl = `${req.protocol}://${req.get('host')}/login`;
+        await sendStudentRegistrationEmail(
+          email,
+          name,
+          rollNumber.toUpperCase(),
+          generatedPassword,
+          loginUrl
+        );
+        emailSent = true;
+        console.log('📧 Registration email sent successfully to:', email);
+      } catch (emailErr) {
+        emailError = emailErr.message;
+        console.error('📧 Failed to send registration email to:', email, emailErr);
+        // Don't fail the registration if email fails
+      }
+    }
+
     res.json({
       success: true,
       data: {
         student: savedStudent,
-        generatedPassword
+        generatedPassword,
+        emailSent,
+        emailError
       }
     });
   } catch (error) {
@@ -223,6 +249,11 @@ export const bulkAddStudents = async (req, res, next) => {
     failureCount: 0,
     addedStudents: [],
     errors: [],
+    emailResults: {
+      sent: 0,
+      failed: 0,
+      errors: []
+    }
   };
 
   for (const studentData of students) {
@@ -296,11 +327,44 @@ export const bulkAddStudents = async (req, res, next) => {
       });
       await tempStudent.save();
 
+      // Send email notification to student
+      let emailSent = false;
+      let emailError = null;
+      
+      if (Email) {
+        try {
+          const loginUrl = `${req.protocol}://${req.get('host')}/login`;
+          await sendStudentRegistrationEmail(
+            String(Email).trim(),
+            String(Name).trim(),
+            rollNumberUpper,
+            generatedPassword,
+            loginUrl
+          );
+          emailSent = true;
+          results.emailResults.sent++;
+          console.log('📧 Bulk registration email sent successfully to:', Email);
+        } catch (emailErr) {
+          emailError = emailErr.message;
+          results.emailResults.failed++;
+          results.emailResults.errors.push({
+            email: Email,
+            student: String(Name).trim(),
+            rollNumber: rollNumberUpper,
+            error: emailErr.message
+          });
+          console.error('📧 Failed to send bulk registration email to:', Email, emailErr);
+          // Don't fail the registration if email fails
+        }
+      }
+
       results.successCount++;
       results.addedStudents.push({
         name: savedStudent.name,
         rollNumber: savedStudent.rollNumber,
         generatedPassword: generatedPassword,
+        emailSent,
+        emailError
       });
 
     } catch (error) {
@@ -968,6 +1032,29 @@ export const resetStudentPassword = async (req, res, next) => {
       console.error(`Error deleting TempStudent for student ID ${student._id}:`, tempStudentError);
     }
 
+    // Send email notification to student
+    let emailSent = false;
+    let emailError = null;
+    
+    if (student.email) {
+      try {
+        const loginUrl = `${req.protocol}://${req.get('host')}/login`;
+        await sendPasswordResetEmail(
+          student.email,
+          student.name,
+          student.rollNumber,
+          newPassword,
+          loginUrl
+        );
+        emailSent = true;
+        console.log('📧 Password reset email sent successfully to:', student.email);
+      } catch (emailErr) {
+        emailError = emailErr.message;
+        console.error('📧 Failed to send password reset email to:', student.email, emailErr);
+        // Don't fail the password reset if email fails
+      }
+    }
+
     res.json({
       success: true,
       message: 'Student password reset successfully',
@@ -977,7 +1064,9 @@ export const resetStudentPassword = async (req, res, next) => {
           name: student.name,
           rollNumber: student.rollNumber,
           isPasswordChanged: true
-        }
+        },
+        emailSent,
+        emailError
       }
     });
   } catch (error) {

@@ -23,6 +23,7 @@ import {
   rejectLeaveRequest
 } from '../controllers/leaveController.js';
 import { adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
+import { testEmailService, getEmailServiceStatus } from '../utils/emailService.js';
 import multer from 'multer';
 
 const router = express.Router();
@@ -63,6 +64,50 @@ router.get('/warden/students', wardenAuth, getStudents);
 
 // All routes below require admin authentication
 router.use(adminAuth);
+
+// Email service routes
+router.get('/email/status', (req, res) => {
+  const status = getEmailServiceStatus();
+  res.json({
+    success: true,
+    data: status
+  });
+});
+
+router.post('/email/test', async (req, res) => {
+  try {
+    const { testEmail } = req.body;
+    
+    if (!testEmail) {
+      return res.status(400).json({
+        success: false,
+        message: 'Test email address is required'
+      });
+    }
+
+    const result = await testEmailService(testEmail);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Test email sent successfully',
+        data: result
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to send test email',
+        error: result.error
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error testing email service',
+      error: error.message
+    });
+  }
+});
 
 // Leave management routes
 router.get('/leave/all', getAllLeaveRequests);
