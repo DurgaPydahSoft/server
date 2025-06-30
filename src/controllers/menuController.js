@@ -1,5 +1,7 @@
 import Menu from '../models/Menu.js';
 import { createError } from '../utils/error.js';
+import User from '../models/User.js';
+import notificationService from '../utils/notificationService.js';
 
 // Helper to normalize date to YYYY-MM-DD (no time)
 function normalizeDate(date) {
@@ -24,6 +26,31 @@ export const createOrUpdateMenuForDate = async (req, res, next) => {
       menu = await Menu.create({ date: normDate, meals });
     }
     console.log('Saved menu document:', menu);
+
+    // Send notification if menu is for today
+    const today = normalizeDate(new Date());
+    if (normDate.getTime() === today.getTime()) {
+      try {
+        const students = await User.find({ role: 'student' });
+        
+        if (students.length > 0) {
+          const studentIds = students.map(student => student._id);
+          
+          await notificationService.sendMenuNotification(
+            studentIds,
+            menu,
+            req.admin ? req.admin.name : 'Admin',
+            req.admin ? req.admin._id : null
+          );
+
+          console.log('🍽️ Menu notification sent to students:', studentIds.length);
+        }
+      } catch (notificationError) {
+        console.error('🍽️ Error sending menu notification:', notificationError);
+        // Don't fail the menu update if notification fails
+      }
+    }
+
     res.json({ success: true, data: menu });
   } catch (error) {
     next(error);
@@ -252,6 +279,30 @@ export const addMenuItemForDate = async (req, res, next) => {
     if (!menu.meals[mealType].includes(item)) {
       menu.meals[mealType].push(item);
       await menu.save();
+
+      // Send notification if menu is for today
+      const today = normalizeDate(new Date());
+      if (normDate.getTime() === today.getTime()) {
+        try {
+          const students = await User.find({ role: 'student' });
+          
+          if (students.length > 0) {
+            const studentIds = students.map(student => student._id);
+            
+            await notificationService.sendMenuNotification(
+              studentIds,
+              menu,
+              req.admin ? req.admin.name : 'Admin',
+              req.admin ? req.admin._id : null
+            );
+
+            console.log('🍽️ Menu item added notification sent to students:', studentIds.length);
+          }
+        } catch (notificationError) {
+          console.error('🍽️ Error sending menu notification:', notificationError);
+          // Don't fail the menu update if notification fails
+        }
+      }
     }
     res.json({ success: true, data: menu });
   } catch (error) {

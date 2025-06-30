@@ -116,7 +116,7 @@ class NotificationService {
   async sendComplaintNotification(recipientId, complaintData, senderName = 'System', senderId = null) {
     const notificationData = {
       type: 'complaint',
-      message: `New complaint received: ${complaintData.description}`,
+      message: `New complaint alert! 📝 Someone needs your attention`,
       relatedId: complaintData._id || complaintData.id,
       sender: senderId,
       onModel: 'Complaint'
@@ -129,7 +129,7 @@ class NotificationService {
   async sendComplaintStatusUpdate(recipientId, complaintData, newStatus, adminName = 'Admin', adminId = null) {
     const notificationData = {
       type: 'complaint',
-      message: `Your complaint has been ${newStatus.toLowerCase()} by ${adminName}`,
+      message: `Great news! Your complaint has been ${newStatus.toLowerCase()} ✅`,
       relatedId: complaintData._id || complaintData.id,
       sender: adminId,
       onModel: 'Complaint'
@@ -142,7 +142,7 @@ class NotificationService {
   async sendAnnouncementNotification(recipientIds, announcementData, adminName = 'Admin', adminId = null) {
     const notificationData = {
       type: 'announcement',
-      message: announcementData.title,
+      message: `📢 New announcement: ${announcementData.title}`,
       relatedId: announcementData._id || announcementData.id,
       sender: adminId,
       onModel: 'Announcement'
@@ -155,7 +155,7 @@ class NotificationService {
   async sendPollNotification(recipientIds, pollData, adminName = 'Admin', adminId = null) {
     const notificationData = {
       type: 'poll',
-      message: pollData.question,
+      message: `🗳️ Quick poll: ${pollData.question}`,
       relatedId: pollData._id || pollData.id,
       sender: adminId,
       onModel: 'Poll'
@@ -168,7 +168,7 @@ class NotificationService {
   async sendPollEndingNotification(recipientIds, pollData) {
     const notificationData = {
       type: 'poll_ending',
-      message: `Poll "${pollData.question}" is ending soon. Vote now!`,
+      message: `⏰ Poll ending soon! "${pollData.question}" - Vote now! 🗳️`,
       relatedId: pollData._id || pollData.id,
       onModel: 'Poll'
     };
@@ -180,7 +180,7 @@ class NotificationService {
   async sendLeaveRequestNotification(recipientId, leaveData, studentName, studentId = null) {
     const notificationData = {
       type: 'leave',
-      message: `Leave request from ${studentName} for ${leaveData.reason}`,
+      message: `Leave request from ${studentName} - ${leaveData.reason}`,
       relatedId: leaveData._id || leaveData.id,
       sender: studentId,
       onModel: 'Leave'
@@ -193,7 +193,7 @@ class NotificationService {
   async sendLeaveStatusUpdate(recipientId, leaveData, newStatus, adminName = 'Admin', adminId = null) {
     const notificationData = {
       type: 'leave',
-      message: `Your leave request has been ${newStatus.toLowerCase()} by ${adminName}`,
+      message: `✅ Your leave request has been ${newStatus.toLowerCase()}!`,
       relatedId: leaveData._id || leaveData.id,
       sender: adminId,
       onModel: 'Leave'
@@ -206,9 +206,23 @@ class NotificationService {
   async sendSystemNotification(recipientIds, systemData, senderId = null) {
     const notificationData = {
       type: 'system',
-      message: systemData.message,
+      message: `🔔 ${systemData.message}`,
+      relatedId: systemData.relatedId,
       sender: senderId,
       onModel: 'System'
+    };
+
+    return await this.sendToUsers(recipientIds, notificationData);
+  }
+
+  // Send menu notification
+  async sendMenuNotification(recipientIds, menuData, adminName = 'Admin', adminId = null) {
+    const notificationData = {
+      type: 'menu',
+      message: `Hey! Want to see what's on the menu today? 🍽️`,
+      relatedId: menuData._id || menuData.id,
+      sender: adminId,
+      onModel: 'Menu'
     };
 
     return await this.sendToUsers(recipientIds, notificationData);

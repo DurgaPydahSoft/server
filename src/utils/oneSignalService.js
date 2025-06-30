@@ -45,8 +45,6 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
       // Collapse and topic
       collapse_id: notificationData.collapseId,
       web_push_topic: notificationData.topic,
-      // Action buttons
-      web_buttons: notificationData.buttons || [],
       // Platform targeting - ensure web push is enabled
       isAnyWeb: true,
       // Additional required parameters
@@ -120,8 +118,6 @@ export const sendOneSignalBulkNotification = async (userIds, notificationData) =
       // Collapse and topic
       collapse_id: notificationData.collapseId,
       web_push_topic: notificationData.topic,
-      // Action buttons
-      web_buttons: notificationData.buttons || [],
       // Platform targeting - ensure web push is enabled
       isAnyWeb: true,
       // Additional required parameters
@@ -190,8 +186,6 @@ export const sendOneSignalSegmentNotification = async (segment, notificationData
       // Collapse and topic
       collapse_id: notificationData.collapseId,
       web_push_topic: notificationData.topic,
-      // Action buttons
-      web_buttons: notificationData.buttons || [],
       // Platform targeting - ensure web push is enabled
       isAnyWeb: true,
       // Enable frequency capping
@@ -243,11 +237,7 @@ export const getNotificationPayload = (type, data) => {
         title: data.title || 'Complaint Update',
         url: `/complaints/${data.relatedId}`,
         collapseId: `complaint-${data.relatedId}`,
-        priority: 10,
-        buttons: [
-          { id: 'view', text: 'View Complaint' },
-          { id: 'resolve', text: 'Mark Resolved' }
-        ]
+        priority: 10
       };
     
     case 'announcement':
@@ -256,11 +246,7 @@ export const getNotificationPayload = (type, data) => {
         title: data.title || 'New Announcement',
         url: `/announcements/${data.relatedId}`,
         collapseId: `announcement-${data.relatedId}`,
-        priority: 8,
-        buttons: [
-          { id: 'view', text: 'Read More' },
-          { id: 'dismiss', text: 'Dismiss' }
-        ]
+        priority: 8
       };
     
     case 'poll':
@@ -269,11 +255,7 @@ export const getNotificationPayload = (type, data) => {
         title: data.title || 'New Poll',
         url: `/polls/${data.relatedId}`,
         collapseId: `poll-${data.relatedId}`,
-        priority: 9,
-        buttons: [
-          { id: 'vote', text: 'Vote Now' },
-          { id: 'view', text: 'View Poll' }
-        ]
+        priority: 9
       };
     
     case 'poll_ending':
@@ -282,11 +264,7 @@ export const getNotificationPayload = (type, data) => {
         title: data.title || 'Poll Ending Soon',
         url: `/polls/${data.relatedId}`,
         collapseId: `poll-ending-${data.relatedId}`,
-        priority: 10,
-        buttons: [
-          { id: 'vote_now', text: 'Vote Now' },
-          { id: 'view', text: 'View Poll' }
-        ]
+        priority: 10
       };
     
     case 'leave':
@@ -295,11 +273,7 @@ export const getNotificationPayload = (type, data) => {
         title: data.title || 'Leave Request Update',
         url: `/leave/${data.relatedId}`,
         collapseId: `leave-${data.relatedId}`,
-        priority: 9,
-        buttons: [
-          { id: 'view', text: 'View Details' },
-          { id: 'approve', text: 'Approve' }
-        ]
+        priority: 9
       };
     
     case 'system':
@@ -307,22 +281,23 @@ export const getNotificationPayload = (type, data) => {
         ...basePayload,
         title: data.title || 'System Notification',
         url: data.url || '/',
-        priority: 7,
-        buttons: [
-          { id: 'view', text: 'View' },
-          { id: 'dismiss', text: 'Dismiss' }
-        ]
+        priority: 7
+      };
+    
+    case 'menu':
+      return {
+        ...basePayload,
+        title: data.title || 'Menu Updated',
+        url: `/menu/today`,
+        collapseId: `menu-${data.relatedId}`,
+        priority: 8
       };
     
     default:
       return {
         ...basePayload,
         url: data.url || '/',
-        priority: 8,
-        buttons: [
-          { id: 'view', text: 'View' },
-          { id: 'dismiss', text: 'Dismiss' }
-        ]
+        priority: 8
       };
   }
 };
