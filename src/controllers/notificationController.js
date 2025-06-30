@@ -1,5 +1,6 @@
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
+import Menu from '../models/Menu.js';
 import notificationService from '../utils/notificationService.js';
 
 // Get all notifications for a user
@@ -455,19 +456,178 @@ export const sendTestNotification = async (req, res) => {
 // Get notification service status
 export const getNotificationStatus = async (req, res) => {
   try {
+    console.log('🔔 Getting notification system status...');
+    
     const status = notificationService.getStatus();
     
-    console.log('🔔 Notification service status:', status);
-
     res.status(200).json({
       success: true,
-      status
+      status,
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('🔔 Error getting notification status:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to get notification status',
+      error: error.message
+    });
+  }
+};
+
+// Send menu notification for a specific meal
+export const sendMenuNotification = async (req, res) => {
+  try {
+    const { mealType, title, message, url, priority } = req.body;
+    const userId = req.user._id;
+
+    console.log(`🔔 Sending menu notification for ${mealType} to user:`, userId);
+
+    if (!mealType || !['breakfast', 'lunch', 'dinner'].includes(mealType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid meal type. Must be breakfast, lunch, or dinner.'
+      });
+    }
+
+    // Fetch today's menu
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const menuDoc = await Menu.findOne({ date: today });
+    let itemsList = '';
+    if (menuDoc && menuDoc.meals && Array.isArray(menuDoc.meals[mealType])) {
+      // Format as a bulleted list with line breaks
+      itemsList = menuDoc.meals[mealType].map(item => `• ${item}`).join('\n');
+    }
+    const itemsText = itemsList ? `\nMenu:\n${itemsList}` : '';
+
+    // Create notification data
+    const notificationData = {
+      title: title || `${mealType.charAt(0).toUpperCase() + mealType.slice(1)} is Ready!`,
+      message: (message || `Check today's ${mealType} menu and rate your meal.`) + itemsText,
+      type: 'menu',
+      mealType: mealType,
+      url: url || '/student',
+      priority: priority || 'high',
+      recipient: userId,
+      sender: null, // System notification
+      relatedId: null,
+      menuItems: itemsList
+    };
+
+    // Create notification in database
+    const notification = new Notification(notificationData);
+    await notification.save();
+
+    console.log(`🔔 Menu notification created for ${mealType}:`, notification._id);
+
+    // Send via OneSignal if configured
+    try {
+      const { sendOneSignalNotification } = await import('../utils/oneSignalService.js');
+      await sendOneSignalNotification({
+        ...notificationData,
+        userId: userId.toString()
+      });
+      console.log(`🔔 Menu notification sent via OneSignal for ${mealType}`);
+    } catch (oneSignalError) {
+      console.warn(`🔔 OneSignal menu notification failed for ${mealType}:`, oneSignalError);
+      // Continue with database notification only
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `${mealType} notification sent successfully`,
+      data: notification
+    });
+  } catch (error) {
+    console.error('🔔 Error sending menu notification:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send menu notification',
+      error: error.message
+    });
+  }
+};
+
+// Send menu notification to all students
+export const sendMenuNotificationToAllStudents = async (req, res) => {
+  try {
+    const { mealType, title, message, url, priority } = req.body;
+
+    console.log(`🔔 Sending menu notification for ${mealType} to all students`);
+
+    if (!mealType || !['breakfast', 'lunch', 'dinner'].includes(mealType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid meal type. Must be breakfast, lunch, or dinner.'
+      });
+    }
+
+    // Fetch today's menu
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const menuDoc = await Menu.findOne({ date: today });
+    let itemsList = '';
+    if (menuDoc && menuDoc.meals && Array.isArray(menuDoc.meals[mealType])) {
+      // Format as a bulleted list with line breaks
+      itemsList = menuDoc.meals[mealType].map(item => `• ${item}`).join('\n');
+    }
+    const itemsText = itemsList ? `\nMenu:\n${itemsList}` : '';
+
+    // Get all students
+    const students = await User.find({ role: 'student' });
+    console.log(`🔔 Found ${students.length} students to notify`);
+
+    const notificationData = {
+      title: title || `${mealType.charAt(0).toUpperCase() + mealType.slice(1)} is Ready!`,
+      message: (message || `Check today's ${mealType} menu and rate your meal.`) + itemsText,
+      type: 'menu',
+      mealType: mealType,
+      url: url || '/student',
+      priority: priority || 'high',
+      menuItems: itemsList
+    };
+
+    // Create notifications for all students
+    const notifications = [];
+    for (const student of students) {
+      const notification = new Notification({
+        ...notificationData,
+        recipient: student._id,
+        sender: null
+      });
+      notifications.push(notification);
+    }
+
+    await Notification.insertMany(notifications);
+    console.log(`🔔 Created ${notifications.length} menu notifications for ${mealType}`);
+
+    // Send via OneSignal if configured
+    try {
+      const { sendOneSignalNotification } = await import('../utils/oneSignalService.js');
+      const oneSignalPromises = students.map(student => 
+        sendOneSignalNotification({
+          ...notificationData,
+          userId: student._id.toString()
+        })
+      );
+      await Promise.allSettled(oneSignalPromises);
+      console.log(`🔔 Menu notifications sent via OneSignal for ${mealType}`);
+    } catch (oneSignalError) {
+      console.warn(`🔔 OneSignal menu notifications failed for ${mealType}:`, oneSignalError);
+      // Continue with database notifications only
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `${mealType} notifications sent to ${students.length} students`,
+      count: students.length
+    });
+  } catch (error) {
+    console.error('🔔 Error sending menu notifications to all students:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send menu notifications',
       error: error.message
     });
   }

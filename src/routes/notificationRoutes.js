@@ -13,7 +13,9 @@ import {
   getWardenUnreadNotifications,
   getWardenUnreadCount,
   sendTestNotification,
-  getNotificationStatus
+  getNotificationStatus,
+  sendMenuNotification,
+  sendMenuNotificationToAllStudents
 } from '../controllers/notificationController.js';
 import { protect, adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
 
@@ -22,6 +24,10 @@ const router = express.Router();
 // Test and status routes (no auth required)
 router.post('/test', sendTestNotification);
 router.get('/status', getNotificationStatus);
+
+// Menu notification routes
+router.post('/send-menu', protect, sendMenuNotification);
+router.post('/send-menu-all', adminAuth, sendMenuNotificationToAllStudents);
 
 // Admin routes (adminAuth middleware)
 router.get('/admin', adminAuth, getAdminNotifications);

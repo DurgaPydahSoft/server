@@ -67,7 +67,11 @@ class NotificationService {
         const dbNotification = await this.createDatabaseNotification({
           recipient: userId,
           type: notificationData.type,
+          title: notificationData.title,
           message: notificationData.message,
+          mealType: notificationData.mealType,
+          url: notificationData.url,
+          priority: notificationData.priority,
           sender: notificationData.sender,
           relatedId: notificationData.relatedId,
           onModel: notificationData.onModel
@@ -102,7 +106,18 @@ class NotificationService {
   // Create database notification
   async createDatabaseNotification(data) {
     try {
-      const notification = new Notification(data);
+      const notification = new Notification({
+        recipient: data.recipient,
+        type: data.type,
+        title: data.title || data.message, // Use message as title if title not provided
+        message: data.message,
+        mealType: data.mealType,
+        url: data.url,
+        priority: data.priority,
+        sender: data.sender,
+        relatedId: data.relatedId,
+        onModel: data.onModel
+      });
       await notification.save();
       console.log('🔔 Database notification created:', notification._id);
       return notification;
@@ -219,8 +234,13 @@ class NotificationService {
   async sendMenuNotification(recipientIds, menuData, adminName = 'Admin', adminId = null) {
     const notificationData = {
       type: 'menu',
-      message: `Hey! Want to see what's on the menu today? 🍽️`,
-      relatedId: menuData._id || menuData.id,
+      title: menuData.title,
+      message: menuData.message,
+      mealType: menuData.mealType,
+      url: menuData.url,
+      priority: menuData.priority,
+      menuItems: menuData.menuItems,
+      relatedId: menuData.relatedId,
       sender: adminId,
       onModel: 'Menu'
     };

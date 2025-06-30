@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const notificationSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['complaint', 'feedback', 'poll', 'announcement', 'poll_ending'],
+    enum: ['complaint', 'feedback', 'poll', 'announcement', 'poll_ending', 'menu'],
     required: true
   },
   recipient: {
@@ -15,9 +15,28 @@ const notificationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  title: {
+    type: String,
+    required: true
+  },
   message: {
     type: String,
     required: true
+  },
+  mealType: {
+    type: String,
+    enum: ['breakfast', 'lunch', 'dinner'],
+    required: function() {
+      return this.type === 'menu';
+    }
+  },
+  url: {
+    type: String
+  },
+  priority: {
+    type: String,
+    enum: ['low', 'medium', 'high'],
+    default: 'medium'
   },
   relatedId: {
     type: mongoose.Schema.Types.ObjectId,
