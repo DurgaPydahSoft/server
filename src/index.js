@@ -8,11 +8,6 @@ import path from 'path';
 
 // Load environment variables
 const dotenvResult = dotenv.config();
-// if (dotenvResult.error) {
-//   console.error('🔴 Error loading .env file:', dotenvResult.error);
-// } else {
-//   console.log('✅ .env file loaded successfully. Parsed variables:', Object.keys(dotenvResult.parsed || {}));
-// }
 
 // Import routes
 import authRoutes from './routes/authRoutes.js';
@@ -28,6 +23,7 @@ import roomRoutes from './routes/roomRoutes.js';
 import leaveRoutes from './routes/leaveRoutes.js';
 import menuRoutes from './routes/menuRoutes.js';
 import bulkOutingRoutes from './routes/bulkOutingRoutes.js';
+import attendanceRoutes from './routes/attendanceRoutes.js';
 import apiRouter from './routes/index.js';
 // Import Notification model
 import Notification from './models/Notification.js';
@@ -250,6 +246,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/polls', pollRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/bulk-outing', bulkOutingRoutes);
+app.use('/api/attendance', attendanceRoutes);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {

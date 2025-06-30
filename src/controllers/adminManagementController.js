@@ -336,16 +336,24 @@ export const adminLogin = async (req, res, next) => {
       { expiresIn: '24h' }
     );
 
+    // Prepare admin response data
+    const adminResponse = {
+      id: admin._id,
+      username: admin.username,
+      role: admin.role,
+      permissions: admin.permissions
+    };
+
+    // Include hostelType for wardens
+    if (admin.role === 'warden' && admin.hostelType) {
+      adminResponse.hostelType = admin.hostelType;
+    }
+
     res.json({
       success: true,
       data: {
         token,
-        admin: {
-          id: admin._id,
-          username: admin.username,
-          role: admin.role,
-          permissions: admin.permissions
-        }
+        admin: adminResponse
       }
     });
   } catch (error) {

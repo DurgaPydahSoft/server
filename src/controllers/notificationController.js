@@ -108,7 +108,7 @@ export const getUnreadCount = async (req, res) => {
 export const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.admin ? req.admin._id : req.user._id;
+    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.user._id;
 
     console.log('🔔 Marking notification as read:', id, 'for user:', userId);
 
@@ -145,7 +145,7 @@ export const markAsRead = async (req, res) => {
 // Mark all notifications as read
 export const markAllAsRead = async (req, res) => {
   try {
-    const userId = req.admin ? req.admin._id : req.user._id;
+    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.user._id;
 
     console.log('🔔 Marking all notifications as read for user:', userId);
 
@@ -306,6 +306,110 @@ export const getAdminUnreadCount = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch admin unread count',
+      error: error.message
+    });
+  }
+};
+
+// Get warden notifications (for warden dashboard)
+export const getWardenNotifications = async (req, res) => {
+  try {
+    const wardenId = req.warden ? req.warden._id : req.user._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    console.log('🔔 Fetching warden notifications for warden:', wardenId);
+
+    const notifications = await Notification.find({ recipient: wardenId })
+      .populate('recipient', 'name email studentId')
+      .populate('sender', 'name email')
+      .populate('relatedId')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Notification.countDocuments({ recipient: wardenId });
+
+    console.log('🔔 Found warden notifications:', notifications.length);
+
+    res.status(200).json({
+      success: true,
+      data: notifications,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('🔔 Error fetching warden notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch warden notifications',
+      error: error.message
+    });
+  }
+};
+
+// Get warden unread notifications
+export const getWardenUnreadNotifications = async (req, res) => {
+  try {
+    const wardenId = req.warden ? req.warden._id : req.user._id;
+    const limit = parseInt(req.query.limit) || 10;
+
+    console.log('🔔 Fetching warden unread notifications for warden:', wardenId);
+
+    const notifications = await Notification.find({ 
+      recipient: wardenId,
+      isRead: false 
+    })
+      .populate('recipient', 'name email studentId')
+      .populate('sender', 'name email')
+      .populate('relatedId')
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+    console.log('🔔 Found warden unread notifications:', notifications.length);
+
+    res.status(200).json({
+      success: true,
+      data: notifications
+    });
+  } catch (error) {
+    console.error('🔔 Error fetching warden unread notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch warden unread notifications',
+      error: error.message
+    });
+  }
+};
+
+// Get warden unread count
+export const getWardenUnreadCount = async (req, res) => {
+  try {
+    const wardenId = req.warden ? req.warden._id : req.user._id;
+
+    console.log('🔔 Fetching warden unread count for warden:', wardenId);
+
+    const count = await Notification.countDocuments({ 
+      recipient: wardenId,
+      isRead: false 
+    });
+
+    console.log('🔔 Warden unread count:', count);
+
+    res.status(200).json({
+      success: true,
+      count
+    });
+  } catch (error) {
+    console.error('🔔 Error fetching warden unread count:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch warden unread count',
       error: error.message
     });
   }

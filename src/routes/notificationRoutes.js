@@ -9,10 +9,13 @@ import {
   getAdminNotifications,
   getAdminUnreadNotifications,
   getAdminUnreadCount,
+  getWardenNotifications,
+  getWardenUnreadNotifications,
+  getWardenUnreadCount,
   sendTestNotification,
   getNotificationStatus
 } from '../controllers/notificationController.js';
-import { protect, adminAuth } from '../middleware/authMiddleware.js';
+import { protect, adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -27,6 +30,14 @@ router.get('/admin/count', adminAuth, getAdminUnreadCount);
 router.patch('/admin/read-all', adminAuth, markAllAsRead);
 router.patch('/admin/:id/read', adminAuth, markAsRead);
 router.delete('/admin/:id', adminAuth, deleteNotification);
+
+// Warden routes (wardenAuth middleware)
+router.get('/warden', wardenAuth, getWardenNotifications);
+router.get('/warden/unread', wardenAuth, getWardenUnreadNotifications);
+router.get('/warden/count', wardenAuth, getWardenUnreadCount);
+router.patch('/warden/read-all', wardenAuth, markAllAsRead);
+router.patch('/warden/:id/read', wardenAuth, markAsRead);
+router.delete('/warden/:id', wardenAuth, deleteNotification);
 
 // Student routes (protect middleware)
 router.get('/', protect, getNotifications);

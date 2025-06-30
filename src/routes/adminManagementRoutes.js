@@ -25,16 +25,25 @@ router.get('/validate', adminAuth, (req, res) => {
     console.log('🔐 No admin found in request!');
     return res.status(401).json({ success: false, message: 'No admin found in request' });
   }
+  
+  // Prepare user response data
+  const userResponse = {
+    id: req.admin._id,
+    username: req.admin.username,
+    role: req.admin.role,
+    permissions: req.admin.permissions,
+    isActive: req.admin.isActive
+  };
+
+  // Include hostelType for wardens
+  if (req.admin.role === 'warden' && req.admin.hostelType) {
+    userResponse.hostelType = req.admin.hostelType;
+  }
+
   res.json({
     success: true,
     data: {
-      user: {
-        id: req.admin._id,
-        username: req.admin.username,
-        role: req.admin.role,
-        permissions: req.admin.permissions,
-        isActive: req.admin.isActive
-      }
+      user: userResponse
     }
   });
 });

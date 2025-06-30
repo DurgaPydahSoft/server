@@ -11,6 +11,7 @@ import complaintRoutes from './complaintRoutes.js';
 import pollRoutes from './pollRoutes.js';
 import menuRoutes from './menuRoutes.js';
 import securitySettingsRoutes from './securitySettingsRoutes.js';
+import attendanceRoutes from './attendanceRoutes.js';
 
 const router = express.Router();
 
@@ -27,5 +28,6 @@ router.use('/complaints', complaintRoutes);
 router.use('/polls', pollRoutes);
 router.use('/menu', menuRoutes);
 router.use('/security-settings', securitySettingsRoutes);
+router.use('/attendance', attendanceRoutes);
 
 export default router; 
