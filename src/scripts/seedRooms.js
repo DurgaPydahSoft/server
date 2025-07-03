@@ -41,7 +41,7 @@ const seedRooms = async () => {
             category,
             roomNumber,
             isActive: true,
-            bedCount: 1 // Default to 1 bed per room
+            bedCount: 6 // Default to 1 bed per room
           });
         }
       }

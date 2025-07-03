@@ -41,8 +41,8 @@ const leaveSchema = new mongoose.Schema({
   },
   numberOfDays: {
     type: Number,
-    required: function() { return this.applicationType === 'Leave'; },
-    min: 1
+    min: 1,
+    default: 1 // Default to 1 day for permissions
   },
   reason: {
     type: String,
@@ -126,22 +126,42 @@ const leaveSchema = new mongoose.Schema({
 
 // Pre-save middleware to calculate numberOfDays and set QR availability
 leaveSchema.pre('save', function(next) {
-  if (this.applicationType === 'Leave' && this.startDate && this.endDate) {
-    const start = new Date(this.startDate);
-    const end = new Date(this.endDate);
-    const timeDiff = end.getTime() - start.getTime();
-    const dayDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-    this.numberOfDays = dayDiff;
+  try {
+    console.log('🔧 Leave pre-save middleware - Application type:', this.applicationType);
+    console.log('🔧 Leave pre-save middleware - Start date:', this.startDate);
+    console.log('🔧 Leave pre-save middleware - End date:', this.endDate);
+    console.log('🔧 Leave pre-save middleware - Permission date:', this.permissionDate);
     
-    // Set QR availability to 2 minutes before start date
-    const qrAvailableTime = new Date(start.getTime() - (2 * 60 * 1000)); // 2 minutes before
-    this.qrAvailableFrom = qrAvailableTime;
-  } else if (this.applicationType === 'Permission' && this.permissionDate) {
-    // For permissions, QR is available from the permission date
-    this.qrAvailableFrom = new Date(this.permissionDate);
-    this.numberOfDays = 1; // Permissions are always for 1 day
+    if (this.applicationType === 'Leave' && this.startDate && this.endDate) {
+      const start = new Date(this.startDate);
+      const end = new Date(this.endDate);
+      const timeDiff = end.getTime() - start.getTime();
+      const dayDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+      this.numberOfDays = Math.max(1, dayDiff); // Ensure at least 1 day
+      
+      // Set QR availability to 2 minutes before start date
+      const qrAvailableTime = new Date(start.getTime() - (2 * 60 * 1000)); // 2 minutes before
+      this.qrAvailableFrom = qrAvailableTime;
+      
+      console.log('🔧 Leave pre-save middleware - Calculated numberOfDays:', this.numberOfDays);
+      console.log('🔧 Leave pre-save middleware - Set qrAvailableFrom:', this.qrAvailableFrom);
+    } else if (this.applicationType === 'Permission' && this.permissionDate) {
+      // For permissions, QR is available from the permission date
+      this.qrAvailableFrom = new Date(this.permissionDate);
+      this.numberOfDays = 1; // Permissions are always for 1 day
+      
+      console.log('🔧 Permission pre-save middleware - Set numberOfDays to 1');
+      console.log('🔧 Permission pre-save middleware - Set qrAvailableFrom:', this.qrAvailableFrom);
+    } else {
+      // Fallback: set default values
+      this.numberOfDays = this.numberOfDays || 1;
+      console.log('🔧 Fallback pre-save middleware - Set numberOfDays to:', this.numberOfDays);
+    }
+    next();
+  } catch (error) {
+    console.error('❌ Error in leave pre-save middleware:', error);
+    next(error);
   }
-  next();
 });
 
 // Virtual method to check if QR is currently available

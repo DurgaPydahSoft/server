@@ -9,6 +9,7 @@ import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
 import xlsx from 'xlsx';
 import Branch from '../models/Branch.js';
+import Course from '../models/Course.js';
 
 // Add a new student
 export const addStudent = async (req, res, next) => {
@@ -147,23 +148,39 @@ export const addStudent = async (req, res, next) => {
 };
 
 // Add batch validation function
-const validateBatch = (batch, course) => {
+const validateBatch = async (batch, courseId) => {
   // Check if batch matches the format YYYY-YYYY
   if (!/^\d{4}-\d{4}$/.test(batch)) {
     return false;
   }
 
   const [startYear, endYear] = batch.split('-').map(Number);
-  
-  // Check if duration matches course
   const duration = endYear - startYear;
-  if (course === 'B.Tech' || course === 'Pharmacy') {
-    return duration === 4;
-  } else if (course === 'Diploma' || course === 'Degree') {
-    return duration === 3;
+  
+  // If courseId is provided, fetch the course to get its duration
+  if (courseId) {
+    try {
+      const course = await Course.findById(courseId);
+      if (course && course.duration) {
+        return duration === course.duration;
+      }
+    } catch (error) {
+      console.error('Error fetching course for batch validation:', error);
+    }
   }
-
-  return false;
+  
+  // Fallback to old validation for backward compatibility
+  if (typeof courseId === 'string' && !courseId.includes('-')) {
+    // This might be a course name (old format)
+    if (courseId === 'B.Tech' || courseId === 'Pharmacy') {
+      return duration === 4;
+    } else if (courseId === 'Diploma' || courseId === 'Degree') {
+      return duration === 3;
+    }
+  }
+  
+  // If we can't determine the expected duration, allow common durations (3-4 years)
+  return duration >= 3 && duration <= 4;
 };
 
 // Helper to extract end year from batch or academic year
@@ -498,8 +515,21 @@ export const updateStudent = async (req, res, next) => {
     }
 
     // Validate batch format and duration based on course
-    if (batch && !validateBatch(batch, course || student.course)) {
-      throw createError(400, `Invalid batch format. Must be YYYY-YYYY with correct duration (${(course || student.course) === 'B.Tech' || (course || student.course) === 'Pharmacy' ? '4' : '3'} years).`);
+    if (batch) {
+      const isValidBatch = await validateBatch(batch, course || student.course);
+      if (!isValidBatch) {
+        // Try to get course details for better error message
+        let expectedDuration = '3-4';
+        try {
+          const courseDoc = await Course.findById(course || student.course);
+          if (courseDoc && courseDoc.duration) {
+            expectedDuration = courseDoc.duration.toString();
+          }
+        } catch (error) {
+          console.error('Error fetching course for error message:', error);
+        }
+        throw createError(400, `Invalid batch format. Must be YYYY-YYYY with correct duration (${expectedDuration} years).`);
+      }
     }
 
     // Validate academic year
@@ -581,8 +611,19 @@ export const updateStudent = async (req, res, next) => {
     if (email) student.email = email;
 
     // Graduation status auto-update on manual edit
-    const courseKey = Object.keys(COURSES).find(key => COURSES[key] === (course || student.course));
-    const maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
+    let maxYear = 3; // Default
+    try {
+      const courseDoc = await Course.findById(course || student.course);
+      if (courseDoc && courseDoc.duration) {
+        maxYear = courseDoc.duration;
+      }
+    } catch (error) {
+      console.error('Error fetching course for graduation status:', error);
+      // Fallback to old logic
+      const courseKey = Object.keys(COURSES).find(key => COURSES[key] === (course || student.course));
+      maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
+    }
+    
     const batchEndYear = getEndYear(student.batch);
     const academicEndYear = getEndYear(student.academicYear);
     if (
@@ -889,8 +930,18 @@ export const renewBatches = async (req, res, next) => {
           continue;
         }
 
-        const courseKey = Object.keys(COURSES).find(key => COURSES[key] === student.course);
-        const maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
+        let maxYear = 3; // Default
+        try {
+          const courseDoc = await Course.findById(student.course);
+          if (courseDoc && courseDoc.duration) {
+            maxYear = courseDoc.duration;
+          }
+        } catch (error) {
+          console.error('Error fetching course for batch renewal:', error);
+          // Fallback to old logic
+          const courseKey = Object.keys(COURSES).find(key => COURSES[key] === student.course);
+          maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
+        }
 
         // Graduation logic: only if final year AND batch end year matches new academic year end year
         const batchEndYear = getEndYear(student.batch);
