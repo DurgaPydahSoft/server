@@ -14,7 +14,7 @@ const adminSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['super_admin', 'sub_admin', 'warden'],
+    enum: ['super_admin', 'sub_admin', 'warden', 'principal'],
     default: 'sub_admin'
   },
   hostelType: {
@@ -22,6 +22,13 @@ const adminSchema = new mongoose.Schema({
     enum: ['boys', 'girls'],
     required: function() {
       return this.role === 'warden';
+    }
+  },
+  course: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+    required: function() {
+      return this.role === 'principal';
     }
   },
   permissions: [{
@@ -35,13 +42,17 @@ const adminSchema = new mongoose.Schema({
       'poll_management',
       'member_management',
       'menu_management',
+      'course_management',
       'warden_student_oversight',
       'warden_complaint_oversight',
       'warden_leave_oversight',
       'warden_room_oversight',
       'warden_announcement_oversight',
       'warden_discipline_management',
-      'warden_attendance_tracking'
+      'warden_attendance_tracking',
+      'principal_attendance_oversight',
+      'principal_student_oversight',
+      'principal_course_management'
     ]
   }],
   isActive: {
@@ -90,6 +101,11 @@ adminSchema.methods.hasPermission = function(permission) {
 // Method to check if user is a warden
 adminSchema.methods.isWarden = function() {
   return this.role === 'warden';
+};
+
+// Method to check if user is a principal
+adminSchema.methods.isPrincipal = function() {
+  return this.role === 'principal';
 };
 
 // Method to check if user is an admin (super_admin or sub_admin)

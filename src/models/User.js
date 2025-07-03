@@ -71,47 +71,28 @@ const userSchema = new mongoose.Schema({
     default: 'student'
   },
   course: {
-    type: String,
-    enum: Object.values(COURSES),
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
     required: function() { return this.role === 'student'; }
   },
   year: {
     type: Number,
     required: function() { return this.role === 'student'; },
     validate: {
-      validator: function(v) {
+      validator: async function(v) {
         if (this.role !== 'student') return true;
-        // Validate year based on course
-        const courseKey = COURSE_LABEL_TO_KEY[this.course];
-        switch(courseKey) {
-          case 'BTECH':
-            return v >= 1 && v <= 4;
-          case 'DIPLOMA':
-            return v >= 1 && v <= 3;
-          case 'PHARMACY':
-            return v >= 1 && v <= 4;
-          case 'DEGREE':
-            return v >= 1 && v <= 3;
-          default:
-            return false;
-        }
+        
+        // For dynamic validation, we'll handle this in the controller
+        // This is a basic validation that can be enhanced
+        return v >= 1 && v <= 10; // Allow 1-10 years as a reasonable range
       },
-      message: props => `${props.value} is not a valid year for the selected course!`
+      message: props => `${props.value} is not a valid year!`
     }
   },
   branch: {
-    type: String,
-    required: function() { return this.role === 'student'; },
-    validate: {
-      validator: function(v) {
-        if (this.role !== 'student') return true;
-        // Convert course label (e.g., 'B.Tech') to key (e.g., 'BTECH') using COURSE_LABEL_TO_KEY
-        const courseKey = COURSE_LABEL_TO_KEY[this.course];
-        const validBranches = BRANCHES[courseKey] || [];
-        return validBranches.includes(v);
-      },
-      message: props => `${props.value} is not a valid branch for the selected course!`
-    }
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+    required: function() { return this.role === 'student'; }
   },
   gender: {
     type: String,

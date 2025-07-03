@@ -57,7 +57,12 @@ export const adminAuth = async (req, res, next) => {
     console.log('🔐 Token decoded in adminAuth middleware:', { _id: decoded._id, role: decoded.role });
 
     // This is the critical fix: using decoded._id
-    const admin = await Admin.findById(decoded._id).select('-password');
+    let admin = await Admin.findById(decoded._id).select('-password');
+    
+    // Populate course for principals
+    if (admin && admin.role === 'principal' && admin.course) {
+      admin = await Admin.findById(decoded._id).select('-password').populate('course', 'name code');
+    }
 
     if (!admin || !admin.isActive) {
       console.log('🔐 Admin not found or inactive in adminAuth middleware:', { 
@@ -166,3 +171,47 @@ export const authenticateStudent = [protect, (req, res, next) => {
   }
   next();
 }];
+
+// Principal-only middleware
+export const principalAuth = async (req, res, next) => {
+  try {
+    console.log('🎓 PrincipalAuth middleware called for:', req.method, req.path);
+    
+    let token;
+    if (req.headers.authorization?.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      console.log('🎓 No token found in principalAuth middleware');
+      return next(createError(401, 'Not authorized, no token'));
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log('🎓 Token decoded in principalAuth middleware:', { _id: decoded._id, role: decoded.role });
+
+    let admin = await Admin.findById(decoded._id).select('-password');
+    
+    // Populate course for principals
+    if (admin && admin.role === 'principal' && admin.course) {
+      admin = await Admin.findById(decoded._id).select('-password').populate('course', 'name code');
+    }
+
+    if (!admin || !admin.isActive || admin.role !== 'principal') {
+      console.log('🎓 Principal not found or inactive in principalAuth middleware:', { 
+        found: !!admin, 
+        isActive: admin?.isActive, 
+        role: admin?.role,
+        _id: decoded._id 
+      });
+      return next(createError(401, 'Principal not found or is not active'));
+    }
+    
+    console.log('🎓 Principal found in principalAuth middleware:', { _id: admin._id, role: admin.role, isActive: admin.isActive, course: admin.course });
+    req.principal = admin; // Attach the principal object to the request
+    next();
+  } catch (error) {
+    console.log('🎓 Token verification failed in principalAuth middleware:', error.message);
+    return next(createError(401, 'Not authorized, token failed'));
+  }
+};

@@ -12,6 +12,7 @@ import pollRoutes from './pollRoutes.js';
 import menuRoutes from './menuRoutes.js';
 import securitySettingsRoutes from './securitySettingsRoutes.js';
 import attendanceRoutes from './attendanceRoutes.js';
+import courseManagementRoutes from './courseManagementRoutes.js';
 
 const router = express.Router();
 
@@ -29,5 +30,6 @@ router.use('/polls', pollRoutes);
 router.use('/menu', menuRoutes);
 router.use('/security-settings', securitySettingsRoutes);
 router.use('/attendance', attendanceRoutes);
+router.use('/course-management', courseManagementRoutes);
 
 export default router; 

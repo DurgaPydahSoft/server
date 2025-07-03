@@ -310,7 +310,8 @@ export const adminLogin = async (req, res, next) => {
     const { username, password } = req.body;
 
     // Find admin
-    const admin = await Admin.findOne({ username, isActive: true });
+    const admin = await Admin.findOne({ username, isActive: true })
+      .populate('course', 'name code');
     if (!admin) {
       throw createError(401, 'Invalid credentials');
     }
@@ -349,6 +350,11 @@ export const adminLogin = async (req, res, next) => {
       adminResponse.hostelType = admin.hostelType;
     }
 
+    // Include course for principals
+    if (admin.role === 'principal' && admin.course) {
+      adminResponse.course = admin.course;
+    }
+
     res.json({
       success: true,
       data: {
@@ -357,6 +363,180 @@ export const adminLogin = async (req, res, next) => {
       }
     });
   } catch (error) {
+    next(error);
+  }
+};
+
+// Create a new principal
+export const createPrincipal = async (req, res, next) => {
+  try {
+    const { username, password, course } = req.body;
+
+    // Check if username already exists
+    const existingAdmin = await Admin.findOne({ username });
+    if (existingAdmin) {
+      throw createError(400, 'Username already exists');
+    }
+
+    // Validate course
+    if (!course) {
+      throw createError(400, 'Course is required');
+    }
+
+    // Validate that the course exists in the database
+    const Course = (await import('../models/Course.js')).default;
+    const courseExists = await Course.findById(course);
+    if (!courseExists) {
+      throw createError(400, 'Invalid course selected');
+    }
+
+    // Default principal permissions
+    const principalPermissions = [
+      'principal_attendance_oversight',
+      'principal_student_oversight',
+      'principal_course_management'
+    ];
+
+    // Create new principal
+    const principal = new Admin({
+      username,
+      password,
+      role: 'principal',
+      course,
+      permissions: principalPermissions,
+      createdBy: req.admin._id
+    });
+
+    const savedPrincipal = await principal.save();
+    
+    // Remove password from response
+    const principalResponse = savedPrincipal.toObject();
+    delete principalResponse.password;
+
+    res.status(201).json({
+      success: true,
+      data: principalResponse
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get all principals
+export const getPrincipals = async (req, res, next) => {
+  try {
+    let query = { role: 'principal' };
+    
+    // If the current user is not a super admin, only show principals they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const principals = await Admin.find(query)
+      .select('-password')
+      .populate('course', 'name code')
+      .sort({ createdAt: -1 });
+
+    console.log('🎓 Found principals:', principals.length);
+    console.log('🎓 Query used:', query);
+
+    res.json({
+      success: true,
+      data: principals
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update principal
+export const updatePrincipal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { username, password, course, isActive } = req.body;
+
+    console.log('🎓 Updating principal:', id);
+    console.log('🎓 Update data:', { username, course, isActive });
+
+    const principal = await Admin.findOne({ 
+      _id: id,
+      role: 'principal',
+      createdBy: req.admin._id
+    });
+
+    if (!principal) {
+      throw createError(404, 'Principal not found');
+    }
+
+    // Update fields
+    if (username && username !== principal.username) {
+      const existingAdmin = await Admin.findOne({ username });
+      if (existingAdmin) {
+        throw createError(400, 'Username already exists');
+      }
+      principal.username = username;
+    }
+    if (password) {
+      principal.password = password;
+    }
+    if (course) {
+      // Validate that the course exists in the database
+      const Course = (await import('../models/Course.js')).default;
+      const courseExists = await Course.findById(course);
+      if (!courseExists) {
+        throw createError(400, 'Invalid course selected');
+      }
+      principal.course = course;
+    }
+    if (typeof isActive === 'boolean') {
+      principal.isActive = isActive;
+    }
+
+    const updatedPrincipal = await principal.save();
+    
+    // Remove password from response
+    const principalResponse = updatedPrincipal.toObject();
+    delete principalResponse.password;
+
+    console.log('🎓 Principal updated successfully');
+
+    res.json({
+      success: true,
+      data: principalResponse
+    });
+  } catch (error) {
+    console.error('🎓 Error updating principal:', error);
+    next(error);
+  }
+};
+
+// Delete principal
+export const deletePrincipal = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    console.log('🎓 Deleting principal:', id);
+
+    const principal = await Admin.findOne({ 
+      _id: id,
+      role: 'principal',
+      createdBy: req.admin._id
+    });
+
+    if (!principal) {
+      throw createError(404, 'Principal not found');
+    }
+
+    await Admin.findByIdAndDelete(id);
+
+    console.log('🎓 Principal deleted successfully');
+
+    res.json({
+      success: true,
+      message: 'Principal deleted successfully'
+    });
+  } catch (error) {
+    console.error('🎓 Error deleting principal:', error);
     next(error);
   }
 }; 

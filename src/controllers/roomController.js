@@ -191,7 +191,10 @@ export const getRoomStudents = async (req, res) => {
       category: room.category,
       roomNumber: room.roomNumber,
       role: 'student'
-    }).select('name rollNumber studentPhone course branch year');
+    })
+      .select('name rollNumber studentPhone course branch year')
+      .populate('course', 'name code')
+      .populate('branch', 'name code');
 
     res.json({
       success: true,

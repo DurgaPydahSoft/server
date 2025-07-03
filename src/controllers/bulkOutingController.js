@@ -279,6 +279,8 @@ export const getStudentsForBulkOuting = async (req, res, next) => {
 
     const students = await User.find(query)
       .select('name rollNumber course branch year gender category roomNumber studentPhone parentPhone')
+      .populate('course', 'name code')
+      .populate('branch', 'name code')
       .sort({ name: 1 });
 
     res.json({
@@ -296,7 +298,14 @@ export const getBulkOutingStudents = async (req, res, next) => {
     const { bulkOutingId } = req.params;
 
     const bulkOuting = await BulkOuting.findById(bulkOutingId)
-      .populate('selectedStudents.student', 'name rollNumber course branch year gender category roomNumber studentPhone parentPhone studentPhoto');
+      .populate({
+        path: 'selectedStudents.student',
+        select: 'name rollNumber course branch year gender category roomNumber studentPhone parentPhone studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
 
     if (!bulkOuting) {
       throw createError(404, 'Bulk outing request not found');

@@ -8,6 +8,7 @@ import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
 import xlsx from 'xlsx';
+import Branch from '../models/Branch.js';
 
 // Add a new student
 export const addStudent = async (req, res, next) => {
@@ -673,21 +674,27 @@ export const deleteStudent = async (req, res, next) => {
   }
 };
 
-// Get branches by course
+// Get all branches (optionally filter by course)
+export const getAllBranches = async (req, res, next) => {
+  try {
+    const { course } = req.query;
+    const query = course ? { course } : {};
+    const branches = await Branch.find(query).populate('course');
+    res.json({ success: true, data: branches });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// (Optional) Get branches by courseId as a param (if you want to keep this route)
 export const getBranchesByCourse = async (req, res, next) => {
   try {
-    const { course } = req.params;
-    
-    if (!COURSES[course.toUpperCase()]) {
-      throw createError(400, 'Invalid course');
+    const { courseId } = req.params;
+    if (!courseId) {
+      return res.status(400).json({ success: false, message: 'Course ID is required' });
     }
-
-    const branches = BRANCHES[course.toUpperCase()];
-    
-    res.json({
-      success: true,
-      data: branches
-    });
+    const branches = await Branch.find({ course: courseId }).populate('course');
+    res.json({ success: true, data: branches });
   } catch (error) {
     next(error);
   }
@@ -722,11 +729,26 @@ export const getTempStudentsSummary = async (req, res, next) => {
 // Get total student count for admin dashboard
 export const getStudentsCount = async (req, res, next) => {
   try {
-    const totalStudents = await User.countDocuments({ role: 'student' });
+    const { course, branch, gender } = req.query;
+    
+    // Build query for active students
+    const query = { 
+      role: 'student', 
+      hostelStatus: 'Active' 
+    };
+
+    // Add filters if provided
+    if (course) query.course = course;
+    if (branch) query.branch = branch;
+    if (gender) query.gender = gender;
+
+    const totalStudents = await User.countDocuments(query);
+    
     res.status(200).json({
       success: true,
       data: {
-        count: totalStudents,
+        total: totalStudents,
+        count: totalStudents, // Keep for backward compatibility
       },
     });
   } catch (error) {

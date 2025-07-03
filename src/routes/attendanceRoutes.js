@@ -7,9 +7,12 @@ import {
   getMyAttendance,
   getAttendanceStats,
   updateAttendance,
-  deleteAttendance
+  deleteAttendance,
+  getPrincipalAttendanceForDate,
+  getPrincipalAttendanceForRange,
+  getPrincipalAttendanceStats
 } from '../controllers/attendanceController.js';
-import { protect, adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
+import { protect, adminAuth, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -24,5 +27,10 @@ router.delete('/:studentId/:date', adminAuth, deleteAttendance);
 
 // Student routes
 router.get('/my-attendance', protect, getMyAttendance);
+
+// Principal routes
+router.get('/principal/date', principalAuth, getPrincipalAttendanceForDate);
+router.get('/principal/range', principalAuth, getPrincipalAttendanceForRange);
+router.get('/principal/stats', principalAuth, getPrincipalAttendanceStats);
 
 export default router;

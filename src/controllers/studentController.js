@@ -18,11 +18,16 @@ export const uploadStudents = async (req, res) => {
       if (!Name || !RollNumber) { skipped++; continue; }
       const exists = await User.findOne({ rollNumber: RollNumber });
       if (exists) { skipped++; continue; }
+      // Look up course and branch ObjectIds
+      const CourseModel = (await import('../models/Course.js')).default;
+      const BranchModel = (await import('../models/Branch.js')).default;
+      const courseDoc = await CourseModel.findOne({ name: Degree });
+      const branchDoc = await BranchModel.findOne({ name: Branch });
       await User.create({
         name: Name,
         rollNumber: RollNumber,
-        degree: Degree,
-        branch: Branch,
+        course: courseDoc ? courseDoc._id : undefined,
+        branch: branchDoc ? branchDoc._id : undefined,
         year: Year,
         roomNumber: RoomNumber,
         studentPhone: StudentPhone,
@@ -148,7 +153,12 @@ export const updateProfile = async (req, res) => {
 export const getProfile = async (req, res) => {
   try {
     const studentId = req.user.id;
-    const student = await User.findById(studentId).select('-password');
+    const student = await User.findById(studentId)
+      .select('-password')
+      .populate('course', 'name code')
+      .populate('branch', 'name code');
+    
+    console.log('Student profile response:', student);
     
     if (!student) {
       return res.status(404).json({

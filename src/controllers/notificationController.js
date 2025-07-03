@@ -109,7 +109,7 @@ export const getUnreadCount = async (req, res) => {
 export const markAsRead = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.user._id;
+    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.principal ? req.principal._id : req.user._id;
 
     console.log('🔔 Marking notification as read:', id, 'for user:', userId);
 
@@ -146,7 +146,7 @@ export const markAsRead = async (req, res) => {
 // Mark all notifications as read
 export const markAllAsRead = async (req, res) => {
   try {
-    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.user._id;
+    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.principal ? req.principal._id : req.user._id;
 
     console.log('🔔 Marking all notifications as read for user:', userId);
 
@@ -176,7 +176,7 @@ export const markAllAsRead = async (req, res) => {
 export const deleteNotification = async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.user._id;
+    const userId = req.admin ? req.admin._id : req.warden ? req.warden._id : req.principal ? req.principal._id : req.user._id;
 
     console.log('🔔 Deleting notification:', id, 'for user:', userId);
 
@@ -628,6 +628,108 @@ export const sendMenuNotificationToAllStudents = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to send menu notifications',
+      error: error.message
+    });
+  }
+};
+
+// Get all notifications for a principal
+export const getPrincipalNotifications = async (req, res) => {
+  try {
+    const principalId = req.principal._id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
+    console.log('🔔 Fetching notifications for principal:', principalId);
+
+    const notifications = await Notification.find({ recipient: principalId })
+      .populate('sender', 'name email')
+      .populate('relatedId')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Notification.countDocuments({ recipient: principalId });
+
+    console.log('🔔 Found principal notifications:', notifications.length);
+
+    res.status(200).json({
+      success: true,
+      data: notifications,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('🔔 Error fetching principal notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch principal notifications',
+      error: error.message
+    });
+  }
+};
+
+// Get unread notifications for a principal
+export const getPrincipalUnreadNotifications = async (req, res) => {
+  try {
+    const principalId = req.principal._id;
+    const limit = parseInt(req.query.limit) || 10;
+
+    console.log('🔔 Fetching unread notifications for principal:', principalId);
+
+    const notifications = await Notification.find({ 
+      recipient: principalId, 
+      isRead: false 
+    })
+      .populate('sender', 'name email')
+      .populate('relatedId')
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+    console.log('🔔 Found principal unread notifications:', notifications.length);
+
+    res.status(200).json({
+      success: true,
+      data: notifications
+    });
+  } catch (error) {
+    console.error('🔔 Error fetching principal unread notifications:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch principal unread notifications',
+      error: error.message
+    });
+  }
+};
+
+// Get principal unread notification count
+export const getPrincipalUnreadCount = async (req, res) => {
+  try {
+    const principalId = req.principal._id;
+
+    console.log('🔔 Fetching principal unread count for principal:', principalId);
+
+    const count = await Notification.countDocuments({ 
+      recipient: principalId, 
+      isRead: false 
+    });
+
+    console.log('🔔 Principal unread count:', count);
+
+    res.status(200).json({
+      success: true,
+      count
+    });
+  } catch (error) {
+    console.error('🔔 Error fetching principal unread count:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch principal unread count',
       error: error.message
     });
   }

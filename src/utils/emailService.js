@@ -4,6 +4,7 @@ import { createError } from './error.js';
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const BREVO_SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL;
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
+const loginUrl = 'https://hms.pydahsoft.in';
 
 // Email templates
 const EMAIL_TEMPLATES = {
@@ -458,10 +459,9 @@ export const sendEmail = async (to, subject, htmlContent, textContent) => {
  * @param {string} studentName - Student's name
  * @param {string} rollNumber - Student's roll number
  * @param {string} generatedPassword - Generated password
- * @param {string} loginUrl - Login URL for the system
  * @returns {Promise<Object>} - Response from email service
  */
-export const sendStudentRegistrationEmail = async (studentEmail, studentName, rollNumber, generatedPassword, loginUrl) => {
+export const sendStudentRegistrationEmail = async (studentEmail, studentName, rollNumber, generatedPassword) => {
   try {
     const template = EMAIL_TEMPLATES.studentRegistration;
     const subject = template.subject;
@@ -481,10 +481,9 @@ export const sendStudentRegistrationEmail = async (studentEmail, studentName, ro
  * @param {string} studentName - Student's name
  * @param {string} rollNumber - Student's roll number
  * @param {string} newPassword - New password
- * @param {string} loginUrl - Login URL for the system
  * @returns {Promise<Object>} - Response from email service
  */
-export const sendPasswordResetEmail = async (studentEmail, studentName, rollNumber, newPassword, loginUrl) => {
+export const sendPasswordResetEmail = async (studentEmail, studentName, rollNumber, newPassword) => {
   try {
     const template = EMAIL_TEMPLATES.passwordReset;
     const subject = template.subject;
