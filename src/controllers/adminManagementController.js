@@ -327,15 +327,23 @@ export const adminLogin = async (req, res, next) => {
     await admin.save();
 
     // Generate token
-    const token = jwt.sign(
-      { 
-        _id: admin._id,
-        role: admin.role,
-        permissions: admin.permissions
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
+    const tokenData = { 
+      _id: admin._id,
+      role: admin.role,
+      permissions: admin.permissions
+    };
+
+    // Include course for principals in the token
+    if (admin.role === 'principal' && admin.course) {
+      tokenData.course = admin.course._id || admin.course;
+    }
+
+    // Include hostelType for wardens in the token
+    if (admin.role === 'warden' && admin.hostelType) {
+      tokenData.hostelType = admin.hostelType;
+    }
+
+    const token = jwt.sign(tokenData, process.env.JWT_SECRET, { expiresIn: '24h' });
 
     // Prepare admin response data
     const adminResponse = {
