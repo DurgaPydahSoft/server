@@ -14,6 +14,25 @@ export const createComplaint = async (req, res, next) => {
     const studentId = req.user._id;
 
     console.log('📝 Creating complaint for student:', studentId);
+    console.log('📝 Request body:', req.body);
+    console.log('📝 Request file:', req.file);
+
+    // Handle image upload if present
+    let imageUrl = null;
+    if (req.file) {
+      try {
+        console.log('📝 Uploading image to S3...');
+        imageUrl = await uploadToS3(req.file, 'complaints');
+        console.log('📝 Image uploaded successfully:', imageUrl);
+      } catch (uploadError) {
+        console.error('📝 Error uploading image:', uploadError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload image',
+          error: uploadError.message
+        });
+      }
+    }
 
     const complaint = new Complaint({
       title,
@@ -23,6 +42,7 @@ export const createComplaint = async (req, res, next) => {
       priority,
       roomNumber,
       student: studentId,
+      imageUrl,
       status: 'pending'
     });
 
@@ -427,10 +447,11 @@ export const listAllComplaints = async (req, res) => {
 export const updateComplaintStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, adminResponse } = req.body;
+    const { status, note, memberId } = req.body;
     const adminId = req.admin ? req.admin._id : req.user._id;
 
     console.log('📝 Updating complaint status:', id, 'to:', status);
+    console.log('📝 Request body:', req.body);
 
     const complaint = await Complaint.findById(id).populate('student', 'name email');
 
@@ -451,16 +472,36 @@ export const updateComplaintStatus = async (req, res) => {
 
     const oldStatus = complaint.currentStatus;
     
+    // Handle member assignment
+    if (memberId && status === 'In Progress') {
+      // Validate member exists
+      const member = await Member.findById(memberId);
+      if (!member) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected member not found'
+        });
+      }
+      
+      complaint.assignedTo = memberId;
+      console.log('📝 Assigned complaint to member:', member.name);
+    } else if (status !== 'In Progress') {
+      // Clear assignment if status is not In Progress
+      complaint.assignedTo = null;
+    }
+    
     // Use the built-in updateStatus method which handles validation and status history
-    const note = adminResponse ? `Admin response: ${adminResponse}` : `Status updated to ${status}`;
-    await complaint.updateStatus(status, note);
+    const statusNote = note || `Status updated to ${status}`;
+    await complaint.updateStatus(status, statusNote);
 
     // Update additional fields
-    complaint.adminResponse = adminResponse;
     complaint.resolvedBy = adminId;
     complaint.resolvedAt = status === 'Resolved' ? new Date() : null;
 
     await complaint.save();
+
+    // Populate the assignedTo field for the response
+    await complaint.populate('assignedTo', 'name category phone email');
 
     console.log('📝 Complaint status updated successfully from', oldStatus, 'to', status);
 
