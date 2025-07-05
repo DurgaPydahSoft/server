@@ -200,4 +200,21 @@ export const completeRegistration = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: 'Server error' });
   }
+};
+
+// Validate token and return user (with populated course/branch for students)
+export const validate = async (req, res, next) => {
+  try {
+    if (req.user.role === 'student') {
+      const populatedUser = await User.findById(req.user._id)
+        .select('-password')
+        .populate('course', 'name code')
+        .populate('branch', 'name code');
+      return res.json({ success: true, data: { user: populatedUser } });
+    }
+    // For admins and others, just return req.user
+    return res.json({ success: true, data: { user: req.user } });
+  } catch (error) {
+    next(error);
+  }
 }; 

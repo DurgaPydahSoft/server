@@ -6,10 +6,10 @@ const leaveSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
-  // Application type: 'Leave' or 'Permission'
+  // Application type: 'Leave', 'Permission', or 'Stay in Hostel'
   applicationType: {
     type: String,
-    enum: ['Leave', 'Permission'],
+    enum: ['Leave', 'Permission', 'Stay in Hostel'],
     required: true
   },
   // For Leave applications
@@ -34,6 +34,11 @@ const leaveSchema = new mongoose.Schema({
     type: String, // Format: "HH:MM"
     required: function() { return this.applicationType === 'Permission'; }
   },
+  // For Stay in Hostel applications
+  stayDate: {
+    type: Date,
+    required: function() { return this.applicationType === 'Stay in Hostel'; }
+  },
   // Gate pass date and time (for Leave applications only)
   gatePassDateTime: {
     type: Date,
@@ -51,20 +56,20 @@ const leaveSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Pending', 'Pending OTP Verification', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Pending OTP Verification', 'Approved', 'Rejected', 'Warden Recommended', 'Principal Approved', 'Principal Rejected'],
     default: 'Pending'
   },
   otpCode: {
     type: String,
-    required: true
+    required: function() { return this.applicationType !== 'Stay in Hostel'; }
   },
   otpExpiry: {
     type: Date,
-    required: true
+    required: function() { return this.applicationType !== 'Stay in Hostel'; }
   },
   parentPhone: {
     type: String,
-    required: true
+    required: function() { return this.applicationType !== 'Stay in Hostel'; }
   },
   rejectionReason: {
     type: String,
@@ -75,6 +80,39 @@ const leaveSchema = new mongoose.Schema({
     ref: 'User'
   },
   approvedAt: {
+    type: Date
+  },
+  // New fields for Stay in Hostel workflow
+  wardenRecommendation: {
+    type: String,
+    enum: ['Pending', 'Recommended', 'Not Recommended'],
+    default: 'Pending'
+  },
+  wardenComment: {
+    type: String,
+    trim: true
+  },
+  recommendedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  recommendedAt: {
+    type: Date
+  },
+  principalDecision: {
+    type: String,
+    enum: ['Pending', 'Approved', 'Rejected'],
+    default: 'Pending'
+  },
+  principalComment: {
+    type: String,
+    trim: true
+  },
+  decidedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  decidedAt: {
     type: Date
   },
   verificationStatus: {
@@ -131,6 +169,7 @@ leaveSchema.pre('save', function(next) {
     console.log('🔧 Leave pre-save middleware - Start date:', this.startDate);
     console.log('🔧 Leave pre-save middleware - End date:', this.endDate);
     console.log('🔧 Leave pre-save middleware - Permission date:', this.permissionDate);
+    console.log('🔧 Leave pre-save middleware - Stay date:', this.stayDate);
     
     if (this.applicationType === 'Leave' && this.startDate && this.endDate) {
       const start = new Date(this.startDate);
@@ -152,6 +191,13 @@ leaveSchema.pre('save', function(next) {
       
       console.log('🔧 Permission pre-save middleware - Set numberOfDays to 1');
       console.log('🔧 Permission pre-save middleware - Set qrAvailableFrom:', this.qrAvailableFrom);
+    } else if (this.applicationType === 'Stay in Hostel' && this.stayDate) {
+      // For stay in hostel, set numberOfDays to 1 and no QR needed
+      this.numberOfDays = 1;
+      this.qrAvailableFrom = null; // No QR needed for stay in hostel
+      
+      console.log('🔧 Stay in Hostel pre-save middleware - Set numberOfDays to 1');
+      console.log('🔧 Stay in Hostel pre-save middleware - No QR needed');
     } else {
       // Fallback: set default values
       this.numberOfDays = this.numberOfDays || 1;
@@ -166,7 +212,7 @@ leaveSchema.pre('save', function(next) {
 
 // Virtual method to check if QR is currently available
 leaveSchema.virtual('isQrAvailable').get(function() {
-  if (this.status !== 'Approved' || this.visitLocked) {
+  if (this.status !== 'Approved' || this.visitLocked || this.applicationType === 'Stay in Hostel') {
     return false;
   }
   const now = new Date();
@@ -189,6 +235,8 @@ leaveSchema.virtual('displayDate').get(function() {
     return this.startDate;
   } else if (this.applicationType === 'Permission') {
     return this.permissionDate;
+  } else if (this.applicationType === 'Stay in Hostel') {
+    return this.stayDate;
   }
   return null;
 });
@@ -199,6 +247,8 @@ leaveSchema.virtual('displayEndDate').get(function() {
     return this.endDate;
   } else if (this.applicationType === 'Permission') {
     return this.permissionDate;
+  } else if (this.applicationType === 'Stay in Hostel') {
+    return this.stayDate;
   }
   return null;
 });
@@ -212,6 +262,8 @@ leaveSchema.index({ status: 1, createdAt: -1 });
 leaveSchema.index({ status: 1, verificationStatus: 1 });
 leaveSchema.index({ qrAvailableFrom: 1, status: 1 });
 leaveSchema.index({ applicationType: 1, status: 1 });
+leaveSchema.index({ applicationType: 1, wardenRecommendation: 1 });
+leaveSchema.index({ applicationType: 1, principalDecision: 1 });
 
 const Leave = mongoose.model('Leave', leaveSchema);
 

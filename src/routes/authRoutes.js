@@ -3,7 +3,8 @@ import {
   studentLogin,
   verifyRollNumber,
   completeRegistration,
-  resetPassword
+  resetPassword,
+  validate
 } from '../controllers/authController.js';
 import { authenticateStudent, protect } from '../middleware/authMiddleware.js';
 
@@ -15,44 +16,7 @@ router.get('/test', (req, res) => {
 });
 
 // Token validation endpoint
-router.get('/validate', protect, (req, res) => {
-  // Check hostel status for students - if inactive, return error
-  if (req.user.role === 'student' && req.user.hostelStatus === 'Inactive') {
-    return res.status(403).json({
-      success: false,
-      message: 'Your hostel access has been deactivated. Please contact the administration for assistance.'
-    });
-  }
-
-  res.json({
-    success: true,
-    data: {
-      user: {
-        id: req.user._id,
-        name: req.user.name,
-        role: req.user.role,
-        ...(req.user.role === 'student' && {
-          rollNumber: req.user.rollNumber,
-          course: req.user.course,
-          branch: req.user.branch,
-          roomNumber: req.user.roomNumber,
-          isPasswordChanged: req.user.isPasswordChanged,
-          gender: req.user.gender,
-          category: req.user.category,
-          year: req.user.year,
-          studentPhone: req.user.studentPhone,
-          parentPhone: req.user.parentPhone,
-          batch: req.user.batch,
-          academicYear: req.user.academicYear,
-          hostelStatus: req.user.hostelStatus,
-          studentPhoto: req.user.studentPhoto,
-          guardianPhoto1: req.user.guardianPhoto1,
-          guardianPhoto2: req.user.guardianPhoto2
-        })
-      }
-    }
-  });
-});
+router.get('/validate', protect, validate);
 
 // Admin login - DISABLED: Using new admin management system
 // router.post('/admin/login', adminLogin);

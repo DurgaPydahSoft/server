@@ -9,9 +9,13 @@ import {
   getApprovedLeaves,
   updateVerificationStatus,
   requestQrView,
-  recordVisit
+  recordVisit,
+  getStayInHostelRequestsForWarden,
+  getStayInHostelRequestsForPrincipal,
+  wardenRecommendation,
+  principalDecision
 } from '../controllers/leaveController.js';
-import { adminAuth, authenticateStudent, protect } from '../middleware/authMiddleware.js';
+import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -42,6 +46,14 @@ router.get('/my-requests', protect, authenticateStudent, getStudentLeaveRequests
 router.get('/all', adminAuth, getAllLeaveRequests);
 router.post('/verify-otp', adminAuth, verifyOTPAndApprove);
 router.post('/reject', adminAuth, rejectLeaveRequest);
+
+// Warden routes for Stay in Hostel requests
+router.get('/warden/stay-in-hostel', wardenAuth, getStayInHostelRequestsForWarden);
+router.post('/warden/recommendation', wardenAuth, wardenRecommendation);
+
+// Principal routes for Stay in Hostel requests
+router.get('/principal/stay-in-hostel', principalAuth, getStayInHostelRequestsForPrincipal);
+router.post('/principal/decision', principalAuth, principalDecision);
 
 // Security guard routes (public access)
 router.get('/approved', getApprovedLeaves);

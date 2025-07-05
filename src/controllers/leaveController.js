@@ -2,6 +2,8 @@ import Leave from '../models/Leave.js';
 import User from '../models/User.js';
 import { createError } from '../utils/error.js';
 import { sendSMS } from '../utils/smsService.js';
+import Notification from '../models/Notification.js';
+import { sendOneSignalNotification, sendOneSignalBulkNotification } from '../utils/oneSignalService.js';
 
 // Generate OTP
 const generateOTP = () => {
@@ -32,6 +34,7 @@ export const createLeaveRequest = async (req, res, next) => {
       startDate, 
       endDate, 
       permissionDate,
+      stayDate,
       outTime,
       inTime,
       gatePassDateTime,
@@ -46,15 +49,14 @@ export const createLeaveRequest = async (req, res, next) => {
     }
 
     // Validate application type
-    if (!['Leave', 'Permission'].includes(applicationType)) {
-      throw createError(400, 'Invalid application type. Must be "Leave" or "Permission"');
+    if (!['Leave', 'Permission', 'Stay in Hostel'].includes(applicationType)) {
+      throw createError(400, 'Invalid application type. Must be "Leave", "Permission", or "Stay in Hostel"');
     }
 
     let leaveData = {
       student: studentId,
       applicationType,
-      reason,
-      parentPhone: student.parentPhone
+      reason
     };
 
     if (applicationType === 'Leave') {
@@ -85,8 +87,16 @@ export const createLeaveRequest = async (req, res, next) => {
         ...leaveData,
         startDate,
         endDate,
-        gatePassDateTime
+        gatePassDateTime,
+        parentPhone: student.parentPhone
       };
+
+      // Generate OTP for Leave applications
+      const otp = generateOTP();
+      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+      leaveData.otpCode = otp;
+      leaveData.otpExpiry = otpExpiry;
+      leaveData.status = 'Pending OTP Verification';
 
     } else if (applicationType === 'Permission') {
       // Validate permission-specific fields
@@ -116,36 +126,92 @@ export const createLeaveRequest = async (req, res, next) => {
         ...leaveData,
         permissionDate,
         outTime,
-        inTime
+        inTime,
+        parentPhone: student.parentPhone
+      };
+
+      // Generate OTP for Permission applications
+      const otp = generateOTP();
+      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+      leaveData.otpCode = otp;
+      leaveData.otpExpiry = otpExpiry;
+      leaveData.status = 'Pending OTP Verification';
+
+    } else if (applicationType === 'Stay in Hostel') {
+      // Validate stay in hostel-specific fields
+      if (!stayDate) {
+        throw createError(400, 'Stay date is required for stay in hostel applications');
+      }
+
+      const stay = new Date(stayDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+
+      if (stay < today || stay > tomorrow) {
+        throw createError(400, 'Stay date must be today or tomorrow only');
+      }
+
+      leaveData = {
+        ...leaveData,
+        stayDate,
+        status: 'Pending' // No OTP needed for Stay in Hostel
       };
     }
 
-    // Generate OTP
-    const otp = generateOTP();
-    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
-
-    leaveData.otpCode = otp;
-    leaveData.otpExpiry = otpExpiry;
-    leaveData.status = 'Pending OTP Verification';
-
-    // Create leave/permission request
+    // Create leave/permission/stay request
     const leave = new Leave(leaveData);
     await leave.save();
 
-    // Try to send OTP via SMS, but don't fail the request if SMS fails
-    try {
-      const message = `Join MBA,MCA @ Pydah College of Engg (Autonomous).Best Opportunity for Employees,Aspiring Students. ${otp} youtu.be/bnLOLQrSC5g?si=7TNjgpGQ3lTIe-sf -PYDAH`;
-      await sendSMS(student.parentPhone, message, { otp });
-    } catch (smsError) {
-      console.error('SMS sending failed:', smsError);
-      // Continue with the request even if SMS fails
+    // Send SMS only for Leave and Permission applications
+    if (applicationType !== 'Stay in Hostel') {
+      try {
+        const message = `Join MBA,MCA @ Pydah College of Engg (Autonomous).Best Opportunity for Employees,Aspiring Students. ${leaveData.otpCode} youtu.be/bnLOLQrSC5g?si=7TNjgpGQ3lTIe-sf -PYDAH`;
+        await sendSMS(student.parentPhone, message, { otp: leaveData.otpCode });
+      } catch (smsError) {
+        console.error('SMS sending failed:', smsError);
+        // Continue with the request even if SMS fails
+      }
+    }
+
+    // Notify all wardens and principal
+    const wardens = await User.find({ role: 'warden' });
+    const principals = await User.find({ role: 'principal' });
+    const recipients = [...wardens, ...principals];
+    const notificationTitle = 'New Stay in Hostel Request';
+    const notificationMessage = `${student.name} submitted a Stay in Hostel request for ${stayDate} (Reason: ${reason})`;
+    for (const recipient of recipients) {
+      await Notification.createNotification({
+        type: 'leave',
+        recipient: recipient._id,
+        sender: student._id,
+        title: notificationTitle,
+        message: notificationMessage,
+        relatedId: leave._id,
+        priority: 'high'
+      });
+      await sendOneSignalNotification(recipient._id, {
+        title: notificationTitle,
+        message: notificationMessage,
+        type: 'leave',
+        relatedId: leave._id,
+        priority: 10
+      });
+    }
+
+    let message = '';
+    if (applicationType === 'Stay in Hostel') {
+      message = 'Stay in Hostel request submitted successfully. It will be reviewed by the warden and principal.';
+    } else {
+      message = `${applicationType} request created successfully. Please contact admin for OTP verification.`;
     }
 
     res.json({
       success: true,
       data: {
         leave,
-        message: `${applicationType} request created successfully. Please contact admin for OTP verification.`
+        message
       }
     });
   } catch (error) {
@@ -573,6 +639,260 @@ export const updateVerificationStatus = async (req, res, next) => {
       data: {
         leave,
         message: `Leave verification status updated to ${verificationStatus}`
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get Stay in Hostel requests for Warden
+export const getStayInHostelRequestsForWarden = async (req, res, next) => {
+  try {
+    const { status, wardenRecommendation, page = 1, limit = 10, fromDate, toDate } = req.query;
+    const query = { applicationType: 'Stay in Hostel' };
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (wardenRecommendation) {
+      query.wardenRecommendation = wardenRecommendation;
+    }
+
+    if (fromDate || toDate) {
+      query.stayDate = {};
+      if (fromDate) query.stayDate.$gte = new Date(fromDate);
+      if (toDate) query.stayDate.$lte = new Date(toDate);
+    }
+
+    const leaves = await Leave.find(query)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender',
+        populate: [
+          { path: 'course', select: 'name' },
+          { path: 'branch', select: 'name' }
+        ]
+      })
+      .populate('recommendedBy', 'name')
+      .populate('decidedBy', 'name')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const count = await Leave.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        leaves,
+        totalPages: Math.ceil(count / limit),
+        currentPage: page,
+        totalRequests: count
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get Stay in Hostel requests for Principal
+export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
+  try {
+    const { status, principalDecision, wardenRecommendation, page = 1, limit = 10, fromDate, toDate } = req.query;
+    const query = { applicationType: 'Stay in Hostel' };
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (principalDecision) {
+      query.principalDecision = principalDecision;
+    }
+
+    if (wardenRecommendation) {
+      query.wardenRecommendation = wardenRecommendation;
+    }
+
+    if (fromDate || toDate) {
+      query.stayDate = {};
+      if (fromDate) query.stayDate.$gte = new Date(fromDate);
+      if (toDate) query.stayDate.$lte = new Date(toDate);
+    }
+
+    const leaves = await Leave.find(query)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender',
+        populate: [
+          { path: 'course', select: 'name' },
+          { path: 'branch', select: 'name' }
+        ]
+      })
+      .populate('recommendedBy', 'name')
+      .populate('decidedBy', 'name')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    const count = await Leave.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        leaves,
+        totalPages: Math.ceil(count / limit),
+        currentPage: page,
+        totalRequests: count
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Warden recommendation for Stay in Hostel request
+export const wardenRecommendation = async (req, res, next) => {
+  try {
+    const { leaveId, recommendation, comment } = req.body;
+    const wardenId = req.warden._id;
+
+    const leave = await Leave.findById(leaveId)
+      .populate('student', 'name rollNumber');
+      
+    if (!leave) {
+      throw createError(404, 'Stay in Hostel request not found');
+    }
+
+    if (leave.applicationType !== 'Stay in Hostel') {
+      throw createError(400, 'This request is not a Stay in Hostel request');
+    }
+
+    if (leave.status !== 'Pending') {
+      throw createError(400, 'Request is not in pending status');
+    }
+
+    if (!['Recommended', 'Not Recommended'].includes(recommendation)) {
+      throw createError(400, 'Invalid recommendation. Must be "Recommended" or "Not Recommended"');
+    }
+
+    leave.wardenRecommendation = recommendation;
+    leave.wardenComment = comment;
+    leave.recommendedBy = wardenId;
+    leave.recommendedAt = new Date();
+
+    // Update status based on recommendation
+    if (recommendation === 'Recommended') {
+      leave.status = 'Warden Recommended';
+    } else {
+      leave.status = 'Rejected';
+      leave.rejectionReason = `Warden: ${comment || 'Not recommended'}`;
+    }
+
+    await leave.save();
+
+    // Notify all principals
+    const principalUsers = await User.find({ role: 'principal' });
+    const warden = await User.findById(req.warden._id);
+    const wardenNotifTitle = 'Warden Recommendation for Stay in Hostel';
+    const wardenNotifMsg = `${leave.student?.name || 'A student'}'s Stay in Hostel request: Warden ${recommendation} (${comment || ''})`;
+    for (const principal of principalUsers) {
+      await Notification.createNotification({
+        type: 'leave',
+        recipient: principal._id,
+        sender: warden._id,
+        title: wardenNotifTitle,
+        message: wardenNotifMsg,
+        relatedId: leave._id,
+        priority: 'high'
+      });
+      await sendOneSignalNotification(principal._id, {
+        title: wardenNotifTitle,
+        message: wardenNotifMsg,
+        type: 'leave',
+        relatedId: leave._id,
+        priority: 10
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message: `Stay in Hostel request ${recommendation.toLowerCase()} by warden`
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Principal decision for Stay in Hostel request
+export const principalDecision = async (req, res, next) => {
+  try {
+    const { leaveId, decision, comment } = req.body;
+    const principalId = req.principal._id;
+
+    const leave = await Leave.findById(leaveId)
+      .populate('student', 'name rollNumber');
+      
+    if (!leave) {
+      throw createError(404, 'Stay in Hostel request not found');
+    }
+
+    if (leave.applicationType !== 'Stay in Hostel') {
+      throw createError(400, 'This request is not a Stay in Hostel request');
+    }
+
+    if (!['Approved', 'Rejected'].includes(decision)) {
+      throw createError(400, 'Invalid decision. Must be "Approved" or "Rejected"');
+    }
+
+    leave.principalDecision = decision;
+    leave.principalComment = comment;
+    leave.decidedBy = principalId;
+    leave.decidedAt = new Date();
+
+    // Update status based on decision
+    if (decision === 'Approved') {
+      leave.status = 'Principal Approved';
+    } else {
+      leave.status = 'Principal Rejected';
+      leave.rejectionReason = `Principal: ${comment || 'Rejected'}`;
+    }
+
+    await leave.save();
+
+    // Notify all wardens
+    const wardenUsers = await User.find({ role: 'warden' });
+    const principal = await User.findById(req.principal._id);
+    const principalNotifTitle = 'Principal Decision for Stay in Hostel';
+    const principalNotifMsg = `${leave.student?.name || 'A student'}'s Stay in Hostel request: Principal ${decision} (${comment || ''})`;
+    for (const warden of wardenUsers) {
+      await Notification.createNotification({
+        type: 'leave',
+        recipient: warden._id,
+        sender: principal._id,
+        title: principalNotifTitle,
+        message: principalNotifMsg,
+        relatedId: leave._id,
+        priority: 'high'
+      });
+      await sendOneSignalNotification(warden._id, {
+        title: principalNotifTitle,
+        message: principalNotifMsg,
+        type: 'leave',
+        relatedId: leave._id,
+        priority: 10
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message: `Stay in Hostel request ${decision.toLowerCase()} by principal`
       }
     });
   } catch (error) {
