@@ -5,6 +5,7 @@ import {
   isOneSignalConfigured 
 } from './oneSignalService.js';
 import Notification from '../models/Notification.js';
+import User from '../models/User.js';
 
 // Simplified notification service - OneSignal only
 class NotificationService {
