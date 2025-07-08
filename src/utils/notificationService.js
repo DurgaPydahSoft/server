@@ -132,8 +132,9 @@ class NotificationService {
       };
 
       // Only include mealType for menu notifications
-      if (data.type === 'menu' && data.mealType) {
-        notificationData.mealType = data.mealType;
+      if (data.type === 'menu') {
+        // If mealType is provided, use it; otherwise use a default
+        notificationData.mealType = data.mealType || 'breakfast';
       }
 
       const notification = new Notification(notificationData);
