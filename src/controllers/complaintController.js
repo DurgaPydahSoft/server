@@ -249,6 +249,7 @@ export const getComplaintTimeline = async (req, res) => {
     }
 
     // Get timeline from status history with populated assigned members
+    console.log('📝 Raw status history:', complaint.statusHistory);
     const timeline = await Promise.all(complaint.statusHistory.map(async entry => {
       // For each entry, populate the assignedTo member if it exists
       let assignedMember = null;
@@ -258,13 +259,16 @@ export const getComplaintTimeline = async (req, res) => {
           .lean();
       }
       
-      return {
+      const timelineEntry = {
         status: entry.status,
         note: entry.note,
         timestamp: entry.timestamp,
         assignedTo: assignedMember,
         updatedBy: entry.updatedBy ? await User.findById(entry.updatedBy).select('name role').lean() : null
       };
+      
+      console.log('📝 Timeline entry:', timelineEntry);
+      return timelineEntry;
     }));
 
     // Add initial entry if no history
@@ -492,6 +496,7 @@ export const updateComplaintStatus = async (req, res) => {
     
     // Use the built-in updateStatus method which handles validation and status history
     const statusNote = note || `Status updated to ${status}`;
+    console.log('📝 Saving status update with note:', statusNote);
     await complaint.updateStatus(status, statusNote);
 
     // Update additional fields
