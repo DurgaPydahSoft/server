@@ -119,18 +119,24 @@ class NotificationService {
   // Create database notification
   async createDatabaseNotification(data) {
     try {
-      const notification = new Notification({
+      const notificationData = {
         recipient: data.recipient,
         type: data.type,
         title: data.title || data.message, // Use message as title if title not provided
         message: data.message,
-        mealType: data.mealType,
         url: data.url,
         priority: data.priority,
         sender: data.sender,
         relatedId: data.relatedId,
         onModel: data.onModel
-      });
+      };
+
+      // Only include mealType for menu notifications
+      if (data.type === 'menu' && data.mealType) {
+        notificationData.mealType = data.mealType;
+      }
+
+      const notification = new Notification(notificationData);
       await notification.save();
       console.log('🔔 Database notification created:', notification._id);
       return notification;
