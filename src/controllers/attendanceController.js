@@ -149,15 +149,25 @@ export const takeAttendance = async (req, res, next) => {
     // Send notification to students about attendance being taken
     if (results.length > 0) {
       try {
-        const studentIds = results.map(att => att.student);
-        const adminName = req.admin ? req.admin.name : req.user.name;
-        
-        await notificationService.sendToUsers(studentIds, {
-          type: 'system',
-          message: `📊 Your attendance has been marked for ${normalizedDate.toDateString()}`,
-          sender: markedBy,
-          onModel: 'Attendance'
-        });
+        // Populate student details for personalized notifications
+        const attendanceWithStudents = await Attendance.find({
+          _id: { $in: results.map(att => att._id) }
+        }).populate('student', 'name');
+
+        // Send individual notifications with student names
+        for (const att of attendanceWithStudents) {
+          const student = att.student;
+          const studentName = student?.name || 'Student';
+          
+          await notificationService.sendToUser(student._id, {
+            type: 'system',
+            message: `📊 your attendance has been marked for ${normalizedDate.toDateString()}`,
+            sender: markedBy,
+            onModel: 'Attendance'
+          });
+        }
+
+        console.log(`🔔 Attendance notifications sent to ${attendanceWithStudents.length} students`);
       } catch (notificationError) {
         console.error('Error sending attendance notification:', notificationError);
       }

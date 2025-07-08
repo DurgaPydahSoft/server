@@ -504,7 +504,7 @@ export const sendMenuNotification = async (req, res) => {
     // Create notification data
     const notificationData = {
       title: title || `${mealType.charAt(0).toUpperCase() + mealType.slice(1)} is Ready!`,
-      message: (message || `Check today's ${mealType} menu and rate your meal.`) + itemsText,
+      message: (message || `🍽️ check out today's menu! Tap to see what's cooking.`) + itemsText,
       type: 'menu',
       mealType: mealType,
       url: url || '/student',
@@ -580,7 +580,7 @@ export const sendMenuNotificationToAllStudents = async (req, res) => {
 
     const notificationData = {
       title: title || `${mealType.charAt(0).toUpperCase() + mealType.slice(1)} is Ready!`,
-      message: (message || `Check today's ${mealType} menu and rate your meal.`) + itemsText,
+      message: (message || `🍽️ check out today's menu! Tap to see what's cooking.`) + itemsText,
       type: 'menu',
       mealType: mealType,
       url: url || '/student',
