@@ -36,12 +36,14 @@ export const createOrUpdateMenuForDate = async (req, res, next) => {
         if (students.length > 0) {
           const studentIds = students.map(student => student._id);
           
-          await notificationService.sendMenuNotification(
-            studentIds,
-            menu,
-            req.admin ? req.admin.name : 'Admin',
-            req.admin ? req.admin._id : null
-          );
+          await notificationService.sendToUsers(studentIds, {
+            type: 'menu',
+            title: 'Menu Update',
+            message: '🍽️ check out today\'s menu! Tap to see what\'s cooking.',
+            sender: req.admin ? req.admin._id : null,
+            onModel: 'Menu',
+            relatedId: menu._id
+          });
 
           console.log('🍽️ Menu notification sent to students:', studentIds.length);
         }
