@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const notificationSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['complaint', 'feedback', 'poll', 'announcement', 'poll_ending', 'menu'],
+    enum: ['complaint', 'feedback', 'poll', 'announcement', 'poll_ending', 'menu', 'system', 'leave'],
     required: true
   },
   recipient: {
@@ -44,7 +44,7 @@ const notificationSchema = new mongoose.Schema({
   },
   onModel: {
     type: String,
-    enum: ['Complaint', 'Feedback', 'Poll', 'Announcement']
+    enum: ['Complaint', 'Feedback', 'Poll', 'Announcement', 'Attendance', 'Leave', 'System', 'Menu']
   },
   isRead: {
     type: Boolean,

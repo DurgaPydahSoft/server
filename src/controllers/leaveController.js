@@ -5,9 +5,9 @@ import { sendSMS } from '../utils/smsService.js';
 import Notification from '../models/Notification.js';
 import { sendOneSignalNotification, sendOneSignalBulkNotification } from '../utils/oneSignalService.js';
 
-// Generate OTP
+// Generate OTP (4 digits)
 const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return Math.floor(1000 + Math.random() * 9000).toString();
 };
 
 // Validate time format (HH:MM)
@@ -47,6 +47,12 @@ export const createLeaveRequest = async (req, res, next) => {
     if (!student) {
       throw createError(404, 'Student not found');
     }
+    
+    console.log('Student details:', {
+      name: student.name,
+      gender: student.gender,
+      parentPhone: student.parentPhone
+    });
 
     // Validate application type
     if (!['Leave', 'Permission', 'Stay in Hostel'].includes(applicationType)) {
@@ -167,8 +173,38 @@ export const createLeaveRequest = async (req, res, next) => {
     // Send SMS only for Leave and Permission applications
     if (applicationType !== 'Stay in Hostel') {
       try {
-        const message = `Join MBA,MCA @ Pydah College of Engg (Autonomous).Best Opportunity for Employees,Aspiring Students. ${leaveData.otpCode} youtu.be/bnLOLQrSC5g?si=7TNjgpGQ3lTIe-sf -PYDAH`;
-        await sendSMS(student.parentPhone, message, { otp: leaveData.otpCode });
+        // Get gender in Telugu
+        const genderInTelugu = student.gender === 'Male' ? 'కొడుకు' : 'కూతురు';
+        
+        console.log('Sending SMS with params:', {
+          phone: student.parentPhone,
+          otp: leaveData.otpCode,
+          gender: genderInTelugu,
+          name: student.name
+        });
+        
+        const smsResult = await sendSMS(student.parentPhone, '', { 
+          otp: leaveData.otpCode,
+          gender: genderInTelugu,
+          name: student.name
+        });
+        
+        if (smsResult.success) {
+          console.log('SMS Results:', smsResult.results);
+          if (smsResult.teluguSuccess) {
+            console.log('✅ Telugu SMS sent successfully');
+          }
+          if (smsResult.englishSuccess) {
+            console.log('✅ English SMS sent successfully');
+          }
+          
+          // Log which approaches worked
+          smsResult.results.forEach(result => {
+            console.log(`✅ ${result.language} SMS sent using: ${result.approach} (MessageId: ${result.messageId})`);
+          });
+        } else {
+          console.log('SMS sending failed');
+        }
       } catch (smsError) {
         console.error('SMS sending failed:', smsError);
         // Continue with the request even if SMS fails
@@ -224,7 +260,7 @@ export const getStudentLeaveRequests = async (req, res, next) => {
   try {
     const studentId = req.user.id;
     const leaves = await Leave.find({ student: studentId })
-      .populate('student', 'name rollNumber course branch year')
+      .populate('student', 'name rollNumber course branch year gender')
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 });
 
@@ -258,7 +294,7 @@ export const getAllLeaveRequests = async (req, res, next) => {
     console.log('MongoDB query:', query);
 
     const leaves = await Leave.find(query)
-      .populate('student', 'name rollNumber course branch year')
+      .populate('student', 'name rollNumber course branch year gender')
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
@@ -291,7 +327,7 @@ export const verifyOTPAndApprove = async (req, res, next) => {
     const adminId = req.admin._id;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name parentPhone');
+      .populate('student', 'name parentPhone gender');
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
@@ -331,7 +367,7 @@ export const rejectLeaveRequest = async (req, res, next) => {
     const adminId = req.admin._id;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name parentPhone');
+      .populate('student', 'name parentPhone gender');
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
@@ -590,7 +626,7 @@ export const getApprovedLeaves = async (req, res, next) => {
     const { page = 1, limit = 10 } = req.query;
     
     const leaves = await Leave.find({ status: 'Approved' })
-      .populate('student', 'name rollNumber course branch year')
+      .populate('student', 'name rollNumber course branch year gender')
       .populate('approvedBy', 'name')
       .sort({ approvedAt: -1 })
       .limit(limit * 1)
@@ -619,7 +655,7 @@ export const updateVerificationStatus = async (req, res, next) => {
     const { leaveId, verificationStatus } = req.body;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name rollNumber');
+      .populate('student', 'name rollNumber gender');
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
@@ -759,7 +795,7 @@ export const wardenRecommendation = async (req, res, next) => {
     const wardenId = req.warden._id;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name rollNumber');
+      .populate('student', 'name rollNumber gender');
       
     if (!leave) {
       throw createError(404, 'Stay in Hostel request not found');

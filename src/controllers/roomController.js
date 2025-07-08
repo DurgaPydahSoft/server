@@ -136,7 +136,8 @@ export const deleteRoom = async (req, res, next) => {
 // Get room statistics
 export const getRoomStats = async (req, res, next) => {
   try {
-    const stats = await Room.aggregate([
+    // Get room statistics with bed counts
+    const roomStats = await Room.aggregate([
       {
         $group: {
           _id: {
@@ -146,7 +147,8 @@ export const getRoomStats = async (req, res, next) => {
           totalRooms: { $sum: 1 },
           activeRooms: {
             $sum: { $cond: ['$isActive', 1, 0] }
-          }
+          },
+          totalBeds: { $sum: '$bedCount' }
         }
       },
       {
@@ -156,16 +158,86 @@ export const getRoomStats = async (req, res, next) => {
             $push: {
               category: '$_id.category',
               totalRooms: '$totalRooms',
-              activeRooms: '$activeRooms'
+              activeRooms: '$activeRooms',
+              totalBeds: '$totalBeds'
             }
           },
           totalRooms: { $sum: '$totalRooms' },
-          activeRooms: { $sum: '$activeRooms' }
+          activeRooms: { $sum: '$activeRooms' },
+          totalBeds: { $sum: '$totalBeds' }
         }
       }
     ]);
 
-    res.json(stats);
+    // Get student counts (filled beds) by gender and category
+    const studentStats = await User.aggregate([
+      {
+        $match: { role: 'student' }
+      },
+      {
+        $group: {
+          _id: {
+            gender: '$gender',
+            category: '$category'
+          },
+          filledBeds: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.gender',
+          categories: {
+            $push: {
+              category: '$_id.category',
+              filledBeds: '$filledBeds'
+            }
+          },
+          filledBeds: { $sum: '$filledBeds' }
+        }
+      }
+    ]);
+
+    // Combine room and student stats
+    const combinedStats = roomStats.map(roomStat => {
+      const studentStat = studentStats.find(s => s._id === roomStat._id);
+      
+      // Merge category stats
+      const mergedCategories = roomStat.categories.map(roomCategory => {
+        const studentCategory = studentStat?.categories.find(s => s.category === roomCategory.category);
+        return {
+          ...roomCategory,
+          filledBeds: studentCategory?.filledBeds || 0,
+          availableBeds: roomCategory.totalBeds - (studentCategory?.filledBeds || 0)
+        };
+      });
+
+      return {
+        gender: roomStat._id,
+        totalRooms: roomStat.totalRooms,
+        activeRooms: roomStat.activeRooms,
+        totalBeds: roomStat.totalBeds,
+        filledBeds: studentStat?.filledBeds || 0,
+        availableBeds: roomStat.totalBeds - (studentStat?.filledBeds || 0),
+        categories: mergedCategories
+      };
+    });
+
+    // Calculate overall totals
+    const overallStats = {
+      totalRooms: combinedStats.reduce((sum, stat) => sum + stat.totalRooms, 0),
+      activeRooms: combinedStats.reduce((sum, stat) => sum + stat.activeRooms, 0),
+      totalBeds: combinedStats.reduce((sum, stat) => sum + stat.totalBeds, 0),
+      filledBeds: combinedStats.reduce((sum, stat) => sum + stat.filledBeds, 0),
+      availableBeds: combinedStats.reduce((sum, stat) => sum + stat.availableBeds, 0)
+    };
+
+    res.json({
+      success: true,
+      data: {
+        overall: overallStats,
+        byGender: combinedStats
+      }
+    });
   } catch (error) {
     next(error);
   }
