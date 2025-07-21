@@ -150,11 +150,18 @@ export const updateSubAdmin = async (req, res, next) => {
     console.log('📝 Updating sub-admin:', id);
     console.log('📝 Update data:', { username, permissions, isActive });
 
-    const subAdmin = await Admin.findOne({ 
+    // Build query based on admin role
+    let query = {
       _id: id,
-      role: 'sub_admin',
-      createdBy: req.admin._id
-    });
+      role: 'sub_admin'
+    };
+
+    // If current admin is not super_admin, they can only update sub-admins they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const subAdmin = await Admin.findOne(query);
 
     if (!subAdmin) {
       throw createError(404, 'Sub-admin not found');
@@ -209,11 +216,18 @@ export const updateWarden = async (req, res, next) => {
     console.log('🏠 Updating warden:', id);
     console.log('🏠 Update data:', { username, isActive, hostelType });
 
-    const warden = await Admin.findOne({ 
+    // Build query based on admin role
+    let query = {
       _id: id,
-      role: 'warden',
-      createdBy: req.admin._id
-    });
+      role: 'warden'
+    };
+
+    // If current admin is not super_admin, they can only update wardens they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const warden = await Admin.findOne(query);
 
     if (!warden) {
       throw createError(404, 'Warden not found');
@@ -261,11 +275,18 @@ export const deleteSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const subAdmin = await Admin.findOneAndDelete({
+    // Build query based on admin role
+    let query = {
       _id: id,
-      role: 'sub_admin',
-      createdBy: req.admin._id
-    });
+      role: 'sub_admin'
+    };
+
+    // If current admin is not super_admin, they can only delete sub-admins they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const subAdmin = await Admin.findOneAndDelete(query);
 
     if (!subAdmin) {
       throw createError(404, 'Sub-admin not found');
@@ -285,11 +306,18 @@ export const deleteWarden = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const warden = await Admin.findOneAndDelete({
+    // Build query based on admin role
+    let query = {
       _id: id,
-      role: 'warden',
-      createdBy: req.admin._id
-    });
+      role: 'warden'
+    };
+
+    // If current admin is not super_admin, they can only delete wardens they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const warden = await Admin.findOneAndDelete(query);
 
     if (!warden) {
       throw createError(404, 'Warden not found');
@@ -466,11 +494,18 @@ export const updatePrincipal = async (req, res, next) => {
     console.log('🎓 Updating principal:', id);
     console.log('🎓 Update data:', { username, course, isActive });
 
-    const principal = await Admin.findOne({ 
+    // Build query based on admin role
+    let query = {
       _id: id,
-      role: 'principal',
-      createdBy: req.admin._id
-    });
+      role: 'principal'
+    };
+
+    // If current admin is not super_admin, they can only update principals they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const principal = await Admin.findOne(query);
 
     if (!principal) {
       throw createError(404, 'Principal not found');
@@ -525,17 +560,22 @@ export const deletePrincipal = async (req, res, next) => {
 
     console.log('🎓 Deleting principal:', id);
 
-    const principal = await Admin.findOne({ 
+    // Build query based on admin role
+    let query = {
       _id: id,
-      role: 'principal',
-      createdBy: req.admin._id
-    });
+      role: 'principal'
+    };
+
+    // If current admin is not super_admin, they can only delete principals they created
+    if (req.admin.role !== 'super_admin') {
+      query.createdBy = req.admin._id;
+    }
+
+    const principal = await Admin.findOneAndDelete(query);
 
     if (!principal) {
       throw createError(404, 'Principal not found');
     }
-
-    await Admin.findByIdAndDelete(id);
 
     console.log('🎓 Principal deleted successfully');
 
