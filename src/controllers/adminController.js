@@ -4,6 +4,7 @@ import Complaint from '../models/Complaint.js';
 import Leave from '../models/Leave.js';
 import Room from '../models/Room.js';
 import SecuritySettings from '../models/SecuritySettings.js';
+import FeeReminder from '../models/FeeReminder.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
@@ -109,6 +110,20 @@ export const addStudent = async (req, res, next) => {
       mainStudentId: savedStudent._id,
     });
     await tempStudent.save();
+
+    // Create fee reminder for the student
+    try {
+      const registrationDate = new Date();
+      await FeeReminder.createForStudent(
+        savedStudent._id,
+        registrationDate,
+        academicYear
+      );
+      console.log('✅ Fee reminder created for student:', savedStudent.rollNumber);
+    } catch (feeError) {
+      console.error('❌ Error creating fee reminder for student:', savedStudent.rollNumber, feeError);
+      // Don't fail the registration if fee reminder creation fails
+    }
 
     // Send email notification to student
     let emailSent = false;
@@ -344,6 +359,20 @@ export const bulkAddStudents = async (req, res, next) => {
         mainStudentId: savedStudent._id,
       });
       await tempStudent.save();
+
+      // Create fee reminder for the student
+      try {
+        const registrationDate = new Date();
+        await FeeReminder.createForStudent(
+          savedStudent._id,
+          registrationDate,
+          String(AcademicYear).trim()
+        );
+        console.log('✅ Fee reminder created for bulk student:', savedStudent.rollNumber);
+      } catch (feeError) {
+        console.error('❌ Error creating fee reminder for bulk student:', savedStudent.rollNumber, feeError);
+        // Don't fail the registration if fee reminder creation fails
+      }
 
       // Send email notification to student
       let emailSent = false;

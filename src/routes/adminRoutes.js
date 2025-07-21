@@ -62,6 +62,21 @@ router.get('/students/search/:rollNumber', searchStudentByRollNumber);
 // Warden routes for viewing students (read-only)
 router.get('/warden/students', wardenAuth, getStudents);
 
+// Admin root route (no authentication required for basic info)
+router.get(['/', ''], (req, res) => {
+  console.log('--- ADMIN ROOT ROUTE ACCESSED ---');
+  console.log('Method:', req.method);
+  console.log('Path:', req.originalUrl);
+  console.log('Headers:', req.headers);
+  console.log('Cookies:', req.cookies);
+  console.log('User:', req.user);
+  res.json({ 
+    message: 'Admin API endpoint',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // All routes below require admin authentication
 router.use(adminAuth);
 

@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const notificationSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ['complaint', 'feedback', 'poll', 'announcement', 'poll_ending', 'menu', 'system', 'leave'],
+    enum: ['complaint', 'feedback', 'poll', 'announcement', 'poll_ending', 'menu', 'system', 'leave', 'fee_update', 'fee_reminder'],
     required: true
   },
   recipient: {

@@ -8,6 +8,8 @@
     "start": "node -r dotenv/config src/index.js",
     "dev": "nodemon -r dotenv/config src/index.js",
     "create-super-admin": "node src/scripts/createSuperAdmin.js",
+    "init-ai-config": "node src/scripts/initAIConfig.js",
+    "update-member-efficiency": "node src/scripts/updateMemberEfficiency.js",
    
     "test-admin-management": "node src/scripts/testAdminManagement.js",
     "test-admin-login": "node src/scripts/testAdminLogin.js",

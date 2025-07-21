@@ -110,6 +110,20 @@ const complaintSchema = new mongoose.Schema({
   isLockedForUpdates: {
     type: Boolean,
     default: false
+  },
+  // AI processing fields
+  aiProcessed: {
+    type: Boolean,
+    default: false
+  },
+  aiProcessingTime: {
+    type: Number,
+    default: null // in milliseconds
+  },
+  aiAssignedMember: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Member',
+    default: null
   }
 }, {
   timestamps: true,

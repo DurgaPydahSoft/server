@@ -2,10 +2,12 @@ import Complaint from '../models/Complaint.js';
 import User from '../models/User.js';
 import Notification from '../models/Notification.js';
 import Member from '../models/Member.js';
+import AIConfig from '../models/AIConfig.js';
 import mongoose from 'mongoose';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import notificationService from '../utils/notificationService.js';
+import aiService from '../utils/aiService.js';
 
 // Student: create complaint
 export const createComplaint = async (req, res, next) => {
@@ -35,15 +37,11 @@ export const createComplaint = async (req, res, next) => {
     }
 
     const complaint = new Complaint({
-      title,
       description,
       category,
       subCategory, 
-      priority,
-      roomNumber,
       student: studentId,
-      imageUrl,
-      status: 'pending'
+      imageUrl
     });
 
     await complaint.save();
@@ -53,7 +51,26 @@ export const createComplaint = async (req, res, next) => {
 
     console.log('📝 Complaint created successfully:', complaint._id);
 
-    // Send notification to all admins
+    // Check if AI is enabled for this category
+    const aiConfig = await AIConfig.getConfig();
+    let isAIEnabled = aiConfig?.isEnabled && aiConfig?.categories[category]?.aiEnabled;
+    
+    // Check if there are any active members available
+    const Member = (await import('../models/Member.js')).default;
+    const activeMembers = await Member.find({ isActive: true });
+    
+    // AI DEBUG LOGGING
+    console.log('AI DEBUG: aiConfig.isEnabled:', aiConfig?.isEnabled);
+    console.log('AI DEBUG: aiConfig.categories:', aiConfig?.categories);
+    console.log('AI DEBUG: Complaint category:', category);
+    console.log('AI DEBUG: isAIEnabled:', isAIEnabled);
+    console.log('AI DEBUG: Active members:', activeMembers.map(m => ({ name: m.name, category: m.category, isActive: m.isActive })));
+    
+    if (activeMembers.length === 0) {
+      isAIEnabled = false;
+    }
+
+    // Send notification to all admins (only once)
     try {
       const admins = await User.find({ 
         role: { $in: ['admin', 'super_admin', 'sub_admin'] } 
@@ -79,11 +96,50 @@ export const createComplaint = async (req, res, next) => {
       // Don't fail the complaint creation if notification fails
     }
 
+    if (isAIEnabled) {
+      console.log('AI DEBUG: Entering AI assignment block for complaint:', complaint._id);
+      // Process AI immediately
+      try {
+        const aiResult = await aiService.processComplaint(complaint._id);
+        console.log('AI DEBUG: aiService.processComplaint result:', aiResult);
+        
+        if (aiResult.success) {
+          // Update the complaint with the AI result
+          complaint.assignedTo = aiResult.data.assignedMember._id;
+          complaint.currentStatus = 'In Progress';
+          complaint.aiProcessed = true;
+          complaint.aiProcessingTime = aiResult.data.processingTime;
+          complaint.aiAssignedMember = aiResult.data.assignedMember._id;
+          
+          // Add to status history
+          complaint.statusHistory.push({
+            status: 'In Progress',
+            timestamp: new Date(),
+            note: `Complaint assigned to ${aiResult.data.assignedMember.name} - ${aiResult.data.assignedMember.category} department`
+          });
+          
+          await complaint.save();
+          console.log('AI DEBUG: Complaint after AI assignment:', complaint);
+        }
+      } catch (aiError) {
+        console.error('AI processing error:', aiError);
+      }
+
+      res.status(201).json({
+        success: true,
+        message: 'Complaint submitted successfully. AI is processing your request...',
+        data: { ...complaint.toObject(), _id: complaint._id, aiProcessing: true }
+      });
+    } else {
+      // Traditional flow without AI
+      console.log('🤖 AI not enabled for category:', category);
+
     res.status(201).json({
       success: true,
       message: 'Complaint submitted successfully',
       data: complaint
     });
+    }
   } catch (error) {
     console.error('📝 Error creating complaint:', error);
     res.status(500).json({
@@ -505,6 +561,16 @@ export const updateComplaintStatus = async (req, res) => {
 
     await complaint.save();
 
+    // Update member efficiency if complaint is resolved
+    if (status === 'Resolved' && complaint.assignedTo) {
+      try {
+        await aiService.updateMemberEfficiency(complaint.assignedTo);
+        console.log('🤖 Updated efficiency for member:', complaint.assignedTo);
+      } catch (efficiencyError) {
+        console.error('🤖 Error updating member efficiency:', efficiencyError);
+      }
+    }
+
     // Populate the assignedTo field for the response
     await complaint.populate('assignedTo', 'name category phone email');
 
@@ -745,3 +811,272 @@ export const getComplaintDetails = async (req, res) => {
     });
   }
 }; 
+
+// AI: Process complaint with AI
+export const processComplaintWithAI = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('🤖 Processing complaint with AI:', id);
+
+    const complaint = await Complaint.findById(id)
+      .populate('student', 'name email');
+      
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    console.log('🤖 Complaint details:', {
+      id: complaint._id,
+      category: complaint.category,
+      subCategory: complaint.subCategory,
+      currentStatus: complaint.currentStatus,
+      assignedTo: complaint.assignedTo,
+      student: complaint.student?.name
+    });
+
+    const result = await aiService.processComplaint(complaint._id);
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        message: 'Complaint processed and assigned successfully',
+        data: result.data
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('🤖 Error processing complaint with AI:', error);
+    res.status(500).json({
+      success: false,
+      message: 'AI processing failed',
+      error: error.message
+    });
+  }
+};
+
+// Admin: Get AI configuration
+export const getAIConfig = async (req, res) => {
+  try {
+    const aiConfig = await AIConfig.getConfig();
+    res.json({
+      success: true,
+      data: aiConfig
+    });
+  } catch (error) {
+    console.error('Error fetching AI config:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch AI configuration'
+    });
+  }
+};
+
+// Admin: Update AI configuration
+export const updateAIConfig = async (req, res) => {
+  try {
+    const { isEnabled, categories, memberEfficiencyThreshold, autoStatusUpdate, maxWorkload } = req.body;
+    
+    const aiConfig = await AIConfig.getConfig();
+    
+    if (isEnabled !== undefined) aiConfig.isEnabled = isEnabled;
+    if (categories) aiConfig.categories = { ...aiConfig.categories, ...categories };
+    if (memberEfficiencyThreshold !== undefined) aiConfig.memberEfficiencyThreshold = memberEfficiencyThreshold;
+    if (autoStatusUpdate !== undefined) aiConfig.autoStatusUpdate = autoStatusUpdate;
+    if (maxWorkload !== undefined) aiConfig.maxWorkload = maxWorkload;
+    
+    await aiConfig.save();
+    
+    res.json({
+      success: true,
+      message: 'AI configuration updated successfully',
+      data: aiConfig
+    });
+  } catch (error) {
+    console.error('Error updating AI config:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update AI configuration'
+    });
+  }
+};
+
+// Admin: Get AI statistics
+export const getAIStats = async (req, res) => {
+  try {
+    const aiStats = await aiService.getAIStats();
+    res.json({
+      success: true,
+      data: aiStats
+    });
+  } catch (error) {
+    console.error('Error fetching AI stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch AI statistics'
+    });
+  }
+};
+
+// Admin: Update member efficiency
+export const updateMemberEfficiency = async (req, res) => {
+  try {
+    const { memberId } = req.params;
+    
+    const result = await aiService.updateMemberEfficiency(memberId);
+    
+    if (result) {
+      res.json({
+        success: true,
+        message: 'Member efficiency updated successfully'
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: 'Failed to update member efficiency'
+      });
+    }
+  } catch (error) {
+    console.error('Error updating member efficiency:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update member efficiency'
+    });
+  }
+};
+
+// Admin: Quick AI setup (enable AI for testing)
+export const quickAISetup = async (req, res) => {
+  try {
+    const aiConfig = await AIConfig.getConfig();
+    const Member = (await import('../models/Member.js')).default;
+    
+    // Check if members exist
+    const existingMembers = await Member.find({ isActive: true });
+    
+    // Create sample members if none exist
+    if (existingMembers.length === 0) {
+      console.log('🤖 No members found, creating sample members...');
+      
+      const sampleMembers = [
+        {
+          name: 'John Maintenance',
+          phone: '9876543210',
+          category: 'Maintenance',
+          isActive: true,
+          efficiencyScore: 85,
+          categoryExpertise: {
+            Maintenance: 90,
+            Plumbing: 85,
+            Electricity: 80,
+            Housekeeping: 75
+          }
+        },
+        {
+          name: 'Sarah Canteen',
+          phone: '9876543211',
+          category: 'Canteen',
+          isActive: true,
+          efficiencyScore: 88,
+          categoryExpertise: {
+            Canteen: 95,
+            Others: 70
+          }
+        },
+        {
+          name: 'Mike Internet',
+          phone: '9876543212',
+          category: 'Internet',
+          isActive: true,
+          efficiencyScore: 92,
+          categoryExpertise: {
+            Internet: 98,
+            Others: 75
+          }
+        },
+        {
+          name: 'Lisa Plumbing',
+          phone: '9876543213',
+          category: 'Plumbing',
+          isActive: true,
+          efficiencyScore: 87,
+          categoryExpertise: {
+            Maintenance: 80,
+            Plumbing: 95,
+            Housekeeping: 70
+          }
+        }
+      ];
+      
+      await Member.insertMany(sampleMembers);
+      console.log('🤖 Created', sampleMembers.length, 'sample members');
+    }
+    
+    // Enable AI globally and for all categories
+    aiConfig.isEnabled = true;
+    aiConfig.categories = {
+      Canteen: { aiEnabled: true, autoAssign: true },
+      Internet: { aiEnabled: true, autoAssign: true },
+      Maintenance: { aiEnabled: true, autoAssign: true },
+      Others: { aiEnabled: true, autoAssign: true }
+    };
+    
+    await aiConfig.save();
+    
+    res.json({
+      success: true,
+      message: `AI enabled successfully for all categories${existingMembers.length === 0 ? ' and created sample members' : ''}`,
+      data: aiConfig
+    });
+  } catch (error) {
+    console.error('Error in quick AI setup:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to enable AI'
+    });
+  }
+};
+
+// Admin: Toggle AI on/off
+export const toggleAI = async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    const aiConfig = await AIConfig.getConfig();
+    
+    aiConfig.isEnabled = enabled;
+    
+    if (enabled) {
+      // Enable all categories when turning on
+      aiConfig.categories = {
+        Canteen: { aiEnabled: true, autoAssign: true },
+        Internet: { aiEnabled: true, autoAssign: true },
+        Maintenance: { aiEnabled: true, autoAssign: true },
+        Others: { aiEnabled: true, autoAssign: true }
+      };
+    }
+    
+    await aiConfig.save();
+    
+    res.json({
+      success: true,
+      message: `AI ${enabled ? 'enabled' : 'disabled'} successfully`,
+      data: aiConfig
+    });
+  } catch (error) {
+    console.error('Error toggling AI:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to toggle AI',
+      error: error.message
+    });
+  }
+};
+
+ 

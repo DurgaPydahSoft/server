@@ -13,6 +13,8 @@ import menuRoutes from './menuRoutes.js';
 import securitySettingsRoutes from './securitySettingsRoutes.js';
 import attendanceRoutes from './attendanceRoutes.js';
 import courseManagementRoutes from './courseManagementRoutes.js';
+import feeReminderRoutes from './feeReminderRoutes.js';
+import feeStructureRoutes from './feeStructureRoutes.js';
 
 const router = express.Router();
 
@@ -31,5 +33,7 @@ router.use('/menu', menuRoutes);
 router.use('/security-settings', securitySettingsRoutes);
 router.use('/attendance', attendanceRoutes);
 router.use('/course-management', courseManagementRoutes);
+router.use('/fee-reminders', feeReminderRoutes);
+router.use('/fee-structure', feeStructureRoutes);
 
 export default router; 

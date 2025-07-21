@@ -25,7 +25,12 @@ import leaveRoutes from './routes/leaveRoutes.js';
 import menuRoutes from './routes/menuRoutes.js';
 import bulkOutingRoutes from './routes/bulkOutingRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
+import foundLostRoutes from './routes/foundLostRoutes.js';
+import feeReminderRoutes from './routes/feeReminderRoutes.js';
+import feeStructureRoutes from './routes/feeStructureRoutes.js';
+import paymentRoutes from './routes/paymentRoutes.js';
 import apiRouter from './routes/index.js';
+import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
 // Import Notification model
 import Notification from './models/Notification.js';
 // Import error handler
@@ -37,6 +42,16 @@ import { errorHandler } from './utils/error.js';
 
 // Create Express app
 const app = express();
+
+// Global request logger
+app.use((req, res, next) => {
+  console.log('--- INCOMING REQUEST ---');
+  console.log('Method:', req.method);
+  console.log('Path:', req.originalUrl);
+  console.log('Headers:', req.headers);
+  next();
+});
+
 const httpServer = createServer(app);
 
 // Socket.io setup
@@ -48,7 +63,9 @@ const io = new Server(httpServer, {
       "http://localhost:5173",
       "https://hms.pydahsoft.in",
       "http://192.168.3.148:3000",
-      "http://192.168.3.186:3000"
+      "http://192.168.3.186:3000",
+      "https://18ae92c8dcb6.ngrok-free.app",
+      "https://*.ngrok-free.app"
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
@@ -65,7 +82,9 @@ app.use(cors({
     "https://hms.pydahsoft.in",
     "http://192.168.232.93:3000",
     "http://192.168.3.186:3000",
-    "http://192.168.3.148:3000"
+    "http://192.168.3.148:3000",
+    "https://18ae92c8dcb6.ngrok-free.app",
+    "https://*.ngrok-free.app"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -109,8 +128,21 @@ Notification.watch().on('change', async (change) => {
   }
 });
 
-// Basic route for testing
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Server is running',
+    cashfreeUrl: 'https://api.cashfree.com/pg',
+    hasCredentials: !!(process.env.CASHFREE_CLIENT_ID && process.env.CASHFREE_CLIENT_SECRET),
+    environment: process.env.NODE_ENV || 'development',
+    jwtSecretConfigured: !!process.env.JWT_SECRET
+  });
+});
+
+// Basic route for testing (no authentication required)
 app.get('/', (req, res) => {
+  console.log('🌐 Root endpoint accessed');
   res.json({ message: 'Welcome to Hostel Management System API' });
 });
 
@@ -249,13 +281,18 @@ app.use('/api/polls', pollRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/bulk-outing', bulkOutingRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/foundlost', foundLostRoutes);
+app.use('/api/fee-reminders', feeReminderRoutes);
+app.use('/api/fee-structures', feeStructureRoutes);
+app.use('/api/payments', paymentRoutes);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static('client/dist'));
   
-  // Handle client-side routing
+  // Handle client-side routing (no authentication required)
   app.get('*', (req, res) => {
+    console.log('🌐 Serving static file for:', req.path);
     res.sendFile(path.resolve(__dirname, '../client/dist/index.html'));
   });
 }
@@ -267,4 +304,8 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  
+  // Start fee reminder processing
+  scheduleReminderProcessing();
+  console.log('💰 Fee reminder processing scheduled');
 }); 

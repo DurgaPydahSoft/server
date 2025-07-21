@@ -454,3 +454,226 @@ export const getStudentRoomBills = async (req, res, next) => {
 export const getDefaultElectricityRate = (req, res) => {
   res.json({ success: true, rate: Room.defaultElectricityRate });
 }; 
+
+// Get room payment statistics
+export const getRoomPaymentStats = async (req, res) => {
+  try {
+    const { month } = req.query;
+    const currentMonth = month || new Date().toISOString().slice(0, 7);
+
+    // Get current month payment status for all rooms
+    const currentMonthStats = await Room.aggregate([
+      {
+        $unwind: '$electricityBills'
+      },
+      {
+        $match: {
+          'electricityBills.month': currentMonth
+        }
+      },
+      {
+        $group: {
+          _id: {
+            roomNumber: '$roomNumber',
+            gender: '$gender',
+            category: '$category'
+          },
+          paymentStatus: { $first: '$electricityBills.paymentStatus' },
+          billAmount: { $first: '$electricityBills.total' },
+          billMonth: { $first: '$electricityBills.month' }
+        }
+      },
+      {
+        $group: {
+          _id: '$paymentStatus',
+          rooms: { $push: '$$ROOT' },
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$billAmount' }
+        }
+      }
+    ]);
+
+    // Get previous month payment status
+    const prevMonth = new Date();
+    prevMonth.setMonth(prevMonth.getMonth() - 1);
+    const previousMonth = prevMonth.toISOString().slice(0, 7);
+
+    const previousMonthStats = await Room.aggregate([
+      {
+        $unwind: '$electricityBills'
+      },
+      {
+        $match: {
+          'electricityBills.month': previousMonth
+        }
+      },
+      {
+        $group: {
+          _id: {
+            roomNumber: '$roomNumber',
+            gender: '$gender',
+            category: '$category'
+          },
+          paymentStatus: { $first: '$electricityBills.paymentStatus' },
+          billAmount: { $first: '$electricityBills.total' },
+          billMonth: { $first: '$electricityBills.month' }
+        }
+      },
+      {
+        $group: {
+          _id: '$paymentStatus',
+          rooms: { $push: '$$ROOT' },
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$billAmount' }
+        }
+      }
+    ]);
+
+    // Get overall payment summary
+    const paymentSummary = await Room.aggregate([
+      {
+        $unwind: '$electricityBills'
+      },
+      {
+        $match: {
+          'electricityBills.month': { $in: [currentMonth, previousMonth] }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            month: '$electricityBills.month',
+            status: '$electricityBills.paymentStatus'
+          },
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$electricityBills.total' }
+        }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        currentMonth: {
+          month: currentMonth,
+          stats: currentMonthStats
+        },
+        previousMonth: {
+          month: previousMonth,
+          stats: previousMonthStats
+        },
+        summary: paymentSummary
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting room payment stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get room payment statistics',
+      error: error.message
+    });
+  }
+};
+
+// Get current month payments
+export const getCurrentMonthPayments = async (req, res) => {
+  try {
+    const currentMonth = new Date().toISOString().slice(0, 7);
+
+    const payments = await Room.aggregate([
+      {
+        $unwind: '$electricityBills'
+      },
+      {
+        $match: {
+          'electricityBills.month': currentMonth
+        }
+      },
+      {
+        $group: {
+          _id: {
+            roomNumber: '$roomNumber',
+            gender: '$gender',
+            category: '$category'
+          },
+          paymentStatus: { $first: '$electricityBills.paymentStatus' },
+          billAmount: { $first: '$electricityBills.total' },
+          billMonth: { $first: '$electricityBills.month' },
+          paidAt: { $first: '$electricityBills.paidAt' }
+        }
+      },
+      {
+        $sort: { '_id.roomNumber': 1 }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        month: currentMonth,
+        payments
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting current month payments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get current month payments',
+      error: error.message
+    });
+  }
+};
+
+// Get previous month payments
+export const getPreviousMonthPayments = async (req, res) => {
+  try {
+    const prevMonth = new Date();
+    prevMonth.setMonth(prevMonth.getMonth() - 1);
+    const previousMonth = prevMonth.toISOString().slice(0, 7);
+
+    const payments = await Room.aggregate([
+      {
+        $unwind: '$electricityBills'
+      },
+      {
+        $match: {
+          'electricityBills.month': previousMonth
+        }
+      },
+      {
+        $group: {
+          _id: {
+            roomNumber: '$roomNumber',
+            gender: '$gender',
+            category: '$category'
+          },
+          paymentStatus: { $first: '$electricityBills.paymentStatus' },
+          billAmount: { $first: '$electricityBills.total' },
+          billMonth: { $first: '$electricityBills.month' },
+          paidAt: { $first: '$electricityBills.paidAt' }
+        }
+      },
+      {
+        $sort: { '_id.roomNumber': 1 }
+      }
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        month: previousMonth,
+        payments
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting previous month payments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get previous month payments',
+      error: error.message
+    });
+  }
+}; 

@@ -82,6 +82,18 @@ const roomSchema = new mongoose.Schema({
         required: true,
         min: 0
       },
+      paymentStatus: {
+        type: String,
+        enum: ['unpaid', 'paid', 'pending'],
+        default: 'unpaid'
+      },
+      paymentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Payment'
+      },
+      paidAt: {
+        type: Date
+      },
       createdAt: {
         type: Date,
         default: Date.now

@@ -158,13 +158,13 @@ export const takeAttendance = async (req, res, next) => {
         for (const att of attendanceWithStudents) {
           const student = att.student;
           const studentName = student?.name || 'Student';
-          
+        
           await notificationService.sendToUser(student._id, {
-            type: 'system',
+          type: 'system',
             message: `📊 your attendance has been marked for ${normalizedDate.toDateString()}`,
-            sender: markedBy,
-            onModel: 'Attendance'
-          });
+          sender: markedBy,
+          onModel: 'Attendance'
+        });
         }
 
         console.log(`🔔 Attendance notifications sent to ${attendanceWithStudents.length} students`);

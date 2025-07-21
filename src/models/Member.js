@@ -33,6 +33,37 @@ const memberSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  // AI efficiency tracking fields
+  efficiencyScore: {
+    type: Number,
+    default: 0,
+    min: 0,
+    max: 100
+  },
+  resolvedComplaints: {
+    type: Number,
+    default: 0
+  },
+  averageResolutionTime: {
+    type: Number,
+    default: 0 // in hours
+  },
+  categoryExpertise: {
+    Canteen: { type: Number, default: 0, min: 0, max: 100 },
+    Internet: { type: Number, default: 0, min: 0, max: 100 },
+    Housekeeping: { type: Number, default: 0, min: 0, max: 100 },
+    Plumbing: { type: Number, default: 0, min: 0, max: 100 },
+    Electricity: { type: Number, default: 0, min: 0, max: 100 },
+    Others: { type: Number, default: 0, min: 0, max: 100 }
+  },
+  lastActive: {
+    type: Date,
+    default: Date.now
+  },
+  currentWorkload: {
+    type: Number,
+    default: 0 // active complaints count
+  },
   createdAt: {
     type: Date,
     default: Date.now
@@ -62,6 +93,8 @@ const memberSchema = new mongoose.Schema({
 
 // Add index for faster queries
 memberSchema.index({ category: 1, name: 1 });
+memberSchema.index({ efficiencyScore: -1 }); // For AI selection
+memberSchema.index({ currentWorkload: 1 }); // For workload consideration
 
 // Ensure at least 2 members per category
 memberSchema.pre('findOneAndDelete', async function(next) {
@@ -90,6 +123,58 @@ memberSchema.pre('save', function(next) {
   next();
 });
 
+// Method to update efficiency metrics
+memberSchema.methods.updateEfficiencyMetrics = async function() {
+  const Complaint = mongoose.model('Complaint');
+  
+  // Get resolved complaints for this member
+  const resolvedComplaints = await Complaint.find({
+    assignedTo: this._id,
+    currentStatus: 'Closed'
+  }).sort({ createdAt: -1 }).limit(50); // Last 50 complaints
+  
+  if (resolvedComplaints.length === 0) {
+    this.efficiencyScore = 0;
+    this.resolvedComplaints = 0;
+    this.averageResolutionTime = 0;
+    return this.save();
+  }
+  
+  // Calculate average resolution time
+  let totalTime = 0;
+  resolvedComplaints.forEach(complaint => {
+    const createdAt = new Date(complaint.createdAt);
+    const resolvedAt = new Date(complaint.updatedAt);
+    const resolutionTime = (resolvedAt - createdAt) / (1000 * 60 * 60); // hours
+    totalTime += resolutionTime;
+  });
+  
+  this.averageResolutionTime = totalTime / resolvedComplaints.length;
+  this.resolvedComplaints = resolvedComplaints.length;
+  
+  // Calculate efficiency score based on resolution time and success rate
+  // Lower resolution time = higher score
+  const timeScore = Math.max(0, 100 - (this.averageResolutionTime * 2)); // 50 hours = 0 score
+  this.efficiencyScore = Math.min(100, timeScore);
+  
+  return this.save();
+};
+
+// Method to update current workload
+memberSchema.methods.updateWorkload = async function() {
+  const Complaint = mongoose.model('Complaint');
+  
+  const activeComplaints = await Complaint.countDocuments({
+    assignedTo: this._id,
+    currentStatus: { $in: ['Pending', 'In Progress'] }
+  });
+  
+  this.currentWorkload = activeComplaints;
+  this.lastActive = new Date();
+  
+  return this.save();
+};
+
 const Member = mongoose.model('Member', memberSchema);
 
-export default Member; 1
+export default Member;
