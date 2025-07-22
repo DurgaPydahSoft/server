@@ -61,6 +61,20 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid roll number! Must be uppercase alphanumeric.`
     }
   },
+  hostelId: {
+    type: String,
+    unique: true,
+    sparse: true, // Allow null/undefined values for non-students
+    validate: {
+      validator: function(v) {
+        if (this.role !== 'student') return true;
+        if (!v) return false;
+        // Validate hostel ID format: BH/GH + YY + 3 digits (e.g., BH25001, GH25002)
+        return /^(BH|GH)\d{5}$/.test(v);
+      },
+      message: props => `${props.value} is not a valid hostel ID format! Must be BH/GH + YY + 3 digits (e.g., BH25001)`
+    }
+  },
   password: {
     type: String,
     required: true
@@ -248,6 +262,7 @@ userSchema.statics.generateRandomPassword = function() {
 
 // Create indexes
 userSchema.index({ rollNumber: 1 });
+userSchema.index({ hostelId: 1 }); // Add index for hostelId
 userSchema.index({ role: 1 });
 userSchema.index({ course: 1, branch: 1 });
 

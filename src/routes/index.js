@@ -15,6 +15,7 @@ import attendanceRoutes from './attendanceRoutes.js';
 import courseManagementRoutes from './courseManagementRoutes.js';
 import feeReminderRoutes from './feeReminderRoutes.js';
 import feeStructureRoutes from './feeStructureRoutes.js';
+import featureToggleRoutes from './featureToggleRoutes.js';
 
 const router = express.Router();
 
@@ -35,5 +36,6 @@ router.use('/attendance', attendanceRoutes);
 router.use('/course-management', courseManagementRoutes);
 router.use('/fee-reminders', feeReminderRoutes);
 router.use('/fee-structure', feeStructureRoutes);
+router.use('/feature-toggles', featureToggleRoutes);
 
 export default router; 

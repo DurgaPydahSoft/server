@@ -12,6 +12,39 @@ import xlsx from 'xlsx';
 import Branch from '../models/Branch.js';
 import Course from '../models/Course.js';
 
+// Function to generate hostel ID (imported from studentController)
+const generateHostelId = async (gender) => {
+  console.log('Generating hostel ID for gender:', gender);
+  
+  const currentYear = new Date().getFullYear().toString().slice(-2); // Get last 2 digits of year
+  const prefix = gender === 'Male' ? 'BH' : 'GH';
+  
+  console.log('Current year:', currentYear, 'Prefix:', prefix);
+  
+  // Find the highest sequence number for the current year and gender
+  const pattern = new RegExp(`^${prefix}${currentYear}\\d{3}$`);
+  console.log('Search pattern:', pattern);
+  
+  const lastStudent = await User.findOne({ 
+    hostelId: pattern 
+  }).sort({ hostelId: -1 });
+  
+  console.log('Last student found:', lastStudent ? lastStudent.hostelId : 'None');
+  
+  let sequence = 1;
+  if (lastStudent && lastStudent.hostelId) {
+    const lastSequence = parseInt(lastStudent.hostelId.slice(-3));
+    sequence = lastSequence + 1;
+    console.log('Last sequence:', lastSequence, 'New sequence:', sequence);
+  }
+  
+  const hostelId = `${prefix}${currentYear}${sequence.toString().padStart(3, '0')}`;
+  console.log('Generated hostel ID:', hostelId);
+  
+  // Format: BH25001, GH25002, etc.
+  return hostelId;
+};
+
 // Add a new student
 export const addStudent = async (req, res, next) => {
   try {
@@ -54,6 +87,10 @@ export const addStudent = async (req, res, next) => {
       throw createError(400, 'Room is full. Cannot register more students.');
     }
 
+    // Generate hostel ID
+    const hostelId = await generateHostelId(gender || 'Male');
+    console.log('Generated hostel ID:', hostelId);
+
     // Generate random password
     const generatedPassword = User.generateRandomPassword();
 
@@ -91,6 +128,7 @@ export const addStudent = async (req, res, next) => {
       batch,
       academicYear,
       email,
+      hostelId,
       isPasswordChanged: false,
       studentPhoto: studentPhotoUrl,
       guardianPhoto1: guardianPhoto1Url,
@@ -328,6 +366,10 @@ export const bulkAddStudents = async (req, res, next) => {
 
       const generatedPassword = User.generateRandomPassword();
 
+      // Generate hostel ID for bulk students
+      const hostelId = await generateHostelId(String(Gender).trim() || 'Male');
+      console.log('Generated hostel ID for bulk student:', hostelId);
+
       const newStudent = new User({
         name: String(Name).trim(),
         rollNumber: rollNumberUpper,
@@ -344,6 +386,7 @@ export const bulkAddStudents = async (req, res, next) => {
         batch: String(Batch).trim(),
         academicYear: String(AcademicYear).trim(),
         email: String(Email).trim(),
+        hostelId,
         isPasswordChanged: false,
       });
 
@@ -773,22 +816,31 @@ export const getBranchesByCourse = async (req, res, next) => {
 // Get temporary students summary for admin dashboard
 export const getTempStudentsSummary = async (req, res, next) => {
   try {
-    // Get all students who haven't changed their password
+    // Get all students who haven't changed their password with their hostel IDs
     const studentsWithTempRecords = await User.find({ 
       role: 'student',
       isPasswordChanged: false 
-    }).select('_id');
+    }).select('_id hostelId');
 
     // Get temp student records only for students who haven't changed their password
     const tempStudents = await TempStudent.find({
       mainStudentId: { $in: studentsWithTempRecords.map(s => s._id) }
     })
-    .select('name rollNumber studentPhone generatedPassword createdAt')
+    .select('name rollNumber studentPhone generatedPassword createdAt mainStudentId')
     .sort({ createdAt: -1 });
+
+    // Combine temp student data with hostel IDs from main student records
+    const tempStudentsWithHostelId = tempStudents.map(tempStudent => {
+      const mainStudent = studentsWithTempRecords.find(s => s._id.toString() === tempStudent.mainStudentId.toString());
+      return {
+        ...tempStudent.toObject(),
+        hostelId: mainStudent ? mainStudent.hostelId : null
+      };
+    });
 
     res.status(200).json({
       success: true,
-      data: tempStudents,
+      data: tempStudentsWithHostelId,
     });
   } catch (error) {
     console.error('Error fetching temporary students summary:', error);

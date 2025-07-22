@@ -43,14 +43,7 @@ import { errorHandler } from './utils/error.js';
 // Create Express app
 const app = express();
 
-// Global request logger
-app.use((req, res, next) => {
-  console.log('--- INCOMING REQUEST ---');
-  console.log('Method:', req.method);
-  console.log('Path:', req.originalUrl);
-  console.log('Headers:', req.headers);
-  next();
-});
+
 
 const httpServer = createServer(app);
 

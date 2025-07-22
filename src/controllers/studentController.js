@@ -3,6 +3,39 @@ import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import XLSX from 'xlsx';
 import fs from 'fs';
 
+// Function to generate hostel ID
+const generateHostelId = async (gender) => {
+  console.log('Generating hostel ID for gender:', gender);
+  
+  const currentYear = new Date().getFullYear().toString().slice(-2); // Get last 2 digits of year
+  const prefix = gender === 'Male' ? 'BH' : 'GH';
+  
+  console.log('Current year:', currentYear, 'Prefix:', prefix);
+  
+  // Find the highest sequence number for the current year and gender
+  const pattern = new RegExp(`^${prefix}${currentYear}\\d{3}$`);
+  console.log('Search pattern:', pattern);
+  
+  const lastStudent = await User.findOne({ 
+    hostelId: pattern 
+  }).sort({ hostelId: -1 });
+  
+  console.log('Last student found:', lastStudent ? lastStudent.hostelId : 'None');
+  
+  let sequence = 1;
+  if (lastStudent && lastStudent.hostelId) {
+    const lastSequence = parseInt(lastStudent.hostelId.slice(-3));
+    sequence = lastSequence + 1;
+    console.log('Last sequence:', lastSequence, 'New sequence:', sequence);
+  }
+  
+  const hostelId = `${prefix}${currentYear}${sequence.toString().padStart(3, '0')}`;
+  console.log('Generated hostel ID:', hostelId);
+  
+  // Format: BH25001, GH25002, etc.
+  return hostelId;
+};
+
 // Upload students via Excel
 export const uploadStudents = async (req, res) => {
   try {
@@ -11,24 +44,34 @@ export const uploadStudents = async (req, res) => {
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const data = XLSX.utils.sheet_to_json(sheet);
     let added = 0, skipped = 0;
+    
     for (const row of data) {
       const {
-        Name, RollNumber, Degree, Branch, Year, RoomNumber, StudentPhone, ParentPhone
+        Name, RollNumber, Degree, Branch, Year, RoomNumber, StudentPhone, ParentPhone, Gender
       } = row;
+      
       if (!Name || !RollNumber) { skipped++; continue; }
+      
       const exists = await User.findOne({ rollNumber: RollNumber });
       if (exists) { skipped++; continue; }
+      
       // Look up course and branch ObjectIds
       const CourseModel = (await import('../models/Course.js')).default;
       const BranchModel = (await import('../models/Branch.js')).default;
       const courseDoc = await CourseModel.findOne({ name: Degree });
       const branchDoc = await BranchModel.findOne({ name: Branch });
+      
+      // Generate hostel ID
+      const hostelId = await generateHostelId(Gender || 'Male'); // Default to Male if gender not specified
+      
       await User.create({
         name: Name,
         rollNumber: RollNumber,
+        hostelId: hostelId,
         course: courseDoc ? courseDoc._id : undefined,
         branch: branchDoc ? branchDoc._id : undefined,
         year: Year,
+        gender: Gender || 'Male',
         roomNumber: RoomNumber,
         studentPhone: StudentPhone,
         parentPhone: ParentPhone,
@@ -48,17 +91,61 @@ export const uploadStudents = async (req, res) => {
 // Manual add student
 export const addStudent = async (req, res) => {
   try {
-    const { name, rollNumber, degree, branch, year, roomNumber, studentPhone, parentPhone } = req.body;
+    console.log('Received request body:', req.body);
+    
+    const { 
+      name, 
+      rollNumber, 
+      course, 
+      branch, 
+      year, 
+      roomNumber, 
+      studentPhone, 
+      parentPhone, 
+      gender,
+      category,
+      batch,
+      academicYear,
+      email
+    } = req.body;
+    
+    console.log('Extracted fields:', { name, rollNumber, course, branch, year, gender });
+    
     if (await User.findOne({ rollNumber })) {
       return res.status(400).json({ message: 'Student already exists' });
     }
-    const student = await User.create({
-      name, rollNumber, degree, branch, year, roomNumber, studentPhone, parentPhone,
-      password: 'changeme', role: 'student', isRegistered: false
-    });
+    
+    const studentData = {
+      name, 
+      rollNumber, 
+      course, 
+      branch, 
+      year, 
+      roomNumber, 
+      studentPhone, 
+      parentPhone,
+      gender: gender || 'Male',
+      category: category || 'A',
+      batch: batch || '',
+      academicYear: academicYear || '',
+      email: email || '',
+      password: 'changeme', 
+      role: 'student', 
+      isRegistered: false,
+      hostelStatus: 'Active',
+      graduationStatus: 'Enrolled'
+    };
+    
+    console.log('Creating student with data:', studentData);
+    
+    const student = await User.create(studentData);
+    
+    console.log('Created student:', student);
+    
     res.json(student);
   } catch (error) {
-    res.status(500).json({ message: 'Error adding student', error });
+    console.error('Error adding student:', error);
+    res.status(500).json({ message: 'Error adding student', error: error.message });
   }
 };
 
@@ -79,6 +166,7 @@ export const editStudent = async (req, res) => {
     const update = req.body;
     console.log('Update payload:', update); // Debug log
     delete update.password;
+    delete update.hostelId; // Prevent hostel ID from being modified
     // Validate hostelStatus if present
     if (update.hostelStatus && !['Active', 'Inactive'].includes(update.hostelStatus)) {
       return res.status(400).json({ message: 'Invalid hostel status' });
