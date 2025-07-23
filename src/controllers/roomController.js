@@ -677,3 +677,45 @@ export const getPreviousMonthPayments = async (req, res) => {
     });
   }
 }; 
+
+// Get rooms with bed availability for student registration
+export const getRoomsWithBedAvailability = async (req, res, next) => {
+  try {
+    const { gender, category } = req.query;
+    const query = {};
+
+    if (gender) query.gender = gender;
+    if (category) query.category = category;
+
+    const rooms = await Room.find(query).sort({ roomNumber: 1 });
+    
+    // Get student count for each room
+    const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
+      const studentCount = await User.countDocuments({
+        gender: room.gender,
+        category: room.category,
+        roomNumber: room.roomNumber,
+        role: 'student'
+      });
+      
+      const roomObject = room.toObject();
+      const availableBeds = room.bedCount - studentCount;
+      
+      return {
+        ...roomObject,
+        studentCount,
+        availableBeds,
+        occupancyRate: Math.round((studentCount / room.bedCount) * 100)
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        rooms: roomsWithDetails
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

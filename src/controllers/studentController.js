@@ -64,6 +64,10 @@ export const uploadStudents = async (req, res) => {
       // Generate hostel ID
       const hostelId = await generateHostelId(Gender || 'Male'); // Default to Male if gender not specified
       
+      // Handle email properly - only set if provided and not empty
+      const emailValue = row.Email || row.email || '';
+      const finalEmail = emailValue === '' ? undefined : emailValue;
+
       await User.create({
         name: Name,
         rollNumber: RollNumber,
@@ -75,6 +79,7 @@ export const uploadStudents = async (req, res) => {
         roomNumber: RoomNumber,
         studentPhone: StudentPhone,
         parentPhone: ParentPhone,
+        email: finalEmail,
         password: 'changeme',
         role: 'student',
         isRegistered: false
@@ -115,6 +120,13 @@ export const addStudent = async (req, res) => {
       return res.status(400).json({ message: 'Student already exists' });
     }
     
+    // Generate hostel ID
+    const hostelId = await generateHostelId(gender || 'Male');
+    
+    // Handle email properly - only set if provided and not empty
+    const emailValue = email ? String(email).trim() : '';
+    const finalEmail = emailValue === '' ? undefined : emailValue;
+
     const studentData = {
       name, 
       rollNumber, 
@@ -128,7 +140,8 @@ export const addStudent = async (req, res) => {
       category: category || 'A',
       batch: batch || '',
       academicYear: academicYear || '',
-      email: email || '',
+      email: finalEmail,
+      hostelId,
       password: 'changeme', 
       role: 'student', 
       isRegistered: false,

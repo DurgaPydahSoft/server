@@ -437,7 +437,7 @@ export const listAllComplaints = async (req, res) => {
     // Execute query with pagination
     const [complaints, total] = await Promise.all([
       Complaint.find(query)
-        .populate('student', 'name rollNumber course branch gender category roomNumber')
+        .populate('student', 'name rollNumber course branch gender category roomNumber studentPhone')
         .populate({
           path: 'assignedTo',
           select: 'name category phone email',
@@ -774,7 +774,7 @@ export const getComplaintDetails = async (req, res) => {
     }
 
     const complaint = await Complaint.findById(id)
-      .populate('student', 'name rollNumber')
+      .populate('student', 'name rollNumber studentPhone')
       .populate({
         path: 'assignedTo',
         select: 'name category phone email',

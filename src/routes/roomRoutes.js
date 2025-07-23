@@ -14,7 +14,8 @@ import {
   getElectricityBills,
   getStudentRoomBills,
   getDefaultElectricityRate,
-  addBulkElectricityBills
+  addBulkElectricityBills,
+  getRoomsWithBedAvailability
 } from '../controllers/roomController.js';
 
 const router = express.Router();
@@ -88,6 +89,9 @@ router.get('/', async (req, res, next) => {
 
 // Get room statistics - admin only
 router.get('/stats', adminAuth, getRoomStats);
+
+// Get rooms with bed availability for student registration - admin only
+router.get('/bed-availability', adminAuth, getRoomsWithBedAvailability);
 
 // Get students in a specific room - admin only
 router.get('/:roomId/students', adminAuth, getRoomStudents);

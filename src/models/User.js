@@ -141,9 +141,10 @@ const userSchema = new mongoose.Schema({
   },
   studentPhone: {
     type: String,
-    required: function() { return this.role === 'student'; },
+    required: false, // Make student phone optional
     validate: {
       validator: function(v) {
+        if (!v) return true; // Allow empty/null values
         return /^[0-9]{10}$/.test(v);
       },
       message: props => `${props.value} is not a valid phone number!`
@@ -161,12 +162,13 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: function() { return this.role === 'student'; },
+    required: false, // Make email optional
     trim: true,
     lowercase: true,
     validate: {
       validator: function(v) {
         if (this.role !== 'student') return true;
+        if (!v) return true; // Allow empty/null values
         // Basic email validation regex
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
       },

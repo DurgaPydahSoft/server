@@ -49,13 +49,12 @@ const initialBranches = {
     { name: 'Artificial Intelligence & Machine Learning', code: 'AI_ML' }
   ],
   DIPLOMA: [
-    { name: 'Diploma in AI & ML', code: 'DAIML' },
-    { name: 'Diploma in Computer Science', code: 'DCSE' },
+    { name: 'Diploma in Computer Engineering', code: 'DCME' },
     { name: 'Diploma in Electronics', code: 'DECE' },
-    { name: 'Diploma in Mechanical Engineering', code: 'DME' },
-    { name: 'Diploma in Agriculture', code: 'DAP' },
+    { name: 'Diploma in Mechanical Engineering', code: 'DMECH' },
     { name: 'Diploma in Fisheries', code: 'DFISHERIES' },
-    { name: 'Diploma in Animal Husbandry', code: 'DANIMAL' }
+    { name: 'Diploma in Animal Husbandry', code: 'DAH' },
+    { name: 'Diploma in AI & ML', code: 'DAIML' }
   ],
   PHARMACY: [
     { name: 'B-Pharmacy', code: 'BPHARM' },

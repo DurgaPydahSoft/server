@@ -111,6 +111,10 @@ export const addStudent = async (req, res, next) => {
       }
     }
 
+    // Handle email properly - only set if provided and not empty
+    const emailValue = email ? String(email).trim() : '';
+    const finalEmail = emailValue === '' ? undefined : emailValue;
+
     // Create new student
     const student = new User({
       name,
@@ -127,7 +131,7 @@ export const addStudent = async (req, res, next) => {
       parentPhone,
       batch,
       academicYear,
-      email,
+      email: finalEmail,
       hostelId,
       isPasswordChanged: false,
       studentPhoto: studentPhotoUrl,
@@ -142,7 +146,7 @@ export const addStudent = async (req, res, next) => {
       name: savedStudent.name,
       rollNumber: savedStudent.rollNumber,
       studentPhone: savedStudent.studentPhone,
-      email: savedStudent.email,
+      email: savedStudent.email || '', // Handle undefined email
       generatedPassword: generatedPassword,
       isFirstLogin: true,
       mainStudentId: savedStudent._id,
@@ -167,21 +171,21 @@ export const addStudent = async (req, res, next) => {
     let emailSent = false;
     let emailError = null;
     
-    if (email) {
+    if (finalEmail) {
       try {
         const loginUrl = `${req.protocol}://${req.get('host')}/login`;
         await sendStudentRegistrationEmail(
-          email,
+          finalEmail,
           name,
           rollNumber.toUpperCase(),
           generatedPassword,
           loginUrl
         );
         emailSent = true;
-        console.log('📧 Registration email sent successfully to:', email);
+        console.log('📧 Registration email sent successfully to:', finalEmail);
       } catch (emailErr) {
         emailError = emailErr.message;
-        console.error('📧 Failed to send registration email to:', email, emailErr);
+        console.error('📧 Failed to send registration email to:', finalEmail, emailErr);
         // Don't fail the registration if email fails
       }
     }
@@ -236,6 +240,153 @@ const validateBatch = async (batch, courseId) => {
   return duration >= 3 && duration <= 4;
 };
 
+// Helper to get course duration based on course name
+function getCourseDuration(courseName) {
+  const courseNameUpper = courseName.toUpperCase();
+  if (courseNameUpper.includes('B.TECH') || courseNameUpper.includes('PHARMACY')) {
+    return 4;
+  } else if (courseNameUpper.includes('DIPLOMA') || courseNameUpper.includes('DEGREE')) {
+    return 3;
+  }
+  return 4; // Default to 4 years
+}
+
+// Helper to map short branch names to full names based on seeded data
+function getBranchNameMapping(courseName, branchName) {
+  // Normalize inputs for case-insensitive matching
+  const courseNameUpper = courseName.toUpperCase();
+  const branchNameUpper = branchName.toUpperCase();
+  
+  // B.Tech branches
+  if (courseNameUpper.includes('B.TECH') || courseNameUpper.includes('BTECH')) {
+    switch (branchNameUpper) {
+      case 'CSE': return 'Computer Science Engineering';
+      case 'ECE': return 'Electronics & Communication Engineering';
+      case 'EEE': return 'Electrical & Electronics Engineering';
+      case 'MECH': return 'Mechanical Engineering';
+      case 'CIVIL': return 'Civil Engineering';
+      case 'AI': return 'Artificial Intelligence';
+      case 'AI & ML': return 'Artificial Intelligence & Machine Learning';
+      case 'AI&ML': return 'Artificial Intelligence & Machine Learning';
+      default: return branchName; // Return original if no mapping found
+    }
+  }
+  
+  // Diploma branches
+  if (courseNameUpper.includes('DIPLOMA')) {
+    switch (branchNameUpper) {
+      case 'DCME': return 'Diploma in Computer Engineering';
+      case 'DECE': return 'Diploma in Electronics';
+      case 'DMECH': return 'Diploma in Mechanical Engineering';
+      case 'DFISHERIES': return 'Diploma in Fisheries';
+      case 'DAH': return 'Diploma in Animal Husbandry';
+      case 'DAIML': return 'Diploma in AI & ML';
+      default: return branchName; // Return original if no mapping found
+    }
+  }
+  
+  // Pharmacy branches
+  if (courseNameUpper.includes('PHARMACY')) {
+    switch (branchNameUpper) {
+      case 'B-PHARMACY': return 'B-Pharmacy';
+      case 'BPHARM': return 'B-Pharmacy';
+      case 'PHARM D': return 'Pharm D';
+      case 'PHARMD': return 'Pharm D';
+      case 'PHARM(PB) D': return 'Pharm(PB) D';
+      case 'PHARMPBD': return 'Pharm(PB) D';
+      case 'PHARMACEUTICAL ANALYSIS': return 'Pharmaceutical Analysis';
+      case 'PHARMANALYSIS': return 'Pharmaceutical Analysis';
+      case 'PHARMACEUTICS': return 'Pharmaceutics';
+      case 'PHARMA QUALITY ASSURANCE': return 'Pharma Quality Assurance';
+      case 'PHARMQA': return 'Pharma Quality Assurance';
+      default: return branchName; // Return original if no mapping found
+    }
+  }
+  
+  // Degree branches
+  if (courseNameUpper.includes('DEGREE')) {
+    switch (branchNameUpper) {
+      case 'AGRICULTURE': return 'Agriculture';
+      case 'HORTICULTURE': return 'Horticulture';
+      case 'FOOD TECHNOLOGY': return 'Food Technology';
+      case 'FOODTECH': return 'Food Technology';
+      case 'FISHERIES': return 'Fisheries';
+      case 'FOOD SCIENCE & NUTRITION': return 'Food Science & Nutrition';
+      case 'FOODSCIENCE': return 'Food Science & Nutrition';
+      default: return branchName; // Return original if no mapping found
+    }
+  }
+  
+  return branchName; // Return original if no mapping found
+}
+
+// Helper to normalize gender with case-insensitive handling
+function normalizeGender(gender) {
+  if (!gender) return null;
+  
+  const genderUpper = gender.toUpperCase();
+  
+  // Handle various gender formats
+  if (genderUpper === 'MALE' || genderUpper === 'M' || genderUpper === 'BOY') {
+    return 'Male';
+  }
+  if (genderUpper === 'FEMALE' || genderUpper === 'F' || genderUpper === 'GIRL') {
+    return 'Female';
+  }
+  
+  return null; // Invalid gender
+}
+
+// Helper to normalize category with case-insensitive handling
+function normalizeCategory(category) {
+  if (!category) return null;
+  
+  const categoryUpper = category.toUpperCase();
+  
+  // Handle various category formats
+  switch (categoryUpper) {
+    case 'A+':
+    case 'A PLUS':
+    case 'A_PLUS':
+      return 'A+';
+    case 'A':
+      return 'A';
+    case 'B+':
+    case 'B PLUS':
+    case 'B_PLUS':
+      return 'B+';
+    case 'B':
+      return 'B';
+    case 'C':
+      return 'C';
+    default:
+      return null; // Invalid category
+  }
+}
+
+// Helper to normalize course names for database lookup
+function normalizeCourseName(courseName) {
+  if (!courseName) return courseName;
+  
+  const courseUpper = courseName.toUpperCase();
+  
+  // Map common variations to database names
+  if (courseUpper === 'BTECH' || courseUpper === 'B.TECH' || courseUpper === 'B TECH') {
+    return 'B.Tech';
+  }
+  if (courseUpper === 'DIPLOMA') {
+    return 'Diploma';
+  }
+  if (courseUpper === 'PHARMACY') {
+    return 'Pharmacy';
+  }
+  if (courseUpper === 'DEGREE') {
+    return 'Degree';
+  }
+  
+  return courseName; // Return original if no mapping found
+}
+
 // Helper to extract end year from batch or academic year
 function getEndYear(str) {
   if (!str) return null;
@@ -277,7 +428,10 @@ export const previewBulkUpload = async (req, res, next) => {
     console.log('Available columns:', Object.keys(jsonData[0]));
     console.log('Total rows:', jsonData.length);
 
-    // For now, just return all data as-is without validation
+    // Import models for validation
+    const CourseModel = (await import('../models/Course.js')).default;
+    const BranchModel = (await import('../models/Branch.js')).default;
+
     for (let i = 0; i < jsonData.length; i++) {
       const row = jsonData[i];
       const rowIndex = i + 2;
@@ -289,8 +443,169 @@ export const previewBulkUpload = async (req, res, next) => {
         columnNames: Object.keys(row)
       });
 
-      // For now, treat all rows as valid to see the data
-      results.validStudents.push(row);
+      // Flexible column mapping - handle different possible column names
+      const Name = row.Name || row.name || row['Student Name'] || row['STUDENT NAME'] || row['Full Name'] || row['FULL NAME'];
+      const RollNumber = row.RollNumber || row.rollNumber || row['Roll Number'] || row['ROLL NUMBER'] || row['Roll No'] || row['ROLL NO'];
+      const Gender = row.Gender || row.gender || row['Student Gender'] || row['STUDENT GENDER'];
+      const Course = row.Course || row.course || row['Program'] || row['PROGRAM'] || row['Degree'] || row['DEGREE'];
+      const Branch = row.Branch || row.branch || row['Specialization'] || row['SPECIALIZATION'] || row['Department'] || row['DEPARTMENT'];
+      const Year = row.Year || row.year || row['Year of Study'] || row['YEAR OF STUDY'] || row['Current Year'] || row['CURRENT YEAR'];
+      const Category = row.Category || row.category || row['Student Category'] || row['STUDENT CATEGORY'] || row['Fee Category'] || row['FEE CATEGORY'];
+      const RoomNumber = row.RoomNumber || row.roomNumber || row['Room Number'] || row['ROOM NUMBER'] || row['Room No'] || row['ROOM NO'];
+      const StudentPhone = row.StudentPhone || row.studentPhone || row['Student Phone'] || row['STUDENT PHONE'] || row['Phone'] || row['PHONE'];
+      const ParentPhone = row.ParentPhone || row.parentPhone || row['Parent Phone'] || row['PARENT PHONE'] || row['Guardian Phone'] || row['GUARDIAN PHONE'];
+      const Batch = row.Batch || row.batch || row['Batch Year'] || row['BATCH YEAR'] || row['Admission Batch'] || row['ADMISSION BATCH'];
+      const AcademicYear = row.AcademicYear || row.academicYear || row['Academic Year'] || row['ACADEMIC YEAR'] || row['Current Academic Year'] || row['CURRENT ACADEMIC YEAR'];
+      const Email = row.Email || row.email || row['Email'] || row['EMAIL'];
+
+      const errors = {};
+
+      // Validate required fields
+      if (!Name) errors.Name = 'Name is required.';
+      if (!RollNumber) errors.RollNumber = 'Roll number is required.';
+      if (!ParentPhone) errors.ParentPhone = 'Parent phone is required.';
+      if (!RoomNumber) errors.RoomNumber = 'Room number is required.';
+      if (!Batch) errors.Batch = 'Batch is required.';
+      if (!AcademicYear) errors.AcademicYear = 'Academic year is required.';
+
+      // Validate gender with case-insensitive handling
+      if (!Gender) {
+        errors.Gender = 'Gender is required.';
+      } else {
+        const normalizedGender = normalizeGender(String(Gender).trim());
+        if (!normalizedGender) {
+          errors.Gender = `Invalid gender "${String(Gender).trim()}". Must be Male/Female/M/F/Boy/Girl.`;
+        }
+      }
+
+      // Validate course with case-insensitive handling
+      if (!Course) {
+        errors.Course = 'Course is required.';
+      } else {
+        const normalizedCourseName = normalizeCourseName(String(Course).trim());
+        const courseDoc = await CourseModel.findOne({ 
+          name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
+          isActive: true 
+        });
+        
+        if (!courseDoc) {
+          errors.Course = `Course "${String(Course).trim()}" (normalized to "${normalizedCourseName}") not found in the database.`;
+        }
+      }
+
+      // Validate branch with case-insensitive handling
+      if (!Branch) {
+        errors.Branch = 'Branch is required.';
+      } else if (Course) {
+        const normalizedCourseName = normalizeCourseName(String(Course).trim());
+        const branchNameMapping = getBranchNameMapping(String(Course).trim(), String(Branch).trim());
+        
+        const courseDoc = await CourseModel.findOne({ 
+          name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
+          isActive: true 
+        });
+        
+        if (courseDoc) {
+          const branchDoc = await BranchModel.findOne({ 
+            name: { $regex: new RegExp(`^${branchNameMapping}$`, 'i') },
+            course: courseDoc._id,
+            isActive: true 
+          });
+          
+          if (!branchDoc) {
+            // Try alternative branch name formats
+            const alternativeBranchNames = [
+              branchNameMapping.toUpperCase(),
+              branchNameMapping.toLowerCase(),
+              branchNameMapping.charAt(0).toUpperCase() + branchNameMapping.slice(1).toLowerCase()
+            ];
+            
+            let foundBranch = false;
+            for (const altBranchName of alternativeBranchNames) {
+              const altBranchDoc = await BranchModel.findOne({ 
+                name: { $regex: new RegExp(`^${altBranchName}$`, 'i') },
+                course: courseDoc._id,
+                isActive: true 
+              });
+              if (altBranchDoc) {
+                foundBranch = true;
+                break;
+              }
+            }
+            
+            if (!foundBranch) {
+              errors.Branch = `Branch "${String(Branch).trim()}" (mapped to "${branchNameMapping}") not found for course "${normalizedCourseName}".`;
+            }
+          }
+        }
+      }
+
+      // Validate category with case-insensitive handling
+      if (!Category) {
+        errors.Category = 'Category is required.';
+      } else {
+        const normalizedCategory = normalizeCategory(String(Category).trim());
+        if (!normalizedCategory) {
+          errors.Category = `Invalid category "${String(Category).trim()}". Must be A+, A, B+, B for Male or A+, A, B, C for Female.`;
+        }
+      }
+
+      // Validate year (optional but must be valid if provided)
+      if (Year) {
+        const yearValue = parseInt(Year, 10);
+        if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
+          errors.Year = `Invalid year "${Year}". Must be a number between 1 and 10.`;
+        }
+      }
+
+      // Validate student phone (optional but must be valid if provided)
+      if (StudentPhone && !/^[0-9]{10}$/.test(String(StudentPhone))) {
+        errors.StudentPhone = 'Must be 10 digits.';
+      }
+
+      // Validate parent phone
+      if (ParentPhone && !/^[0-9]{10}$/.test(String(ParentPhone))) {
+        errors.ParentPhone = 'Must be 10 digits.';
+      }
+
+      // Validate email (optional but must be valid if provided)
+      if (Email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(Email))) {
+        errors.Email = 'Invalid email format.';
+      }
+
+      // Validate batch format
+      if (Batch) {
+        if (/^\d{4}$/.test(String(Batch))) {
+          // Single year provided - validate it's a reasonable year
+          const startYear = parseInt(Batch, 10);
+          if (startYear < 2000 || startYear > 2100) {
+            errors.Batch = 'Starting year must be between 2000-2100.';
+          }
+        } else if (!/^\d{4}-\d{4}$/.test(String(Batch))) {
+          errors.Batch = 'Format must be YYYY-YYYY or just YYYY.';
+        }
+      }
+
+      // Validate academic year format
+      if (AcademicYear && !/^\d{4}-\d{4}$/.test(String(AcademicYear))) {
+        errors.AcademicYear = 'Format must be YYYY-YYYY.';
+      } else if (AcademicYear) {
+        const [start, end] = String(AcademicYear).split('-').map(Number);
+        if (end !== start + 1) {
+          errors.AcademicYear = 'Years must be consecutive.';
+        }
+      }
+
+      // Check if there are any errors
+      if (Object.keys(errors).length > 0) {
+        results.invalidStudents.push({
+          row: rowIndex,
+          data: row,
+          errors: errors
+        });
+      } else {
+        results.validStudents.push(row);
+      }
     }
 
     res.json({ 
@@ -370,22 +685,148 @@ export const bulkAddStudents = async (req, res, next) => {
       const hostelId = await generateHostelId(String(Gender).trim() || 'Male');
       console.log('Generated hostel ID for bulk student:', hostelId);
 
+      // Find course and branch ObjectIds by name with robust case handling
+      const CourseModel = (await import('../models/Course.js')).default;
+      const BranchModel = (await import('../models/Branch.js')).default;
+      
+      // Normalize course name for case-insensitive matching
+      const normalizedCourseName = normalizeCourseName(String(Course).trim());
+      console.log(`Looking for course: "${String(Course).trim()}" (normalized to "${normalizedCourseName}")`);
+      
+      let courseDoc = await CourseModel.findOne({ 
+        name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
+        isActive: true 
+      });
+      
+      if (!courseDoc) {
+        results.failureCount++;
+        results.errors.push({ 
+          error: `Course "${normalizedCourseName}" not found in the database.`, 
+          details: studentData 
+        });
+        continue;
+      }
+
+      // Map short branch names to full names based on the seeded data
+      const branchNameMapping = getBranchNameMapping(String(Course).trim(), String(Branch).trim());
+      console.log(`Mapping branch: "${String(Branch).trim()}" to "${branchNameMapping}" for course "${String(Course).trim()}" (normalized to "${normalizedCourseName}")`);
+      
+      let branchDoc = await BranchModel.findOne({ 
+        name: { $regex: new RegExp(`^${branchNameMapping}$`, 'i') },
+        course: courseDoc._id,
+        isActive: true 
+      });
+
+      // Try alternative branch name formats if not found
+      if (!branchDoc) {
+        const alternativeBranchNames = [
+          branchNameMapping.toUpperCase(),
+          branchNameMapping.toLowerCase(),
+          branchNameMapping.charAt(0).toUpperCase() + branchNameMapping.slice(1).toLowerCase()
+        ];
+        
+        for (const altBranchName of alternativeBranchNames) {
+          branchDoc = await BranchModel.findOne({ 
+            name: { $regex: new RegExp(`^${altBranchName}$`, 'i') },
+            course: courseDoc._id,
+            isActive: true 
+          });
+          if (branchDoc) {
+            console.log(`Found branch with alternative name: "${altBranchName}"`);
+            break;
+          }
+        }
+      }
+
+      if (!branchDoc) {
+        results.failureCount++;
+        results.errors.push({ 
+          error: `Branch "${String(Branch).trim()}" (mapped to "${branchNameMapping}") not found for course "${normalizedCourseName}".`, 
+          details: studentData 
+        });
+        continue;
+      }
+
+      // Handle email properly - only set if provided and not empty
+      const emailValue = Email ? String(Email).trim() : '';
+      const finalEmail = emailValue === '' ? undefined : emailValue;
+
+      // Normalize gender with case-insensitive handling
+      const normalizedGender = normalizeGender(String(Gender).trim());
+      if (!normalizedGender) {
+        results.failureCount++;
+        results.errors.push({ 
+          error: `Invalid gender "${String(Gender).trim()}". Must be "Male" or "Female".`, 
+          details: studentData 
+        });
+        continue;
+      }
+
+      // Normalize category with case-insensitive handling
+      const normalizedCategory = normalizeCategory(String(Category).trim());
+      if (!normalizedCategory) {
+        results.failureCount++;
+        results.errors.push({ 
+          error: `Invalid category "${String(Category).trim()}". Must be A+, A, B+, B for Male or A+, A, B, C for Female.`, 
+          details: studentData 
+        });
+        continue;
+      }
+
+      // Handle year - make it optional for bulk upload, default to 1 if not provided
+      const yearValue = Year ? parseInt(Year, 10) : 1;
+      if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
+        results.failureCount++;
+        results.errors.push({ 
+          error: `Invalid year "${Year}". Must be a number between 1 and 10.`, 
+          details: studentData 
+        });
+        continue;
+      }
+
+      // Handle batch - if only starting year is provided, calculate end year based on course duration
+      let finalBatch = String(Batch).trim();
+      if (finalBatch && !finalBatch.includes('-')) {
+        // Only starting year provided, calculate end year
+        const startYear = parseInt(finalBatch, 10);
+        if (isNaN(startYear) || startYear < 2000 || startYear > 2100) {
+          results.failureCount++;
+          results.errors.push({ 
+            error: `Invalid batch starting year "${finalBatch}". Must be a valid year between 2000-2100.`, 
+            details: studentData 
+          });
+          continue;
+        }
+        
+        const courseDuration = courseDoc.duration || 4; // Default to 4 years
+        const endYear = startYear + courseDuration;
+        finalBatch = `${startYear}-${endYear}`;
+        console.log(`Auto-generated batch: ${startYear} → ${finalBatch} (${courseDuration} years)`);
+      } else if (finalBatch && !/^\d{4}-\d{4}$/.test(finalBatch)) {
+        results.failureCount++;
+        results.errors.push({ 
+          error: `Invalid batch format "${finalBatch}". Use YYYY-YYYY or just YYYY.`, 
+          details: studentData 
+        });
+        continue;
+      }
+
       const newStudent = new User({
         name: String(Name).trim(),
         rollNumber: rollNumberUpper,
         password: generatedPassword,
         role: 'student',
-        gender: String(Gender).trim(),
-        course: String(Course).trim(),
-        year: parseInt(Year, 10),
-        branch: String(Branch).trim(),
-        category: String(Category).trim(),
+        gender: normalizedGender,
+        course: courseDoc._id, // Use ObjectId
+        year: yearValue,
+        branch: branchDoc._id, // Use ObjectId
+        category: normalizedCategory,
         roomNumber: String(RoomNumber).trim(),
-        studentPhone: String(StudentPhone).trim(),
+        studentPhone: StudentPhone ? String(StudentPhone).trim() : '',
         parentPhone: String(ParentPhone).trim(),
-        batch: String(Batch).trim(),
+        batch: finalBatch,
         academicYear: String(AcademicYear).trim(),
-        email: String(Email).trim(),
+        email: finalEmail, // Use properly handled email
         hostelId,
         isPasswordChanged: false,
       });
@@ -396,7 +837,7 @@ export const bulkAddStudents = async (req, res, next) => {
         name: savedStudent.name,
         rollNumber: savedStudent.rollNumber,
         studentPhone: savedStudent.studentPhone,
-        email: savedStudent.email,
+        email: savedStudent.email || '', // Handle undefined email
         generatedPassword: generatedPassword,
         isFirstLogin: true,
         mainStudentId: savedStudent._id,
@@ -421,11 +862,11 @@ export const bulkAddStudents = async (req, res, next) => {
       let emailSent = false;
       let emailError = null;
       
-      if (Email) {
+      if (finalEmail) {
         try {
           const loginUrl = `${req.protocol}://${req.get('host')}/login`;
           await sendStudentRegistrationEmail(
-            String(Email).trim(),
+            finalEmail,
             String(Name).trim(),
             rollNumberUpper,
             generatedPassword,
@@ -433,17 +874,17 @@ export const bulkAddStudents = async (req, res, next) => {
           );
           emailSent = true;
           results.emailResults.sent++;
-          console.log('📧 Bulk registration email sent successfully to:', Email);
+          console.log('📧 Bulk registration email sent successfully to:', finalEmail);
         } catch (emailErr) {
           emailError = emailErr.message;
           results.emailResults.failed++;
           results.emailResults.errors.push({
-            email: Email,
+            email: finalEmail,
             student: String(Name).trim(),
             rollNumber: rollNumberUpper,
             error: emailErr.message
           });
-          console.error('📧 Failed to send bulk registration email to:', Email, emailErr);
+          console.error('📧 Failed to send bulk registration email to:', finalEmail, emailErr);
           // Don't fail the registration if email fails
         }
       }
@@ -499,6 +940,8 @@ export const getStudents = async (req, res, next) => {
 
     const students = await User.find(query)
       .select('-password')
+      .populate('course', 'name code')
+      .populate('branch', 'name code')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
@@ -523,7 +966,9 @@ export const getStudents = async (req, res, next) => {
 export const getStudentById = async (req, res, next) => {
   try {
     const student = await User.findOne({ _id: req.params.id, role: 'student' })
-      .select('-password');
+      .select('-password')
+      .populate('course', 'name code')
+      .populate('branch', 'name code');
     
     if (!student) {
       throw createError(404, 'Student not found');
@@ -816,11 +1261,11 @@ export const getBranchesByCourse = async (req, res, next) => {
 // Get temporary students summary for admin dashboard
 export const getTempStudentsSummary = async (req, res, next) => {
   try {
-    // Get all students who haven't changed their password with their hostel IDs
+    // Get all students who haven't changed their password with their hostel IDs and gender
     const studentsWithTempRecords = await User.find({ 
       role: 'student',
       isPasswordChanged: false 
-    }).select('_id hostelId');
+    }).select('_id hostelId gender');
 
     // Get temp student records only for students who haven't changed their password
     const tempStudents = await TempStudent.find({
@@ -829,12 +1274,13 @@ export const getTempStudentsSummary = async (req, res, next) => {
     .select('name rollNumber studentPhone generatedPassword createdAt mainStudentId')
     .sort({ createdAt: -1 });
 
-    // Combine temp student data with hostel IDs from main student records
+    // Combine temp student data with hostel IDs and gender from main student records
     const tempStudentsWithHostelId = tempStudents.map(tempStudent => {
       const mainStudent = studentsWithTempRecords.find(s => s._id.toString() === tempStudent.mainStudentId.toString());
       return {
         ...tempStudent.toObject(),
-        hostelId: mainStudent ? mainStudent.hostelId : null
+        hostelId: mainStudent ? mainStudent.hostelId : null,
+        gender: mainStudent ? mainStudent.gender : null
       };
     });
 
@@ -876,6 +1322,69 @@ export const getStudentsCount = async (req, res, next) => {
   } catch (error) {
     console.error('Error fetching total student count:', error);
     next(createError(500, 'Failed to fetch total student count.'));
+  }
+};
+
+// Get course counts for admin dashboard
+export const getCourseCounts = async (req, res, next) => {
+  try {
+    const { course, branch, gender, category, roomNumber, batch, academicYear, hostelStatus } = req.query;
+    
+    // Build query for students
+    const query = { 
+      role: 'student'
+    };
+
+    // Add filters if provided
+    if (course) query.course = course;
+    if (branch) query.branch = branch;
+    if (gender) query.gender = gender;
+    if (category) query.category = category;
+    if (roomNumber) query.roomNumber = roomNumber;
+    if (batch) query.batch = batch;
+    if (academicYear) query.academicYear = academicYear;
+    if (hostelStatus) query.hostelStatus = hostelStatus;
+
+    // Aggregate to get counts by course
+    const courseCounts = await User.aggregate([
+      { $match: query },
+      {
+        $lookup: {
+          from: 'courses',
+          localField: 'course',
+          foreignField: '_id',
+          as: 'courseData'
+        }
+      },
+      {
+        $group: {
+          _id: '$course',
+          count: { $sum: 1 },
+          courseName: { $first: { $arrayElemAt: ['$courseData.name', 0] } }
+        }
+      },
+      {
+        $project: {
+          courseName: 1,
+          count: 1
+        }
+      }
+    ]);
+
+    // Convert to object format
+    const countsObject = {};
+    courseCounts.forEach(item => {
+      const courseName = item.courseName || 'Unknown Course';
+      countsObject[courseName] = item.count;
+    });
+
+    res.status(200).json({
+      success: true,
+      data: countsObject,
+    });
+  } catch (error) {
+    console.error('Error fetching course counts:', error);
+    next(createError(500, 'Failed to fetch course counts.'));
   }
 };
 

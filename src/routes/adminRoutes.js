@@ -8,6 +8,7 @@ import {
   getBranchesByCourse,
   getTempStudentsSummary,
   getStudentsCount,
+  getCourseCounts,
   addElectricityBill,
   getElectricityBills,
   previewBulkUpload,
@@ -143,6 +144,9 @@ router.get('/students/temp-summary', getTempStudentsSummary);
 
 // New route to get total student count
 router.get('/students/count', getStudentsCount);
+
+// New route to get course counts
+router.get('/students/course-counts', getCourseCounts);
 
 // New route for renewing student batches
 router.post('/students/renew-batch', renewBatches);
