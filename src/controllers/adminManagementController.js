@@ -5,12 +5,19 @@ import { createError } from '../utils/error.js';
 // Create a new sub-admin
 export const createSubAdmin = async (req, res, next) => {
   try {
-    const { username, password, permissions } = req.body;
+    const { username, password, permissions, leaveManagementCourses } = req.body;
 
     // Check if username already exists
     const existingAdmin = await Admin.findOne({ username });
     if (existingAdmin) {
       throw createError(400, 'Username already exists');
+    }
+
+    // Validate leave management courses if leave_management permission is selected
+    if (permissions && permissions.includes('leave_management')) {
+      if (!leaveManagementCourses || leaveManagementCourses.length === 0) {
+        throw createError(400, 'At least one course must be selected for leave management permission');
+      }
     }
 
     // Create new sub-admin
@@ -19,6 +26,7 @@ export const createSubAdmin = async (req, res, next) => {
       password,
       role: 'sub_admin',
       permissions,
+      leaveManagementCourses: leaveManagementCourses || [],
       createdBy: req.admin._id
     });
 
@@ -101,6 +109,7 @@ export const getSubAdmins = async (req, res, next) => {
 
     const subAdmins = await Admin.find(query)
       .select('-password')
+      .populate('leaveManagementCourses', 'name code')
       .sort({ createdAt: -1 });
 
     console.log('📝 Found sub-admins:', subAdmins.length);
@@ -145,10 +154,10 @@ export const getWardens = async (req, res, next) => {
 export const updateSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, permissions, isActive } = req.body;
+    const { username, password, permissions, isActive, leaveManagementCourses } = req.body;
 
     console.log('📝 Updating sub-admin:', id);
-    console.log('📝 Update data:', { username, permissions, isActive });
+    console.log('📝 Update data:', { username, permissions, isActive, leaveManagementCourses });
 
     // Build query based on admin role
     let query = {
@@ -169,6 +178,13 @@ export const updateSubAdmin = async (req, res, next) => {
 
     console.log('📝 Current sub-admin permissions:', subAdmin.permissions);
 
+    // Validate leave management courses if leave_management permission is selected
+    if (permissions && permissions.includes('leave_management')) {
+      if (!leaveManagementCourses || leaveManagementCourses.length === 0) {
+        throw createError(400, 'At least one course must be selected for leave management permission');
+      }
+    }
+
     // Update fields
     if (username && username !== subAdmin.username) {
       const existingAdmin = await Admin.findOne({ username });
@@ -183,6 +199,10 @@ export const updateSubAdmin = async (req, res, next) => {
     if (permissions !== undefined) {
       console.log('📝 Updating permissions from:', subAdmin.permissions, 'to:', permissions);
       subAdmin.permissions = permissions;
+    }
+    if (leaveManagementCourses !== undefined) {
+      console.log('📝 Updating leave management courses from:', subAdmin.leaveManagementCourses, 'to:', leaveManagementCourses);
+      subAdmin.leaveManagementCourses = leaveManagementCourses;
     }
     if (typeof isActive === 'boolean') {
       subAdmin.isActive = isActive;

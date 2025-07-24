@@ -260,7 +260,14 @@ export const getStudentLeaveRequests = async (req, res, next) => {
   try {
     const studentId = req.user.id;
     const leaves = await Leave.find({ student: studentId })
-      .populate('student', 'name rollNumber course branch year gender')
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      })
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 });
 
@@ -291,10 +298,42 @@ export const getAllLeaveRequests = async (req, res, next) => {
     // Exclude bulk outing leave records (identified by reason starting with "Bulk outing:")
     query.reason = { $not: /^Bulk outing:/ };
 
+    // Filter by admin's course permissions if they have leave_management permission
+    if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
+      if (req.admin.leaveManagementCourses && req.admin.leaveManagementCourses.length > 0) {
+        // Filter students by the courses the admin has access to
+        query['student'] = {
+          $in: await User.distinct('_id', {
+            course: { $in: req.admin.leaveManagementCourses }
+          })
+        };
+        console.log('Filtering by admin course permissions:', req.admin.leaveManagementCourses);
+      } else {
+        // If admin has leave_management permission but no courses assigned, return empty
+        console.log('Admin has leave_management permission but no courses assigned');
+        return res.json({
+          success: true,
+          data: {
+            leaves: [],
+            totalPages: 0,
+            currentPage: page,
+            totalRequests: 0
+          }
+        });
+      }
+    }
+
     console.log('MongoDB query:', query);
 
     const leaves = await Leave.find(query)
-      .populate('student', 'name rollNumber course branch year gender')
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      })
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
@@ -327,10 +366,24 @@ export const verifyOTPAndApprove = async (req, res, next) => {
     const adminId = req.admin._id;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name parentPhone gender');
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
+    }
+
+    // Check course permissions for sub-admin
+    if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
+      if (!req.admin.leaveManagementCourses || !req.admin.leaveManagementCourses.includes(leave.student.course.toString())) {
+        throw createError(403, 'You do not have permission to approve leave requests for this student\'s course');
+      }
     }
 
     if (leave.status !== 'Pending OTP Verification') {
@@ -367,10 +420,24 @@ export const rejectLeaveRequest = async (req, res, next) => {
     const adminId = req.admin._id;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name parentPhone gender');
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
+    }
+
+    // Check course permissions for sub-admin
+    if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
+      if (!req.admin.leaveManagementCourses || !req.admin.leaveManagementCourses.includes(leave.student.course.toString())) {
+        throw createError(403, 'You do not have permission to reject leave requests for this student\'s course');
+      }
     }
 
     if (leave.status === 'Approved' || leave.status === 'Rejected') {
@@ -585,7 +652,14 @@ export const getLeaveById = async (req, res, next) => {
     console.log('🔍 getLeaveById called with ID:', id);
     console.log('🔍 Request headers:', req.headers);
     
-    const leave = await Leave.findById(id).populate('student', 'name rollNumber');
+    const leave = await Leave.findById(id).populate({
+      path: 'student',
+      select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
+      populate: [
+        { path: 'course', select: 'name code' },
+        { path: 'branch', select: 'name code' }
+      ]
+    });
     console.log('🔍 Leave found:', leave ? 'Yes' : 'No');
     
     if (!leave) {
@@ -626,7 +700,14 @@ export const getApprovedLeaves = async (req, res, next) => {
     const { page = 1, limit = 10 } = req.query;
     
     const leaves = await Leave.find({ status: 'Approved' })
-      .populate('student', 'name rollNumber course branch year gender')
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      })
       .populate('approvedBy', 'name')
       .sort({ approvedAt: -1 })
       .limit(limit * 1)
@@ -655,7 +736,14 @@ export const updateVerificationStatus = async (req, res, next) => {
     const { leaveId, verificationStatus } = req.body;
 
     const leave = await Leave.findById(leaveId)
-      .populate('student', 'name rollNumber gender');
+      .populate({
+        path: 'student',
+        select: 'name rollNumber gender course branch',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
@@ -705,10 +793,10 @@ export const getStayInHostelRequestsForWarden = async (req, res, next) => {
     const leaves = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
         populate: [
-          { path: 'course', select: 'name' },
-          { path: 'branch', select: 'name' }
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
         ]
       })
       .populate('recommendedBy', 'name')
@@ -760,10 +848,10 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
     const leaves = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
         populate: [
-          { path: 'course', select: 'name' },
-          { path: 'branch', select: 'name' }
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
         ]
       })
       .populate('recommendedBy', 'name')

@@ -281,6 +281,7 @@ function getBranchNameMapping(courseName, branchName) {
       case 'DFISHERIES': return 'Diploma in Fisheries';
       case 'DAH': return 'Diploma in Animal Husbandry';
       case 'DAIML': return 'Diploma in AI & ML';
+      case 'DAGRI': return 'Diploma in Agriculture';
       default: return branchName; // Return original if no mapping found
     }
   }

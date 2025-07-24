@@ -31,6 +31,10 @@ const adminSchema = new mongoose.Schema({
       return this.role === 'principal';
     }
   },
+  leaveManagementCourses: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course'
+  }],
   permissions: [{
     type: String,
     enum: [
@@ -43,6 +47,9 @@ const adminSchema = new mongoose.Schema({
       'member_management',
       'menu_management',
       'course_management',
+      'attendance_management',
+      'found_lost_management',
+      'fee_management',
       'warden_student_oversight',
       'warden_complaint_oversight',
       'warden_leave_oversight',
