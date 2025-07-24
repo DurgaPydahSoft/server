@@ -54,7 +54,8 @@ const initialBranches = {
     { name: 'Diploma in Mechanical Engineering', code: 'DMECH' },
     { name: 'Diploma in Fisheries', code: 'DFISHERIES' },
     { name: 'Diploma in Animal Husbandry', code: 'DAH' },
-    { name: 'Diploma in AI & ML', code: 'DAIML' }
+    { name: 'Diploma in AI & ML', code: 'DAIML' },
+    { name: 'Diploma in Agriculture', code: 'DAGRI' }
   ],
   PHARMACY: [
     { name: 'B-Pharmacy', code: 'BPHARM' },
@@ -69,7 +70,8 @@ const initialBranches = {
     { name: 'Horticulture', code: 'HORTICULTURE' },
     { name: 'Food Technology', code: 'FOODTECH' },
     { name: 'Fisheries', code: 'FISHERIES' },
-    { name: 'Food Science & Nutrition', code: 'FOODSCIENCE' }
+    { name: 'Food Science & Nutrition', code: 'FOODSCIENCE' },
+    { name: 'Forensic', code: 'FORENSIC' }
   ]
 };
 

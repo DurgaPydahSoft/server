@@ -604,7 +604,7 @@ export const previewBulkUpload = async (req, res, next) => {
           errors: errors
         });
       } else {
-        results.validStudents.push(row);
+      results.validStudents.push(row);
       }
     }
 

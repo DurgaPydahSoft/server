@@ -4,23 +4,7 @@ import { validatePhoneNumber } from '../utils/validators.js';
 // Get all members
 export const getAllMembers = async (req, res) => {
   try {
-    // First check if there are any members at all
-    const allMembers = await Member.find({});
-    
-    // If no members exist, create some sample members
-    if (allMembers.length === 0) {
-      const sampleMembers = [
-        { name: 'John Smith', phone: '1234567890', category: 'Canteen', isActive: true },
-        { name: 'Sarah Johnson', phone: '2345678901', category: 'Internet', isActive: true },
-        { name: 'Mike Wilson', phone: '3456789012', category: 'Housekeeping', isActive: true },
-        { name: 'Lisa Brown', phone: '4567890123', category: 'Plumbing', isActive: true },
-        { name: 'David Lee', phone: '5678901234', category: 'Electricity', isActive: true }
-      ];
-      
-      await Member.insertMany(sampleMembers);
-    }
-    
-    // Then get active members
+    // Get active members only
     const members = await Member.find({ isActive: true }).sort({ category: 1, name: 1 });
     
     res.json({

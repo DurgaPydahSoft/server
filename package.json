@@ -7,13 +7,10 @@
   "scripts": {
     "start": "node -r dotenv/config src/index.js",
     "dev": "nodemon -r dotenv/config src/index.js",
-    "create-super-admin": "node src/scripts/createSuperAdmin.js",
-    "init-ai-config": "node src/scripts/initAIConfig.js",
-    "update-member-efficiency": "node src/scripts/updateMemberEfficiency.js",
-   
-    "test-admin-management": "node src/scripts/testAdminManagement.js",
-    "test-admin-login": "node src/scripts/testAdminLogin.js",
-    "remove-old-admin": "node src/scripts/removeOldAdmin.js"
+    "create-superadmin": "node src/scripts/createSuperAdmin.js",
+    "seed-rooms": "node src/scripts/seedRooms.js",
+    "seed-courses-and-branches": "node src/scripts/seedCoursesAndBranches.js",
+    "ai-init": "node src/scripts/initAIConfig.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.812.0",
