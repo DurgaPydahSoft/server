@@ -1430,13 +1430,38 @@ export const addElectricityBill = async (req, res, next) => {
       throw createError(400, 'Bill for this month already exists');
     }
 
-    // Add new bill
+    // Find all students in this room
+    const studentsInRoom = await User.find({ 
+      roomNumber: room.roomNumber, 
+      role: 'student',
+      hostelStatus: 'Active'
+    });
+
+    if (studentsInRoom.length === 0) {
+      throw createError(400, 'No active students found in this room');
+    }
+
+    // Calculate individual student amount (divide equally)
+    const individualAmount = Math.round(total / studentsInRoom.length);
+
+    // Create student bills array
+    const studentBills = studentsInRoom.map(student => ({
+      studentId: student._id,
+      studentName: student.name,
+      studentRollNumber: student.rollNumber,
+      amount: individualAmount,
+      paymentStatus: 'unpaid'
+    }));
+
+    // Add new bill with student breakdown
     room.electricityBills.push({
       month,
       startUnits,
       endUnits,
+      consumption,
       rate: billRate,
-      total
+      total,
+      studentBills
     });
 
     await room.save();

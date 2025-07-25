@@ -29,6 +29,7 @@ class NotificationService {
       // Create database notification first
       const dbNotification = await this.createDatabaseNotification({
         recipient: userId,
+        recipientModel: 'Admin', // Since we're sending to admins
         type: notificationData.type,
         message: personalizedMessage,
         sender: notificationData.sender,
@@ -79,6 +80,7 @@ class NotificationService {
         
         const dbNotification = await this.createDatabaseNotification({
           recipient: userId,
+          recipientModel: 'User', // For students
           type: notificationData.type,
           title: notificationData.title,
           message: personalizedMessage,
@@ -121,6 +123,7 @@ class NotificationService {
     try {
       const notificationData = {
         recipient: data.recipient,
+        recipientModel: data.recipientModel || 'User', // Default to User if not specified
         type: data.type,
         title: data.title || data.message, // Use message as title if title not provided
         message: data.message,

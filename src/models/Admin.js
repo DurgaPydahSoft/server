@@ -38,18 +38,19 @@ const adminSchema = new mongoose.Schema({
   permissions: [{
     type: String,
     enum: [
+      'dashboard_home',
       'room_management',
       'student_management',
-      'complaint_management',
+      'maintenance_ticket_management',
       'leave_management',
       'announcement_management',
       'poll_management',
-      'member_management',
       'menu_management',
       'course_management',
       'attendance_management',
       'found_lost_management',
       'fee_management',
+      'feature_controls',
       'warden_student_oversight',
       'warden_complaint_oversight',
       'warden_leave_oversight',
@@ -62,6 +63,15 @@ const adminSchema = new mongoose.Schema({
       'principal_course_management'
     ]
   }],
+  permissionAccessLevels: {
+    type: Map,
+    of: {
+      type: String,
+      enum: ['view', 'full'],
+      default: 'view'
+    },
+    default: {}
+  },
   isActive: {
     type: Boolean,
     default: true
@@ -74,7 +84,16 @@ const adminSchema = new mongoose.Schema({
     type: Date
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { 
+    transform: function(doc, ret) {
+      // Convert Map to plain object for JSON serialization
+      if (ret.permissionAccessLevels instanceof Map) {
+        ret.permissionAccessLevels = Object.fromEntries(ret.permissionAccessLevels);
+      }
+      return ret;
+    }
+  }
 });
 
 // Hash password before saving
@@ -88,6 +107,40 @@ adminSchema.pre('save', async function(next) {
   } catch (error) {
     next(error);
   }
+});
+
+// Ensure super admins have all permissions and full access
+adminSchema.pre('save', function(next) {
+  if (this.role === 'super_admin') {
+    // All available permissions for super admin
+    const allPermissions = [
+      'dashboard_home',
+      'room_management',
+      'student_management',
+      'maintenance_ticket_management',
+      'leave_management',
+      'announcement_management',
+      'poll_management',
+      'menu_management',
+      'course_management',
+      'attendance_management',
+      'found_lost_management',
+      'fee_management',
+      'feature_controls'
+    ];
+    
+    // Set all permissions
+    this.permissions = allPermissions;
+    
+    // Set full access for all permissions
+    const fullAccessLevels = {};
+    allPermissions.forEach(permission => {
+      fullAccessLevels[permission] = 'full';
+    });
+    this.permissionAccessLevels = fullAccessLevels;
+  }
+  
+  next();
 });
 
 // Method to compare password

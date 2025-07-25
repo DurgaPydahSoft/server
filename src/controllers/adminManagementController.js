@@ -5,7 +5,7 @@ import { createError } from '../utils/error.js';
 // Create a new sub-admin
 export const createSubAdmin = async (req, res, next) => {
   try {
-    const { username, password, permissions, leaveManagementCourses } = req.body;
+    const { username, password, permissions, leaveManagementCourses, permissionAccessLevels } = req.body;
 
     // Check if username already exists
     const existingAdmin = await Admin.findOne({ username });
@@ -26,6 +26,7 @@ export const createSubAdmin = async (req, res, next) => {
       password,
       role: 'sub_admin',
       permissions,
+      permissionAccessLevels: permissionAccessLevels || {},
       leaveManagementCourses: leaveManagementCourses || [],
       createdBy: req.admin._id
     });
@@ -154,7 +155,7 @@ export const getWardens = async (req, res, next) => {
 export const updateSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, permissions, isActive, leaveManagementCourses } = req.body;
+    const { username, password, permissions, isActive, leaveManagementCourses, permissionAccessLevels } = req.body;
 
     console.log('📝 Updating sub-admin:', id);
     console.log('📝 Update data:', { username, permissions, isActive, leaveManagementCourses });
@@ -203,6 +204,10 @@ export const updateSubAdmin = async (req, res, next) => {
     if (leaveManagementCourses !== undefined) {
       console.log('📝 Updating leave management courses from:', subAdmin.leaveManagementCourses, 'to:', leaveManagementCourses);
       subAdmin.leaveManagementCourses = leaveManagementCourses;
+    }
+    if (permissionAccessLevels !== undefined) {
+      console.log('📝 Updating permission access levels from:', subAdmin.permissionAccessLevels, 'to:', permissionAccessLevels);
+      subAdmin.permissionAccessLevels = permissionAccessLevels;
     }
     if (typeof isActive === 'boolean') {
       subAdmin.isActive = isActive;
@@ -378,7 +383,8 @@ export const adminLogin = async (req, res, next) => {
     const tokenData = { 
       _id: admin._id,
       role: admin.role,
-      permissions: admin.permissions
+      permissions: admin.permissions,
+      permissionAccessLevels: admin.permissionAccessLevels
     };
 
     // Include course for principals in the token
@@ -398,7 +404,8 @@ export const adminLogin = async (req, res, next) => {
       id: admin._id,
       username: admin.username,
       role: admin.role,
-      permissions: admin.permissions
+      permissions: admin.permissions,
+      permissionAccessLevels: admin.permissionAccessLevels
     };
 
     // Include hostelType for wardens

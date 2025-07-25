@@ -94,6 +94,41 @@ const roomSchema = new mongoose.Schema({
       paidAt: {
         type: Date
       },
+      // Student-specific bill breakdown
+      studentBills: [
+        {
+          studentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true
+          },
+          studentName: {
+            type: String,
+            required: true
+          },
+          studentRollNumber: {
+            type: String,
+            required: true
+          },
+          amount: {
+            type: Number,
+            required: true,
+            min: 0
+          },
+          paymentStatus: {
+            type: String,
+            enum: ['unpaid', 'paid', 'pending'],
+            default: 'unpaid'
+          },
+          paymentId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Payment'
+          },
+          paidAt: {
+            type: Date
+          }
+        }
+      ],
       createdAt: {
         type: Date,
         default: Date.now

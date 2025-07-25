@@ -44,6 +44,7 @@ router.get('/validate', adminAuth, async (req, res) => {
       username: adminData.username,
       role: adminData.role,
       permissions: adminData.permissions,
+      permissionAccessLevels: adminData.permissionAccessLevels,
       isActive: adminData.isActive
     };
 

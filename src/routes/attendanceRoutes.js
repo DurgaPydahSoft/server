@@ -10,7 +10,8 @@ import {
   deleteAttendance,
   getPrincipalAttendanceForDate,
   getPrincipalAttendanceForRange,
-  getPrincipalAttendanceStats
+  getPrincipalAttendanceStats,
+  getPrincipalStudentCount
 } from '../controllers/attendanceController.js';
 import { protect, adminAuth, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
@@ -32,5 +33,6 @@ router.get('/my-attendance', protect, getMyAttendance);
 router.get('/principal/date', principalAuth, getPrincipalAttendanceForDate);
 router.get('/principal/range', principalAuth, getPrincipalAttendanceForRange);
 router.get('/principal/stats', principalAuth, getPrincipalAttendanceStats);
+router.get('/principal/students/count', principalAuth, getPrincipalStudentCount);
 
 export default router;

@@ -427,7 +427,7 @@ export const getElectricityBills = async (req, res, next) => {
 // Get electricity bills for a student's room
 export const getStudentRoomBills = async (req, res, next) => {
   try {
-    const { roomNumber, gender, category } = req.user;
+    const { _id, roomNumber, gender, category } = req.user;
 
     // Find the room
     const room = await Room.findOne({ roomNumber, gender, category });
@@ -441,9 +441,48 @@ export const getStudentRoomBills = async (req, res, next) => {
     // Sort bills by month in descending order
     const sortedBills = room.electricityBills.sort((a, b) => b.month.localeCompare(a.month));
 
+    // Get current student count for the room
+    const studentsInRoom = await User.countDocuments({
+      roomNumber: room.roomNumber,
+      gender: room.gender,
+      category: room.category,
+      role: 'student',
+      hostelStatus: 'Active'
+    });
+
+    // For each bill, find the student's share
+    const studentBills = sortedBills.map(bill => {
+      const studentBill = bill.studentBills?.find(sb => sb.studentId.toString() === _id.toString());
+      
+      // If no studentBills array exists (old bills), calculate equal share
+      let studentShare = null;
+      if (studentBill) {
+        studentShare = studentBill.amount;
+      } else if (bill.studentBills && bill.studentBills.length > 0) {
+        // Bill has studentBills but this student is not in it
+        studentShare = null;
+      } else {
+        // Old bill without studentBills - calculate equal share
+        studentShare = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : null;
+      }
+      
+      return {
+        month: bill.month,
+        startUnits: bill.startUnits,
+        endUnits: bill.endUnits,
+        consumption: bill.consumption,
+        rate: bill.rate,
+        total: bill.total,
+        studentShare: studentShare,
+        paymentStatus: studentBill ? studentBill.paymentStatus : 'unpaid',
+        paymentId: studentBill ? studentBill.paymentId : null,
+        paidAt: studentBill ? studentBill.paidAt : null
+      };
+    });
+
     res.json({ 
       success: true, 
-      data: sortedBills 
+      data: studentBills 
     });
   } catch (error) {
     next(error);

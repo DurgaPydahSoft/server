@@ -449,10 +449,15 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     });
 
     // Build query for students in principal's course
+    // Handle both populated course object and course ID
+    const courseId = principal.course && typeof principal.course === 'object' 
+      ? principal.course._id 
+      : principal.course;
+
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: principal.course
+      course: courseId
     };
 
     // Add filters if provided
@@ -592,10 +597,15 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     }
 
     // Build query for students in principal's course
+    // Handle both populated course object and course ID
+    const courseId = principal.course && typeof principal.course === 'object' 
+      ? principal.course._id 
+      : principal.course;
+
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: principal.course
+      course: courseId
     };
 
     // Add filters if provided
@@ -653,6 +663,63 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
   }
 };
 
+// Get student count for principal's course
+export const getPrincipalStudentCount = async (req, res, next) => {
+  try {
+    const principal = req.principal;
+
+    console.log('🎓 Principal student count - Principal data:', {
+      principalId: principal._id,
+      principalCourse: principal.course,
+      courseType: typeof principal.course,
+      courseIsObject: principal.course && typeof principal.course === 'object'
+    });
+
+    // Handle both populated course object and course ID
+    const courseId = principal.course && typeof principal.course === 'object' 
+      ? principal.course._id 
+      : principal.course;
+
+    console.log('🎓 Extracted courseId:', courseId);
+
+    // Get count of students in principal's course
+
+    const query = {
+      role: 'student',
+      hostelStatus: 'Active',
+      course: courseId
+    };
+
+    console.log('🎓 Student count query:', query);
+
+    const totalStudents = await User.countDocuments(query);
+
+    console.log('🎓 Total students found:', totalStudents);
+
+    // Debug: Let's also check what students exist
+    const sampleStudents = await User.find({ role: 'student', hostelStatus: 'Active' })
+      .select('name rollNumber course')
+      .populate('course', 'name code')
+      .limit(5);
+
+    console.log('🎓 Sample students in system:', sampleStudents.map(s => ({
+      name: s.name,
+      rollNumber: s.rollNumber,
+      course: s.course
+    })));
+
+    res.json({
+      success: true,
+      data: {
+        total: totalStudents
+      }
+    });
+  } catch (error) {
+    console.error('🎓 Error in getPrincipalStudentCount:', error);
+    next(error);
+  }
+};
+
 // Get attendance statistics for principal's course
 export const getPrincipalAttendanceStats = async (req, res, next) => {
   try {
@@ -660,14 +727,35 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
     const principal = req.principal;
     const normalizedDate = normalizeDate(date || new Date());
 
+    console.log('🎓 Principal attendance stats - Principal data:', {
+      principalId: principal._id,
+      principalCourse: principal.course,
+      courseType: typeof principal.course,
+      courseIsObject: principal.course && typeof principal.course === 'object'
+    });
+
     // Get students in principal's course
-    const students = await User.find({
+    // Handle both populated course object and course ID
+    const courseId = principal.course && typeof principal.course === 'object' 
+      ? principal.course._id 
+      : principal.course;
+
+    console.log('🎓 Extracted courseId for attendance stats:', courseId);
+
+    const studentQuery = {
       role: 'student',
       hostelStatus: 'Active',
-      course: principal.course
-    }).select('_id name rollNumber course branch year gender roomNumber')
+      course: courseId
+    };
+
+    console.log('🎓 Student query for attendance stats:', studentQuery);
+
+    const students = await User.find(studentQuery)
+      .select('_id name rollNumber course branch year gender roomNumber')
       .populate('course', 'name code')
       .populate('branch', 'name code');
+
+    console.log('🎓 Students found for attendance stats:', students.length);
 
     const studentIds = students.map(student => student._id);
 

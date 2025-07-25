@@ -1,5 +1,6 @@
 import Complaint from '../models/Complaint.js';
 import User from '../models/User.js';
+import Admin from '../models/Admin.js';
 import Notification from '../models/Notification.js';
 import Member from '../models/Member.js';
 import AIConfig from '../models/AIConfig.js';
@@ -72,8 +73,9 @@ export const createComplaint = async (req, res, next) => {
 
     // Send notification to all admins (only once)
     try {
-      const admins = await User.find({ 
-        role: { $in: ['admin', 'super_admin', 'sub_admin'] } 
+      const admins = await Admin.find({ 
+        role: { $in: ['admin', 'super_admin', 'sub_admin'] },
+        isActive: true
       });
 
       if (admins.length > 0) {
@@ -90,6 +92,10 @@ export const createComplaint = async (req, res, next) => {
         }
 
         console.log('🔔 Complaint notification sent to', adminIds.length, 'admins');
+        console.log('🔔 Admin IDs:', adminIds);
+        console.log('🔔 Admin details:', admins.map(a => ({ id: a._id, username: a.username, role: a.role })));
+      } else {
+        console.log('🔔 No active admins found for notification');
       }
     } catch (notificationError) {
       console.error('🔔 Error sending complaint notification:', notificationError);
@@ -227,7 +233,10 @@ export const giveFeedback = async (req, res) => {
       });
 
       // Notify admins
-      const admins = await User.find({ role: { $in: ['admin', 'super_admin', 'sub_admin'] } });
+      const admins = await Admin.find({ 
+        role: { $in: ['admin', 'super_admin', 'sub_admin'] },
+        isActive: true
+      });
       for (const admin of admins) {
         await notificationService.sendComplaintNotification(
           admin._id,
@@ -258,7 +267,10 @@ export const giveFeedback = async (req, res) => {
       }
 
       // Notify admins
-      const admins = await User.find({ role: { $in: ['admin', 'super_admin', 'sub_admin'] } });
+      const admins = await Admin.find({ 
+        role: { $in: ['admin', 'super_admin', 'sub_admin'] },
+        isActive: true
+      });
       for (const admin of admins) {
         await notificationService.sendComplaintNotification(
           admin._id,
