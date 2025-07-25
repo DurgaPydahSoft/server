@@ -41,8 +41,8 @@ const foundLostSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'claimed', 'closed'],
-    default: 'active',
+    enum: ['pending', 'active', 'claimed', 'closed', 'rejected'],
+    default: 'pending',
     index: true
   },
   claimedBy: {

@@ -271,6 +271,83 @@ class NotificationService {
     return await this.sendToUsers(recipientIds, notificationData);
   }
 
+  // Send Found & Lost notification to admins when a new post is created
+  async sendFoundLostNotification(recipientId, foundLostData, studentName, studentId = null) {
+    try {
+      console.log('🔔 Sending Found & Lost notification to admin:', recipientId);
+      
+      const notificationData = {
+        title: 'New Found & Lost Post',
+        message: `${studentName} has posted a ${foundLostData.type} item: "${foundLostData.title}"`,
+        type: 'foundlost',
+        url: '/admin/dashboard/foundlost',
+        priority: 'normal',
+        sender: studentId,
+        relatedId: foundLostData._id,
+        onModel: 'FoundLost'
+      };
+
+      return await this.sendToUser(recipientId, notificationData);
+    } catch (error) {
+      console.error('🔔 Error sending Found & Lost notification:', error);
+      return null;
+    }
+  }
+
+  // Send Found & Lost status update notification to student
+  async sendFoundLostStatusUpdate(recipientId, foundLostData, newStatus, adminName = 'Admin', adminId = null) {
+    try {
+      console.log('🔔 Sending Found & Lost status update to student:', recipientId);
+      
+      const statusMessages = {
+        'pending': 'Your found/lost post is pending admin approval.',
+        'active': 'Your found/lost post has been approved and is now visible to all students!',
+        'claimed': 'Your found/lost item has been claimed!',
+        'closed': 'Your found/lost post has been closed by admin.',
+        'rejected': 'Your found/lost post has been rejected by admin.'
+      };
+
+      const notificationData = {
+        title: 'Found & Lost Update',
+        message: statusMessages[newStatus] || `Your post status has been updated to: ${newStatus}`,
+        type: 'foundlost',
+        url: '/student/foundlost',
+        priority: 'normal',
+        sender: adminId,
+        relatedId: foundLostData._id,
+        onModel: 'FoundLost'
+      };
+
+      return await this.sendToUser(recipientId, notificationData);
+    } catch (error) {
+      console.error('🔔 Error sending Found & Lost status update notification:', error);
+      return null;
+    }
+  }
+
+  // Send Found & Lost claim notification to original poster
+  async sendFoundLostClaimNotification(recipientId, foundLostData, claimerName, claimerId = null) {
+    try {
+      console.log('🔔 Sending Found & Lost claim notification to original poster:', recipientId);
+      
+      const notificationData = {
+        title: 'Item Claimed!',
+        message: `Your ${foundLostData.type === 'found' ? 'found' : 'lost'} item "${foundLostData.title}" has been claimed by ${claimerName}`,
+        type: 'foundlost',
+        url: '/student/foundlost',
+        priority: 'normal',
+        sender: claimerId,
+        relatedId: foundLostData._id,
+        onModel: 'FoundLost'
+      };
+
+      return await this.sendToUser(recipientId, notificationData);
+    } catch (error) {
+      console.error('🔔 Error sending Found & Lost claim notification:', error);
+      return null;
+    }
+  }
+
   // Get service status
   getStatus() {
     return {

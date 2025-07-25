@@ -52,11 +52,13 @@ export const getStudentsForAttendance = async (req, res, next) => {
         attendance: attendance ? {
           morning: attendance.morning,
           evening: attendance.evening,
+          night: attendance.night,
           status: attendance.status,
           percentage: attendance.percentage
         } : {
           morning: false,
           evening: false,
+          night: false,
           status: 'Absent',
           percentage: 0
         }
@@ -101,7 +103,7 @@ export const takeAttendance = async (req, res, next) => {
     // Process each attendance record
     for (const record of attendanceData) {
       try {
-        const { studentId, morning, evening, notes } = record;
+        const { studentId, morning, evening, night, notes } = record;
         
         if (!studentId) {
           errors.push({ studentId, error: 'Student ID is required' });
@@ -126,6 +128,7 @@ export const takeAttendance = async (req, res, next) => {
           {
             morning: morning || false,
             evening: evening || false,
+            night: night || false,
             markedBy,
             markedAt: new Date(),
             notes: notes || ''
@@ -331,6 +334,7 @@ export const getAttendanceStats = async (req, res, next) => {
       totalStudents: 0,
       morningPresent: 0,
       eveningPresent: 0,
+      nightPresent: 0,
       fullyPresent: 0,
       partiallyPresent: 0,
       absent: 0
@@ -341,6 +345,7 @@ export const getAttendanceStats = async (req, res, next) => {
     const percentages = {
       morningPercentage: totalStudents > 0 ? Math.round((statistics.morningPresent / totalStudents) * 100) : 0,
       eveningPercentage: totalStudents > 0 ? Math.round((statistics.eveningPresent / totalStudents) * 100) : 0,
+      nightPercentage: totalStudents > 0 ? Math.round((statistics.nightPresent / totalStudents) * 100) : 0,
       fullyPresentPercentage: totalStudents > 0 ? Math.round((statistics.fullyPresent / totalStudents) * 100) : 0,
       partiallyPresentPercentage: totalStudents > 0 ? Math.round((statistics.partiallyPresent / totalStudents) * 100) : 0,
       absentPercentage: totalStudents > 0 ? Math.round((statistics.absent / totalStudents) * 100) : 0
@@ -364,7 +369,7 @@ export const getAttendanceStats = async (req, res, next) => {
 // Update attendance for a specific student and date
 export const updateAttendance = async (req, res, next) => {
   try {
-    const { studentId, date, morning, evening, notes } = req.body;
+    const { studentId, date, morning, evening, night, notes } = req.body;
     const markedBy = req.admin ? req.admin._id : req.user._id;
 
     if (!studentId || !date) {
@@ -386,6 +391,7 @@ export const updateAttendance = async (req, res, next) => {
     // Update attendance
     attendance.morning = morning !== undefined ? morning : attendance.morning;
     attendance.evening = evening !== undefined ? evening : attendance.evening;
+    attendance.night = night !== undefined ? night : attendance.night;
     attendance.notes = notes || attendance.notes;
     attendance.markedBy = markedBy;
     attendance.markedAt = new Date();
@@ -532,9 +538,10 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
         ...student.toObject(),
         morning: studentAttendance?.morning || false,
         evening: studentAttendance?.evening || false,
+        night: studentAttendance?.night || false,
         status: studentAttendance ? 
-          (studentAttendance.morning && studentAttendance.evening ? 'Present' : 
-           studentAttendance.morning || studentAttendance.evening ? 'Partial' : 'Absent') : 'Absent',
+          (studentAttendance.morning && studentAttendance.evening && studentAttendance.night ? 'Present' : 
+           studentAttendance.morning || studentAttendance.evening || studentAttendance.night ? 'Partial' : 'Absent') : 'Absent',
         notes: studentAttendance?.notes || ''
       };
       
@@ -542,7 +549,8 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
         name: result.name,
         status: result.status,
         morning: result.morning,
-        evening: result.evening
+        evening: result.evening,
+        night: result.night
       });
       
       return result;
@@ -634,8 +642,8 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
     const totalPossibleAttendance = totalStudents * totalDays;
     
-    const presentRecords = attendance.filter(att => att.morning && att.evening).length;
-    const partialRecords = attendance.filter(att => (att.morning || att.evening) && !(att.morning && att.evening)).length;
+    const presentRecords = attendance.filter(att => att.morning && att.evening && att.night).length;
+    const partialRecords = attendance.filter(att => (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)).length;
     const absentRecords = totalPossibleAttendance - presentRecords - partialRecords;
     
     const overallAttendanceRate = totalPossibleAttendance > 0 ? 
@@ -767,7 +775,7 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
 
     // Calculate statistics in the format expected by frontend
     const totalStudents = students.length;
-    const presentToday = attendance.filter(att => att.morning && att.evening).length;
+    const presentToday = attendance.filter(att => att.morning && att.evening && att.night).length;
     const absentToday = totalStudents - presentToday;
     const attendanceRate = totalStudents > 0 ? Math.round((presentToday / totalStudents) * 100) : 0;
 
@@ -779,8 +787,9 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
         student: att.student,
         morning: att.morning,
         evening: att.evening,
-        status: att.morning && att.evening ? 'Present' : 
-                att.morning || att.evening ? 'Partial' : 'Absent',
+        night: att.night,
+        status: att.morning && att.evening && att.night ? 'Present' : 
+                att.morning || att.evening || att.night ? 'Partial' : 'Absent',
         markedAt: att.markedAt || att.createdAt
       }));
 

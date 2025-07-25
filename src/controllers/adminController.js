@@ -1655,7 +1655,9 @@ export const searchStudentByRollNumber = async (req, res, next) => {
     }
 
     const student = await User.findOne({ rollNumber: new RegExp(`^${rollNumber}$`, 'i'), role: 'student' })
-      .select('-password');
+      .select('-password')
+      .populate('course', 'name code')
+      .populate('branch', 'name code');
 
     if (!student) {
       return next(createError(404, 'Student with this roll number not found.'));

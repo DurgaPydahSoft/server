@@ -20,6 +20,10 @@ const attendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  night: {
+    type: Boolean,
+    default: false
+  },
   markedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -42,18 +46,22 @@ const attendanceSchema = new mongoose.Schema({
 attendanceSchema.index({ student: 1, date: 1 }, { unique: true });
 attendanceSchema.index({ date: 1, morning: 1 });
 attendanceSchema.index({ date: 1, evening: 1 });
+attendanceSchema.index({ date: 1, night: 1 });
 
 // Virtual for attendance status
 attendanceSchema.virtual('status').get(function() {
-  if (this.morning && this.evening) return 'Present';
-  if (this.morning || this.evening) return 'Partial';
+  if (this.morning && this.evening && this.night) return 'Present';
+  if (this.morning || this.evening || this.night) return 'Partial';
   return 'Absent';
 });
 
 // Virtual for attendance percentage
 attendanceSchema.virtual('percentage').get(function() {
-  if (this.morning && this.evening) return 100;
-  if (this.morning || this.evening) return 50;
+  if (this.morning && this.evening && this.night) return 100;
+  if (this.morning && this.evening) return 67;
+  if (this.morning && this.night) return 67;
+  if (this.evening && this.night) return 67;
+  if (this.morning || this.evening || this.night) return 33;
   return 0;
 });
 
@@ -98,9 +106,10 @@ attendanceSchema.statics.getAttendanceStats = function(date) {
         totalStudents: { $sum: 1 },
         morningPresent: { $sum: { $cond: ['$morning', 1, 0] } },
         eveningPresent: { $sum: { $cond: ['$evening', 1, 0] } },
-        fullyPresent: { $sum: { $cond: [{ $and: ['$morning', '$evening'] }, 1, 0] } },
-        partiallyPresent: { $sum: { $cond: [{ $or: ['$morning', '$evening'] }, 1, 0] } },
-        absent: { $sum: { $cond: [{ $and: [{ $not: '$morning' }, { $not: '$evening' }] }, 1, 0] } }
+        nightPresent: { $sum: { $cond: ['$night', 1, 0] } },
+        fullyPresent: { $sum: { $cond: [{ $and: ['$morning', '$evening', '$night'] }, 1, 0] } },
+        partiallyPresent: { $sum: { $cond: [{ $or: ['$morning', '$evening', '$night'] }, 1, 0] } },
+        absent: { $sum: { $cond: [{ $and: [{ $not: '$morning' }, { $not: '$evening' }, { $not: '$night' }] }, 1, 0] } }
       }
     }
   ]);

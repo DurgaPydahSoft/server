@@ -46,7 +46,8 @@ const createSuperAdmin = async () => {
         'attendance_management',
         'found_lost_management',
         'fee_management',
-        'feature_controls'
+        'feature_controls',
+        'security_management'
       ],
       isActive: true
     });

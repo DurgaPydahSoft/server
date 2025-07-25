@@ -56,7 +56,7 @@ export const createFoundLost = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: `${type === 'found' ? 'Found' : 'Lost'} item posted successfully`,
+      message: `${type === 'found' ? 'Found' : 'Lost'} item posted successfully and is pending admin approval`,
       data: foundLost
     });
   } catch (error) {
@@ -75,7 +75,7 @@ export const listAllPosts = async (req, res) => {
     const { type, category, search, page = 1, limit = 10 } = req.query;
     const skip = (page - 1) * limit;
 
-    let query = { status: 'active' };
+    let query = { status: 'active' }; // Only show approved posts to students
 
     // Filter by type
     if (type && ['found', 'lost'].includes(type)) {
@@ -224,15 +224,12 @@ export const claimItem = async (req, res) => {
 
     // Send notification to the original poster
     try {
-      const notification = new Notification({
-        recipient: post.student,
-        title: 'Item Claimed!',
-        message: `Your ${post.type === 'found' ? 'found' : 'lost'} item "${post.title}" has been claimed by ${req.user.name}`,
-        type: 'foundlost',
-        url: '/student/foundlost',
-        priority: 10
-      });
-      await notification.save();
+      await notificationService.sendFoundLostClaimNotification(
+        post.student,
+        post,
+        req.user.name,
+        req.user._id
+      );
       
       console.log('🔔 Claim notification sent to original poster:', post.student);
     } catch (notificationError) {
@@ -373,7 +370,7 @@ export const adminListAllPosts = async (req, res) => {
     }
 
     // Filter by status
-    if (status && ['active', 'claimed', 'closed'].includes(status)) {
+    if (status && ['pending', 'active', 'claimed', 'closed', 'rejected'].includes(status)) {
       query.status = status;
     }
 
@@ -440,7 +437,7 @@ export const adminUpdatePostStatus = async (req, res) => {
     const oldStatus = post.status;
     const statusChanged = status && status !== oldStatus;
 
-    if (status && ['active', 'claimed', 'closed'].includes(status)) {
+    if (status && ['pending', 'active', 'claimed', 'closed', 'rejected'].includes(status)) {
       post.status = status;
     }
 
@@ -453,31 +450,13 @@ export const adminUpdatePostStatus = async (req, res) => {
     // Send notification to student if status changed
     if (statusChanged && post.student) {
       try {
-        const statusMessages = {
-          'claimed': 'Your found/lost item has been claimed!',
-          'closed': 'Your found/lost post has been closed by admin.',
-          'active': 'Your found/lost post has been reactivated by admin.'
-        };
-
-        const notificationData = {
-          title: 'Found & Lost Update',
-          message: statusMessages[status] || `Your post status has been updated to: ${status}`,
-          type: 'foundlost',
-          recipient: post.student._id,
-          url: '/student/foundlost',
-          priority: 10
-        };
-
-        // Create notification in database
-        const notification = new Notification({
-          recipient: post.student._id,
-          title: 'Found & Lost Update',
-          message: statusMessages[status] || `Your post status has been updated to: ${status}`,
-          type: 'foundlost',
-          url: '/student/foundlost',
-          priority: 10
-        });
-        await notification.save();
+        await notificationService.sendFoundLostStatusUpdate(
+          post.student._id,
+          post,
+          status,
+          req.user.name,
+          req.user._id
+        );
 
         console.log('🔔 Found/Lost status update notification sent to student:', post.student._id);
       } catch (notificationError) {
@@ -504,13 +483,15 @@ export const adminUpdatePostStatus = async (req, res) => {
 // Admin: Get analytics
 export const getFoundLostAnalytics = async (req, res) => {
   try {
-    const [totalPosts, foundPosts, lostPosts, activePosts, claimedPosts, closedPosts] = await Promise.all([
+    const [totalPosts, foundPosts, lostPosts, activePosts, claimedPosts, closedPosts, pendingPosts, rejectedPosts] = await Promise.all([
       FoundLost.countDocuments(),
       FoundLost.countDocuments({ type: 'found' }),
       FoundLost.countDocuments({ type: 'lost' }),
       FoundLost.countDocuments({ status: 'active' }),
       FoundLost.countDocuments({ status: 'claimed' }),
-      FoundLost.countDocuments({ status: 'closed' })
+      FoundLost.countDocuments({ status: 'closed' }),
+      FoundLost.countDocuments({ status: 'pending' }),
+      FoundLost.countDocuments({ status: 'rejected' })
     ]);
 
     // Category breakdown
@@ -543,6 +524,8 @@ export const getFoundLostAnalytics = async (req, res) => {
         activePosts,
         claimedPosts,
         closedPosts,
+        pendingPosts,
+        rejectedPosts,
         categoryStats,
         recentPosts
       }

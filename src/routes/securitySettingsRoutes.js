@@ -5,7 +5,10 @@ import { getSettings, updateSettings } from '../controllers/securitySettingsCont
 
 const router = express.Router();
 
+// GET /api/security-settings - Get current security settings
 router.get('/', getSettings);
-router.post('/', updateSettings);
+
+// PUT /api/security-settings - Update security settings
+router.put('/', updateSettings);
 
 export default router; 
