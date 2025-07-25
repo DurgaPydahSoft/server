@@ -34,15 +34,19 @@ const createSuperAdmin = async () => {
       password: process.env.SUPER_ADMIN_PASSWORD || 'superadmin123',
       role: 'super_admin',
       permissions: [
+        'dashboard_home',
         'room_management',
         'student_management',
-        'complaint_management',
+        'maintenance_ticket_management',
         'leave_management',
         'announcement_management',
         'poll_management',
-        'member_management',
         'menu_management',
-        'course_management'
+        'course_management',
+        'attendance_management',
+        'found_lost_management',
+        'fee_management',
+        'feature_controls'
       ],
       isActive: true
     });
@@ -53,7 +57,8 @@ const createSuperAdmin = async () => {
     console.log('Username: superadmin');
     console.log('Password: superadmin123');
     console.log('Role: super_admin');
-    console.log('Permissions: All permissions granted');
+    console.log('Permissions: All permissions granted with full access');
+    console.log('Note: The pre-save hook will automatically set all permissions to full access level');
     process.exit(0);
   } catch (error) {
     console.error('Error creating super admin:', error);
