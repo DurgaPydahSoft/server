@@ -614,4 +614,55 @@ export const deletePrincipal = async (req, res, next) => {
     console.error('🎓 Error deleting principal:', error);
     next(error);
   }
+};
+
+// Reset admin password (for sub-admins and principals)
+export const resetAdminPassword = async (req, res, next) => {
+  try {
+    const { newPassword } = req.body;
+    
+    console.log('🔐 Admin password reset request for:', req.admin.username);
+    
+    // Find the admin
+    const admin = await Admin.findById(req.admin._id);
+    
+    if (!admin) {
+      throw createError(404, 'Admin not found');
+    }
+
+    // Update password
+    admin.password = newPassword;
+    await admin.save();
+
+    // Generate new token
+    const token = jwt.sign(
+      { _id: admin._id, role: admin.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '50d' }
+    );
+
+    console.log('🔐 Admin password reset successful for:', admin.username);
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        admin: {
+          id: admin._id,
+          username: admin.username,
+          role: admin.role,
+          permissions: admin.permissions,
+          permissionAccessLevels: admin.permissionAccessLevels,
+          isActive: admin.isActive,
+          hostelType: admin.hostelType,
+          course: admin.course,
+          leaveManagementCourses: admin.leaveManagementCourses
+        }
+      },
+      message: 'Password reset successfully'
+    });
+  } catch (error) {
+    console.error('🔐 Error resetting admin password:', error);
+    next(error);
+  }
 }; 

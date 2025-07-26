@@ -12,7 +12,8 @@ import {
   getPrincipals,
   updatePrincipal,
   deletePrincipal,
-  adminLogin
+  adminLogin,
+  resetAdminPassword
 } from '../controllers/adminManagementController.js';
 import { adminAuth, superAdminAuth } from '../middleware/authMiddleware.js';
 
@@ -69,6 +70,9 @@ router.get('/validate', adminAuth, async (req, res) => {
     res.status(500).json({ success: false, message: 'Validation error' });
   }
 });
+
+// Password reset route for admins (sub-admins and principals) - accessible by all admins
+router.post('/reset-password', adminAuth, resetAdminPassword);
 
 // Protected routes - only super admin can access
 router.use(superAdminAuth);

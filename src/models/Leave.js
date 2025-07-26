@@ -56,7 +56,7 @@ const leaveSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Pending', 'Pending OTP Verification', 'Approved', 'Rejected', 'Warden Recommended', 'Principal Approved', 'Principal Rejected'],
+    enum: ['Pending', 'Pending OTP Verification', 'Warden Verified', 'Approved', 'Rejected', 'Warden Recommended', 'Principal Approved', 'Principal Rejected'],
     default: 'Pending'
   },
   otpCode: {
@@ -80,6 +80,14 @@ const leaveSchema = new mongoose.Schema({
     ref: 'User'
   },
   approvedAt: {
+    type: Date
+  },
+  // Warden verification fields
+  verifiedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  verifiedAt: {
     type: Date
   },
   // New fields for Stay in Hostel workflow

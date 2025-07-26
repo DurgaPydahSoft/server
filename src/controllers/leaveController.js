@@ -1,5 +1,7 @@
 import Leave from '../models/Leave.js';
 import User from '../models/User.js';
+import Admin from '../models/Admin.js';
+import Course from '../models/Course.js';
 import { createError } from '../utils/error.js';
 import { sendSMS } from '../utils/smsService.js';
 import Notification from '../models/Notification.js';
@@ -394,20 +396,71 @@ export const verifyOTPAndApprove = async (req, res, next) => {
       throw createError(400, 'Invalid OTP');
     }
 
-    leave.status = 'Approved';
-    leave.approvedBy = adminId;
-    leave.approvedAt = new Date();
-    await leave.save();
+    // For Leave and Permission requests, follow the warden-principal workflow
+    if (leave.applicationType === 'Leave' || leave.applicationType === 'Permission') {
+      // Set status to Warden Verified and forward to principal
+      leave.status = 'Warden Verified';
+      leave.verifiedBy = adminId;
+      leave.verifiedAt = new Date();
+      await leave.save();
 
-    // Removed SMS sending logic here
-
-    res.json({
-      success: true,
-      data: {
-        leave,
-        message: 'Leave request approved successfully'
+      // Notify principals assigned to the student's course
+      const studentCourseId = leave.student.course._id || leave.student.course;
+      const principals = await Admin.find({ 
+        role: 'principal',
+        course: studentCourseId,
+        isActive: true
+      });
+      
+      const admin = await Admin.findById(adminId);
+      const notificationTitle = 'Leave Request Ready for Approval';
+      const notificationMessage = `${leave.student?.name || 'A student'}'s ${leave.applicationType} request has been verified by admin and is ready for your approval`;
+      
+      console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseId}`);
+      
+      for (const principal of principals) {
+        await Notification.createNotification({
+          type: 'leave',
+          recipient: principal._id,
+          recipientModel: 'Admin',
+          sender: admin._id,
+          title: notificationTitle,
+          message: notificationMessage,
+          relatedId: leave._id,
+          onModel: 'Leave',
+          priority: 'high'
+        });
+        await sendOneSignalNotification(principal._id, {
+          title: notificationTitle,
+          message: notificationMessage,
+          type: 'leave',
+          relatedId: leave._id,
+          priority: 10
+        });
       }
-    });
+
+      res.json({
+        success: true,
+        data: {
+          leave,
+          message: 'OTP verified successfully. Request forwarded to principal for approval.'
+        }
+      });
+    } else {
+      // For Stay in Hostel requests, admin can approve directly
+      leave.status = 'Approved';
+      leave.approvedBy = adminId;
+      leave.approvedAt = new Date();
+      await leave.save();
+
+      res.json({
+        success: true,
+        data: {
+          leave,
+          message: 'Leave request approved successfully'
+        }
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -444,21 +497,58 @@ export const rejectLeaveRequest = async (req, res, next) => {
       throw createError(400, 'Leave request is already processed');
     }
 
-    leave.status = 'Rejected';
-    leave.rejectionReason = rejectionReason;
-    leave.approvedBy = adminId;
-    leave.approvedAt = new Date();
-    await leave.save();
+    // For Leave and Permission requests, admin can reject directly (no need for principal)
+    if (leave.applicationType === 'Leave' || leave.applicationType === 'Permission') {
+      leave.status = 'Rejected';
+      leave.rejectionReason = `Admin: ${rejectionReason}`;
+      leave.approvedBy = adminId;
+      leave.approvedAt = new Date();
+      await leave.save();
 
-    // No SMS sent on rejection
+      // Notify student
+      await Notification.createNotification({
+        type: 'leave',
+        recipient: leave.student._id,
+        recipientModel: 'User',
+        sender: adminId,
+        title: 'Leave Request Rejected',
+        message: `Your ${leave.applicationType} request has been rejected by the admin`,
+        relatedId: leave._id,
+        onModel: 'Leave',
+        priority: 'high'
+      });
 
-    res.json({
-      success: true,
-      data: {
-        leave,
-        message: 'Leave request rejected'
-      }
-    });
+      await sendOneSignalNotification(leave.student._id, {
+        title: 'Leave Request Rejected',
+        message: `Your ${leave.applicationType} request has been rejected by the admin`,
+        type: 'leave',
+        relatedId: leave._id,
+        priority: 10
+      });
+
+      res.json({
+        success: true,
+        data: {
+          leave,
+          message: 'Leave request rejected'
+        }
+      });
+    } else {
+      // For Stay in Hostel requests, admin can reject directly
+      leave.status = 'Rejected';
+      leave.rejectionReason = `Admin: ${rejectionReason}`;
+      leave.approvedBy = adminId;
+      leave.approvedAt = new Date();
+      await leave.save();
+
+      res.json({
+        success: true,
+        data: {
+          leave,
+          message: 'Leave request rejected'
+        }
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -952,6 +1042,539 @@ export const wardenRecommendation = async (req, res, next) => {
   }
 };
 
+// Get leave requests for warden (all types except Stay in Hostel)
+export const getWardenLeaveRequests = async (req, res, next) => {
+  try {
+    console.log('Getting warden leave requests with query:', req.query);
+    const { status, applicationType, page = 1, limit = 10 } = req.query;
+    const query = {};
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (applicationType) {
+      query.applicationType = applicationType;
+    }
+
+    // Exclude Stay in Hostel requests (they have their own workflow)
+    query.applicationType = { $ne: 'Stay in Hostel' };
+
+    // Exclude bulk outing leave records
+    query.reason = { $not: /^Bulk outing:/ };
+
+    console.log('MongoDB query:', query);
+
+    const leaves = await Leave.find(query)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      })
+      .populate('approvedBy', 'name')
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
+
+    console.log('Found leaves:', leaves);
+
+    const count = await Leave.countDocuments(query);
+    console.log('Total count:', count);
+
+    res.json({
+      success: true,
+      data: {
+        leaves,
+        totalPages: Math.ceil(count / limit),
+        currentPage: page,
+        totalRequests: count
+      }
+    });
+  } catch (error) {
+    console.error('Error in getWardenLeaveRequests:', error);
+    next(error);
+  }
+};
+
+// Warden verify OTP and forward to principal
+export const wardenVerifyOTP = async (req, res, next) => {
+  try {
+    const { leaveId, otp } = req.body;
+    const wardenId = req.warden._id;
+
+    const leave = await Leave.findById(leaveId)
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
+      
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+
+    if (leave.applicationType === 'Stay in Hostel') {
+      throw createError(400, 'Stay in Hostel requests have a different workflow');
+    }
+
+    if (leave.status !== 'Pending OTP Verification') {
+      throw createError(400, 'Invalid leave status for OTP verification');
+    }
+
+    if (leave.otpCode !== otp) {
+      throw createError(400, 'Invalid OTP');
+    }
+
+    // Update status to Warden Verified and forward to principal
+    leave.status = 'Warden Verified';
+    leave.verifiedBy = wardenId;
+    leave.verifiedAt = new Date();
+    await leave.save();
+    
+    console.log('Warden verified OTP. Updated leave status to:', leave.status);
+    console.log('Leave ID:', leave._id);
+
+    // Notify principals assigned to the student's course
+    const studentCourseId = leave.student.course._id || leave.student.course;
+    const principals = await Admin.find({ 
+      role: 'principal',
+      course: studentCourseId,
+      isActive: true
+    });
+    
+    const warden = await Admin.findById(wardenId);
+    const notificationTitle = 'Leave Request Ready for Approval';
+    const notificationMessage = `${leave.student?.name || 'A student'}'s ${leave.applicationType} request has been verified by warden and is ready for your approval`;
+    
+    console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseId}`);
+    
+          for (const principal of principals) {
+        await Notification.createNotification({
+          type: 'leave',
+          recipient: principal._id,
+          recipientModel: 'Admin',
+          sender: warden._id,
+          title: notificationTitle,
+          message: notificationMessage,
+          relatedId: leave._id,
+          onModel: 'Leave',
+          priority: 'high'
+        });
+      await sendOneSignalNotification(principal._id, {
+        title: notificationTitle,
+        message: notificationMessage,
+        type: 'leave',
+        relatedId: leave._id,
+        priority: 10
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message: 'OTP verified successfully. Request forwarded to principal for approval.'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Warden reject leave request
+export const wardenRejectLeave = async (req, res, next) => {
+  try {
+    const { leaveId, rejectionReason } = req.body;
+    const wardenId = req.warden._id;
+
+    const leave = await Leave.findById(leaveId)
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
+      
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+
+    if (leave.applicationType === 'Stay in Hostel') {
+      throw createError(400, 'Stay in Hostel requests have a different workflow');
+    }
+
+    if (leave.status === 'Approved' || leave.status === 'Rejected') {
+      throw createError(400, 'Leave request is already processed');
+    }
+
+    leave.status = 'Rejected';
+    leave.rejectionReason = `Warden: ${rejectionReason}`;
+    leave.approvedBy = wardenId;
+    leave.approvedAt = new Date();
+    await leave.save();
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message: 'Leave request rejected by warden'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get leave requests for principal (all types except Stay in Hostel)
+export const getPrincipalLeaveRequests = async (req, res, next) => {
+  try {
+    console.log('Getting principal leave requests with query:', req.query);
+    const { status, applicationType, page = 1, limit = 10 } = req.query;
+    const principalId = req.principal._id;
+    
+    // Get principal's assigned course
+    const principal = await Admin.findById(principalId).select('course').populate('course', 'name code');
+    console.log('🔍 Raw principal data:', principal);
+    
+    if (!principal) {
+      throw createError(400, 'Principal not found');
+    }
+    
+    if (!principal.course) {
+      throw createError(400, 'Principal is not assigned to any course');
+    }
+    
+    // Debug: Let's also check what courses exist in the system
+    const allCourses = await Course.find({}).select('_id name code');
+    console.log('🔍 All courses in system:', allCourses);
+    
+    console.log('🔍 Principal details:', {
+      id: principal._id,
+      course: principal.course,
+      courseId: principal.course._id || principal.course
+    });
+    
+    const query = {};
+
+    if (status) {
+      query.status = status;
+    }
+
+    if (applicationType) {
+      query.applicationType = applicationType;
+    }
+
+    // Exclude Stay in Hostel requests (they have their own workflow)
+    query.applicationType = { $ne: 'Stay in Hostel' };
+
+    // Exclude bulk outing leave records
+    query.reason = { $not: /^Bulk outing:/ };
+
+    // Debug: Let's also check what leaves exist without any filters
+    const allLeavesNoFilter = await Leave.find({}).populate('student', 'name course').limit(3);
+    console.log('🔍 Sample leaves without filters:', allLeavesNoFilter.map(l => ({
+      id: l._id,
+      student: l.student?.name,
+      course: l.student?.course
+    })));
+
+    console.log('🔍 MongoDB query:', query);
+    console.log('🔍 Principal course ID:', principal.course._id || principal.course);
+
+    // First, get all leaves that match the query
+    const allLeaves = await Leave.find(query)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code _id' },
+          { path: 'branch', select: 'name code' }
+        ]
+      })
+      .populate('approvedBy', 'name')
+      .populate('verifiedBy', 'name')
+      .sort({ createdAt: -1 });
+
+    console.log(`🔍 Found ${allLeaves.length} total leaves before filtering`);
+
+    // Debug: Log first few leaves to see course structure
+    if (allLeaves.length > 0) {
+      console.log('🔍 Sample leave student course structure:', {
+        leaveId: allLeaves[0]._id,
+        student: allLeaves[0].student?.name,
+        studentCourse: allLeaves[0].student?.course,
+        studentCourseId: allLeaves[0].student?.course?._id || allLeaves[0].student?.course
+      });
+    }
+
+    // Filter leaves to only show students from principal's assigned course
+    const principalCourseId = principal.course._id || principal.course;
+    const filteredLeaves = allLeaves.filter(leave => {
+      const studentCourseId = leave.student?.course?._id || leave.student?.course;
+      const matches = studentCourseId && studentCourseId.toString() === principalCourseId.toString();
+      
+      // Only log first few for debugging
+      if (allLeaves.indexOf(leave) < 3) {
+        console.log(`🔍 Leave ${leave._id}: Student course ${studentCourseId} vs Principal course ${principalCourseId} = ${matches}`);
+      }
+      
+      return matches;
+    });
+
+    console.log(`🔍 Filtered to ${filteredLeaves.length} leaves for principal's course`);
+
+    // Apply pagination to filtered results
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedLeaves = filteredLeaves.slice(startIndex, endIndex);
+
+    console.log(`🔍 Paginated: showing ${paginatedLeaves.length} leaves (page ${page}, limit ${limit})`);
+
+    res.json({
+      success: true,
+      data: {
+        leaves: paginatedLeaves,
+        totalPages: Math.ceil(filteredLeaves.length / limit),
+        currentPage: page,
+        totalRequests: filteredLeaves.length,
+        debug: {
+          principalCourse: principal.course,
+          principalCourseId: principalCourseId,
+          totalLeavesFound: allLeaves.length,
+          filteredLeavesCount: filteredLeaves.length,
+          paginatedLeavesCount: paginatedLeaves.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getPrincipalLeaveRequests:', error);
+    next(error);
+  }
+};
+
+// Principal approve leave request
+export const principalApproveLeave = async (req, res, next) => {
+  try {
+    const { leaveId, comment } = req.body;
+    const principalId = req.principal._id;
+
+    console.log('Principal trying to approve leave:', leaveId);
+    console.log('Request body:', req.body);
+
+    // Get principal's assigned course
+    const principal = await Admin.findById(principalId).select('course').populate('course', 'name code');
+    if (!principal || !principal.course) {
+      throw createError(400, 'Principal is not assigned to any course');
+    }
+
+    const leave = await Leave.findById(leaveId)
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
+      
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+
+    console.log('Found leave request:', {
+      id: leave._id,
+      status: leave.status,
+      applicationType: leave.applicationType,
+      studentName: leave.student?.name,
+      studentCourse: leave.student?.course?._id || leave.student?.course,
+      principalCourse: principal.course
+    });
+
+    // Check if principal is assigned to the student's course
+    const studentCourseId = leave.student.course._id || leave.student.course;
+    const principalCourseId = principal.course._id || principal.course;
+    
+    console.log('🔍 Course comparison:', {
+      studentCourseId: studentCourseId,
+      studentCourseIdType: typeof studentCourseId,
+      principalCourseId: principalCourseId,
+      principalCourseIdType: typeof principalCourseId,
+      studentCourseIdString: studentCourseId?.toString(),
+      principalCourseIdString: principalCourseId?.toString(),
+      matches: studentCourseId?.toString() === principalCourseId?.toString()
+    });
+    
+    if (studentCourseId?.toString() !== principalCourseId?.toString()) {
+      throw createError(403, 'You are not authorized to approve leave requests for this student\'s course');
+    }
+
+    if (leave.applicationType === 'Stay in Hostel') {
+      throw createError(400, 'Stay in Hostel requests have a different workflow');
+    }
+
+    if (leave.status === 'Approved') {
+      throw createError(400, 'Leave request is already approved');
+    }
+
+    if (leave.status === 'Rejected') {
+      throw createError(400, 'Leave request is already rejected');
+    }
+
+    if (leave.status !== 'Warden Verified') {
+      console.log('Status mismatch. Expected: Warden Verified, Actual:', leave.status);
+      throw createError(400, `Leave request must be verified by warden or admin first. Current status: ${leave.status}`);
+    }
+
+    leave.status = 'Approved';
+    leave.approvedBy = principalId;
+    leave.approvedAt = new Date();
+    if (comment) {
+      leave.principalComment = comment;
+    }
+    await leave.save();
+
+    // Notify student
+    await Notification.createNotification({
+      type: 'leave',
+      recipient: leave.student._id,
+      recipientModel: 'User',
+      sender: principalId,
+      title: 'Leave Request Approved',
+      message: `Your ${leave.applicationType} request has been approved by the principal`,
+      relatedId: leave._id,
+      onModel: 'Leave',
+      priority: 'high'
+    });
+
+    await sendOneSignalNotification(leave.student._id, {
+      title: 'Leave Request Approved',
+      message: `Your ${leave.applicationType} request has been approved by the principal`,
+      type: 'leave',
+      relatedId: leave._id,
+      priority: 10
+    });
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message: 'Leave request approved successfully'
+      }
+    });
+  } catch (error) {
+    console.error('Error in principalApproveLeave:', error);
+    next(error);
+  }
+};
+
+// Principal reject leave request
+export const principalRejectLeave = async (req, res, next) => {
+  try {
+    const { leaveId, rejectionReason } = req.body;
+    const principalId = req.principal._id;
+
+    // Get principal's assigned course
+    const principal = await Admin.findById(principalId).select('course').populate('course', 'name code');
+    if (!principal || !principal.course) {
+      throw createError(400, 'Principal is not assigned to any course');
+    }
+
+    const leave = await Leave.findById(leaveId)
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
+      
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+
+    // Check if principal is assigned to the student's course
+    const studentCourseId = leave.student.course._id || leave.student.course;
+    const principalCourseId = principal.course._id || principal.course;
+    
+    console.log('🔍 Course comparison in reject:', {
+      studentCourseId: studentCourseId,
+      studentCourseIdType: typeof studentCourseId,
+      principalCourseId: principalCourseId,
+      principalCourseIdType: typeof principalCourseId,
+      studentCourseIdString: studentCourseId?.toString(),
+      principalCourseIdString: principalCourseId?.toString(),
+      matches: studentCourseId?.toString() === principalCourseId?.toString()
+    });
+    
+    if (studentCourseId?.toString() !== principalCourseId?.toString()) {
+      throw createError(403, 'You are not authorized to reject leave requests for this student\'s course');
+    }
+
+    if (leave.applicationType === 'Stay in Hostel') {
+      throw createError(400, 'Stay in Hostel requests have a different workflow');
+    }
+
+    if (leave.status === 'Approved') {
+      throw createError(400, 'Leave request is already approved');
+    }
+
+    if (leave.status === 'Rejected') {
+      throw createError(400, 'Leave request is already rejected');
+    }
+
+    if (leave.status !== 'Warden Verified') {
+      console.log('Status mismatch in reject. Expected: Warden Verified, Actual:', leave.status);
+      throw createError(400, `Leave request must be verified by warden or admin first. Current status: ${leave.status}`);
+    }
+
+    leave.status = 'Rejected';
+    leave.rejectionReason = `Principal: ${rejectionReason}`;
+    leave.approvedBy = principalId;
+    leave.approvedAt = new Date();
+    await leave.save();
+
+    // Notify student
+    await Notification.createNotification({
+      type: 'leave',
+      recipient: leave.student._id,
+      recipientModel: 'User',
+      sender: principalId,
+      title: 'Leave Request Rejected',
+      message: `Your ${leave.applicationType} request has been rejected by the principal`,
+      relatedId: leave._id,
+      onModel: 'Leave',
+      priority: 'high'
+    });
+
+    await sendOneSignalNotification(leave.student._id, {
+      title: 'Leave Request Rejected',
+      message: `Your ${leave.applicationType} request has been rejected by the principal`,
+      type: 'leave',
+      relatedId: leave._id,
+      priority: 10
+    });
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message: 'Leave request rejected'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Principal decision for Stay in Hostel request
 export const principalDecision = async (req, res, next) => {
   try {
@@ -989,18 +1612,20 @@ export const principalDecision = async (req, res, next) => {
     await leave.save();
 
     // Notify all wardens
-    const wardenUsers = await User.find({ role: 'warden' });
-    const principal = await User.findById(req.principal._id);
+    const wardenUsers = await Admin.find({ role: 'warden', isActive: true });
+    const principal = await Admin.findById(req.principal._id);
     const principalNotifTitle = 'Principal Decision for Stay in Hostel';
     const principalNotifMsg = `${leave.student?.name || 'A student'}'s Stay in Hostel request: Principal ${decision} (${comment || ''})`;
     for (const warden of wardenUsers) {
       await Notification.createNotification({
         type: 'leave',
         recipient: warden._id,
+        recipientModel: 'Admin',
         sender: principal._id,
         title: principalNotifTitle,
         message: principalNotifMsg,
         relatedId: leave._id,
+        onModel: 'Leave',
         priority: 'high'
       });
       await sendOneSignalNotification(warden._id, {
