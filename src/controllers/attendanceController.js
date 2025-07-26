@@ -193,10 +193,14 @@ export const takeAttendance = async (req, res, next) => {
 // Get attendance for a specific date
 export const getAttendanceForDate = async (req, res, next) => {
   try {
-    const { date } = req.query;
+    const { date, course, branch, gender, studentId, status } = req.query;
     const normalizedDate = normalizeDate(date || new Date());
 
-    const attendance = await Attendance.find({ date: normalizedDate })
+    // Build base query for attendance
+    let attendanceQuery = { date: normalizedDate };
+
+    // Get all attendance records for the date first
+    let attendance = await Attendance.find(attendanceQuery)
       .populate({
         path: 'student',
         select: 'name rollNumber course branch year gender roomNumber',
@@ -207,15 +211,65 @@ export const getAttendanceForDate = async (req, res, next) => {
       })
       .populate('markedBy', 'name');
 
-    // Get attendance statistics
-    const stats = await Attendance.getAttendanceStats(normalizedDate);
-    const statistics = stats[0] || {
-      totalStudents: 0,
-      morningPresent: 0,
-      eveningPresent: 0,
-      fullyPresent: 0,
-      partiallyPresent: 0,
-      absent: 0
+    // Apply filters to the populated attendance records
+    if (course) {
+      attendance = attendance.filter(att => 
+        att.student?.course?._id?.toString() === course || 
+        att.student?.course?.toString() === course
+      );
+    }
+
+    if (branch) {
+      attendance = attendance.filter(att => 
+        att.student?.branch?._id?.toString() === branch || 
+        att.student?.branch?.toString() === branch
+      );
+    }
+
+    if (gender) {
+      attendance = attendance.filter(att => 
+        att.student?.gender === gender
+      );
+    }
+
+    if (studentId) {
+      attendance = attendance.filter(att => 
+        att.student?.rollNumber?.toLowerCase().includes(studentId.toLowerCase())
+      );
+    }
+
+    if (status) {
+      attendance = attendance.filter(att => {
+        const isPresent = att.morning && att.evening && att.night;
+        const isPartial = (att.morning || att.evening || att.night) && !isPresent;
+        const isAbsent = !att.morning && !att.evening && !att.night;
+        
+        if (status === 'Present') return isPresent;
+        if (status === 'Partial') return isPartial;
+        if (status === 'Absent') return isAbsent;
+        return true;
+      });
+    }
+
+    // Calculate statistics from filtered attendance
+    const totalStudents = attendance.length;
+    const morningPresent = attendance.filter(att => att.morning).length;
+    const eveningPresent = attendance.filter(att => att.evening).length;
+    const nightPresent = attendance.filter(att => att.night).length;
+    const fullyPresent = attendance.filter(att => att.morning && att.evening && att.night).length;
+    const partiallyPresent = attendance.filter(att => 
+      (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)
+    ).length;
+    const absent = attendance.filter(att => !att.morning && !att.evening && !att.night).length;
+
+    const statistics = {
+      totalStudents,
+      morningPresent,
+      eveningPresent,
+      nightPresent,
+      fullyPresent,
+      partiallyPresent,
+      absent
     };
 
     res.json({
@@ -234,7 +288,7 @@ export const getAttendanceForDate = async (req, res, next) => {
 // Get attendance for a date range
 export const getAttendanceForDateRange = async (req, res, next) => {
   try {
-    const { startDate, endDate, studentId } = req.query;
+    const { startDate, endDate, course, branch, gender, studentId, status } = req.query;
     
     if (!startDate || !endDate) {
       throw createError(400, 'Start date and end date are required');
@@ -247,6 +301,7 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       throw createError(400, 'Start date cannot be after end date');
     }
 
+    // Build base query for attendance
     let query = {
       date: { $gte: start, $lte: end }
     };
@@ -256,7 +311,8 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       query.student = studentId;
     }
 
-    const attendance = await Attendance.find(query)
+    // Get all attendance records for the date range first
+    let attendance = await Attendance.find(query)
       .populate({
         path: 'student',
         select: 'name rollNumber course branch year gender roomNumber',
@@ -268,13 +324,69 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       .populate('markedBy', 'name')
       .sort({ date: -1, 'student.name': 1 });
 
+    // Apply additional filters to the populated attendance records
+    if (course) {
+      attendance = attendance.filter(att => 
+        att.student?.course?._id?.toString() === course || 
+        att.student?.course?.toString() === course
+      );
+    }
+
+    if (branch) {
+      attendance = attendance.filter(att => 
+        att.student?.branch?._id?.toString() === branch || 
+        att.student?.branch?.toString() === branch
+      );
+    }
+
+    if (gender) {
+      attendance = attendance.filter(att => 
+        att.student?.gender === gender
+      );
+    }
+
+    if (status) {
+      attendance = attendance.filter(att => {
+        const isPresent = att.morning && att.evening && att.night;
+        const isPartial = (att.morning || att.evening || att.night) && !isPresent;
+        const isAbsent = !att.morning && !att.evening && !att.night;
+        
+        if (status === 'Present') return isPresent;
+        if (status === 'Partial') return isPartial;
+        if (status === 'Absent') return isAbsent;
+        return true;
+      });
+    }
+
+    // Calculate statistics from filtered attendance
+    const totalStudents = attendance.length;
+    const morningPresent = attendance.filter(att => att.morning).length;
+    const eveningPresent = attendance.filter(att => att.evening).length;
+    const nightPresent = attendance.filter(att => att.night).length;
+    const fullyPresent = attendance.filter(att => att.morning && att.evening && att.night).length;
+    const partiallyPresent = attendance.filter(att => 
+      (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)
+    ).length;
+    const absent = attendance.filter(att => !att.morning && !att.evening && !att.night).length;
+
+    const statistics = {
+      totalStudents,
+      morningPresent,
+      eveningPresent,
+      nightPresent,
+      fullyPresent,
+      partiallyPresent,
+      absent
+    };
+
     res.json({
       success: true,
       data: {
         attendance,
         startDate: start,
         endDate: end,
-        totalRecords: attendance.length
+        totalRecords: attendance.length,
+        statistics
       }
     });
   } catch (error) {
