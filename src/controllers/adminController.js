@@ -1764,4 +1764,73 @@ export const resetStudentPassword = async (req, res, next) => {
     console.error('Admin password reset error:', error);
     next(error);
   }
+};
+
+// Get students by principal's assigned course
+export const getStudentsByPrincipalCourse = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 10, search, gender, category, roomNumber, batch, academicYear, hostelStatus } = req.query;
+    const principal = req.principal; // From principalAuth middleware
+
+    console.log('🎓 Principal students request:', {
+      principalId: principal._id,
+      principalCourse: principal.course,
+      filters: req.query
+    });
+
+    // Build query based on principal's assigned course
+    const query = {
+      course: principal.course,
+      role: 'student'
+    };
+
+    // Add search filter
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { rollNumber: { $regex: search, $options: 'i' } },
+        { hostelId: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Add other filters
+    if (gender) query.gender = gender;
+    if (category) query.category = category;
+    if (roomNumber) query.roomNumber = roomNumber;
+    if (batch) query.batch = batch;
+    if (academicYear) query.academicYear = academicYear;
+    if (hostelStatus) query.hostelStatus = hostelStatus;
+
+    console.log('🎓 Final query:', JSON.stringify(query, null, 2));
+
+    // Calculate pagination
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const totalStudents = await User.countDocuments(query);
+    const totalPages = Math.ceil(totalStudents / parseInt(limit));
+
+    // Fetch students with pagination and population
+    const students = await User.find(query)
+      .populate('course', 'name code')
+      .populate('branch', 'name code')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select('-password');
+
+    console.log('🎓 Found students:', students.length);
+
+    res.json({
+      success: true,
+      data: {
+        students,
+        totalStudents,
+        totalPages,
+        currentPage: parseInt(page),
+        limit: parseInt(limit)
+      }
+    });
+  } catch (error) {
+    console.error('🎓 Error fetching students by principal course:', error);
+    next(error);
+  }
 }; 

@@ -17,6 +17,7 @@ import feeReminderRoutes from './feeReminderRoutes.js';
 import feeStructureRoutes from './feeStructureRoutes.js';
 import featureToggleRoutes from './featureToggleRoutes.js';
 import foundLostRoutes from './foundLostRoutes.js';
+import principalRoutes from './principalRoutes.js';
 
 const router = express.Router();
 
@@ -39,5 +40,6 @@ router.use('/fee-reminders', feeReminderRoutes);
 router.use('/fee-structure', feeStructureRoutes);
 router.use('/feature-toggles', featureToggleRoutes);
 router.use('/foundlost', foundLostRoutes);
+router.use('/principal', principalRoutes);
 
 export default router; 
