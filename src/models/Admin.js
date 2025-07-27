@@ -174,6 +174,17 @@ adminSchema.methods.isAdmin = function() {
   return this.role === 'super_admin' || this.role === 'sub_admin';
 };
 
+// Static method to generate random password
+adminSchema.statics.generateRandomPassword = function() {
+  const length = 10;
+  const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let password = "";
+  for (let i = 0; i < length; i++) {
+    password += charset.charAt(Math.floor(Math.random() * charset.length));
+  }
+  return password;
+};
+
 const Admin = mongoose.model('Admin', adminSchema);
 
 export default Admin; 

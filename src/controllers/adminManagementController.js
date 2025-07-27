@@ -1,11 +1,22 @@
 import Admin from '../models/Admin.js';
 import jwt from 'jsonwebtoken';
 import { createError } from '../utils/error.js';
+import { sendSubAdminRegistrationEmail } from '../utils/emailService.js';
 
 // Create a new sub-admin
 export const createSubAdmin = async (req, res, next) => {
   try {
-    const { username, password, permissions, leaveManagementCourses, permissionAccessLevels } = req.body;
+    const { 
+      username, 
+      password, 
+      permissions, 
+      leaveManagementCourses, 
+      permissionAccessLevels,
+      passwordDeliveryMethod,
+      email
+    } = req.body;
+
+    console.log('🔧 Creating sub-admin with delivery method:', passwordDeliveryMethod);
 
     // Check if username already exists
     const existingAdmin = await Admin.findOne({ username });
@@ -17,6 +28,23 @@ export const createSubAdmin = async (req, res, next) => {
     if (permissions && permissions.includes('leave_management')) {
       if (!leaveManagementCourses || leaveManagementCourses.length === 0) {
         throw createError(400, 'At least one course must be selected for leave management permission');
+      }
+    }
+
+    // Validate password delivery method (optional)
+    if (passwordDeliveryMethod && passwordDeliveryMethod !== '' && !['email', 'mobile'].includes(passwordDeliveryMethod)) {
+      throw createError(400, 'Password delivery method must be either "email" or "mobile"');
+    }
+
+    // Validate email if email delivery is selected
+    if (passwordDeliveryMethod === 'email') {
+      if (!email || !email.trim()) {
+        throw createError(400, 'Email address is required for email delivery');
+      }
+      // Basic email validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        throw createError(400, 'Invalid email address format');
       }
     }
 
@@ -33,13 +61,41 @@ export const createSubAdmin = async (req, res, next) => {
 
     const savedAdmin = await subAdmin.save();
     
+    // Send credentials via selected method (if any)
+    let deliveryResult = null;
+    
+    if (passwordDeliveryMethod === 'email') {
+      try {
+        console.log('📧 Sending sub-admin credentials via email to:', email);
+        deliveryResult = await sendSubAdminRegistrationEmail(
+          email,
+          username, // Using username as admin name for now
+          username,
+          password
+        );
+        console.log('📧 Email sent successfully:', deliveryResult);
+      } catch (emailError) {
+        console.error('📧 Error sending email:', emailError);
+        // Don't fail the creation if email fails, but log it
+        deliveryResult = { error: emailError.message };
+      }
+    } else if (passwordDeliveryMethod === 'mobile') {
+      // Mobile delivery placeholder for future implementation
+      console.log('📱 Mobile delivery requested but not implemented yet');
+      deliveryResult = { message: 'Mobile delivery not implemented yet' };
+    } else if (!passwordDeliveryMethod) {
+      // No delivery method selected
+      deliveryResult = { message: 'No credentials sent - admin can provide credentials manually' };
+    }
+    
     // Remove password from response
     const adminResponse = savedAdmin.toObject();
     delete adminResponse.password;
 
     res.status(201).json({
       success: true,
-      data: adminResponse
+      data: adminResponse,
+      deliveryResult
     });
   } catch (error) {
     next(error);
