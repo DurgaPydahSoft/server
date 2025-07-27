@@ -15,46 +15,68 @@ export const getStudentsForAttendance = async (req, res, next) => {
     const { date, course, branch, gender, category, roomNumber } = req.query;
     const normalizedDate = normalizeDate(date || new Date());
 
+    console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber });
+    console.log('🔍 getStudentsForAttendance - Normalized date:', normalizedDate);
+
     // Build query for active students
     const query = { 
       role: 'student', 
       hostelStatus: 'Active' 
     };
 
-    // Add filters if provided
-    if (course) query.course = course;
-    if (branch) query.branch = branch;
-    if (gender) query.gender = gender;
-    if (category) query.category = category;
-    if (roomNumber) query.roomNumber = roomNumber;
+    // Add filters if provided (only if they have valid values)
+    if (course && course.trim() !== '') query.course = course;
+    if (branch && branch.trim() !== '') query.branch = branch;
+    if (gender && gender.trim() !== '') query.gender = gender;
+    if (category && category.trim() !== '') query.category = category;
+    if (roomNumber && roomNumber.trim() !== '') query.roomNumber = roomNumber;
 
+    console.log('🔍 getStudentsForAttendance - Query:', query);
+    
     const students = await User.find(query)
       .select('name rollNumber course branch year gender roomNumber')
       .populate('course', 'name code')
       .populate('branch', 'name code')
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean(); // Use lean() for better performance and to avoid mongoose document issues
+
+    console.log('🔍 getStudentsForAttendance - Found students:', students.length);
 
     // Get existing attendance for the date
     const existingAttendance = await Attendance.find({
       date: normalizedDate
     }).populate('student', '_id');
 
-    const studentIdsWithAttendance = existingAttendance.map(att => att.student._id.toString());
+    console.log('🔍 getStudentsForAttendance - Found attendance records:', existingAttendance.length);
+    console.log('🔍 getStudentsForAttendance - Sample attendance record:', existingAttendance[0]);
+
+    // Filter out attendance records with null/undefined student references
+    const validAttendance = existingAttendance.filter(att => {
+      if (!att.student) {
+        console.warn('🔍 getStudentsForAttendance - Found attendance record with null student:', att._id);
+        return false;
+      }
+      return true;
+    });
+
+    const studentIdsWithAttendance = validAttendance
+      .filter(att => att.student && att.student._id) // Additional safety check
+      .map(att => att.student._id.toString());
 
     // Combine student data with attendance status
     const studentsWithAttendance = students.map(student => {
-      const attendance = existingAttendance.find(att => 
-        att.student._id.toString() === student._id.toString()
+      const attendance = validAttendance.find(att => 
+        att.student && att.student._id && att.student._id.toString() === student._id.toString()
       );
       
       return {
-        ...student.toObject(),
+        ...student, // No need for .toObject() since we're using lean()
         attendance: attendance ? {
-          morning: attendance.morning,
-          evening: attendance.evening,
-          night: attendance.night,
-          status: attendance.status,
-          percentage: attendance.percentage
+          morning: attendance.morning || false,
+          evening: attendance.evening || false,
+          night: attendance.night || false,
+          status: attendance.status || 'Absent',
+          percentage: attendance.percentage || 0
         } : {
           morning: false,
           evening: false,
@@ -65,6 +87,8 @@ export const getStudentsForAttendance = async (req, res, next) => {
       };
     });
 
+    console.log('🔍 getStudentsForAttendance - Processing complete, returning data');
+    
     res.json({
       success: true,
       data: {
@@ -75,6 +99,8 @@ export const getStudentsForAttendance = async (req, res, next) => {
       }
     });
   } catch (error) {
+    console.error('🔍 getStudentsForAttendance - Error:', error);
+    console.error('🔍 getStudentsForAttendance - Error stack:', error.stack);
     next(error);
   }
 };
