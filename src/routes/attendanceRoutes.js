@@ -17,7 +17,7 @@ import { protect, adminAuth, wardenAuth, principalAuth } from '../middleware/aut
 
 const router = express.Router();
 
-// Admin and Warden routes
+// Admin and Warden routes - using adminAuth which should handle both admin and warden roles
 router.get('/students', adminAuth, getStudentsForAttendance);
 router.post('/take', adminAuth, takeAttendance);
 router.get('/date', adminAuth, getAttendanceForDate);
