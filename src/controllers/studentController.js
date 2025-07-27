@@ -1,34 +1,33 @@
 import User from '../models/User.js';
+import Counter from '../models/Counter.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import XLSX from 'xlsx';
 import fs from 'fs';
 
 // Function to generate hostel ID
 const generateHostelId = async (gender) => {
-  console.log('Generating hostel ID for gender:', gender);
+  console.log('🔧 Generating hostel ID for gender:', gender);
   
   const currentYear = new Date().getFullYear().toString().slice(-2); // Get last 2 digits of year
   const prefix = gender === 'Male' ? 'BH' : 'GH';
   
-  console.log('Current year:', currentYear, 'Prefix:', prefix);
+  console.log('📅 Current year:', currentYear, 'Prefix:', prefix, 'Gender:', gender);
   
-  // Find the highest sequence number for the current year and gender
-  const pattern = new RegExp(`^${prefix}${currentYear}\\d{3}$`);
-  console.log('Search pattern:', pattern);
+  // Use a counter collection to ensure atomic sequence generation
+  const counterId = `hostel_${prefix}${currentYear}`;
   
-  const lastStudent = await User.findOne({ 
-    hostelId: pattern 
-  }).sort({ hostelId: -1 });
+  // Use findOneAndUpdate with upsert to atomically increment the counter
+  const counter = await Counter.findOneAndUpdate(
+    { _id: counterId },
+    { $inc: { sequence: 1 } },
+    { 
+      new: true, 
+      upsert: true,
+      setDefaultsOnInsert: true 
+    }
+  );
   
-  console.log('Last student found:', lastStudent ? lastStudent.hostelId : 'None');
-  
-  let sequence = 1;
-  if (lastStudent && lastStudent.hostelId) {
-    const lastSequence = parseInt(lastStudent.hostelId.slice(-3));
-    sequence = lastSequence + 1;
-    console.log('Last sequence:', lastSequence, 'New sequence:', sequence);
-  }
-  
+  const sequence = counter.sequence;
   const hostelId = `${prefix}${currentYear}${sequence.toString().padStart(3, '0')}`;
   console.log('Generated hostel ID:', hostelId);
   

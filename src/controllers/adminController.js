@@ -11,33 +11,32 @@ import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/e
 import xlsx from 'xlsx';
 import Branch from '../models/Branch.js';
 import Course from '../models/Course.js';
+import Counter from '../models/Counter.js';
 
 // Function to generate hostel ID (imported from studentController)
 const generateHostelId = async (gender) => {
-  console.log('Generating hostel ID for gender:', gender);
+  console.log('🔧 Generating hostel ID for gender:', gender);
   
   const currentYear = new Date().getFullYear().toString().slice(-2); // Get last 2 digits of year
   const prefix = gender === 'Male' ? 'BH' : 'GH';
   
-  console.log('Current year:', currentYear, 'Prefix:', prefix);
+  console.log('📅 Current year:', currentYear, 'Prefix:', prefix, 'Gender:', gender);
   
-  // Find the highest sequence number for the current year and gender
-  const pattern = new RegExp(`^${prefix}${currentYear}\\d{3}$`);
-  console.log('Search pattern:', pattern);
+  // Use a counter collection to ensure atomic sequence generation
+  const counterId = `hostel_${prefix}${currentYear}`;
   
-  const lastStudent = await User.findOne({ 
-    hostelId: pattern 
-  }).sort({ hostelId: -1 });
+  // Use findOneAndUpdate with upsert to atomically increment the counter
+  const counter = await Counter.findOneAndUpdate(
+    { _id: counterId },
+    { $inc: { sequence: 1 } },
+    { 
+      new: true, 
+      upsert: true,
+      setDefaultsOnInsert: true 
+    }
+  );
   
-  console.log('Last student found:', lastStudent ? lastStudent.hostelId : 'None');
-  
-  let sequence = 1;
-  if (lastStudent && lastStudent.hostelId) {
-    const lastSequence = parseInt(lastStudent.hostelId.slice(-3));
-    sequence = lastSequence + 1;
-    console.log('Last sequence:', lastSequence, 'New sequence:', sequence);
-  }
-  
+  const sequence = counter.sequence;
   const hostelId = `${prefix}${currentYear}${sequence.toString().padStart(3, '0')}`;
   console.log('Generated hostel ID:', hostelId);
   
@@ -682,10 +681,6 @@ export const bulkAddStudents = async (req, res, next) => {
 
       const generatedPassword = User.generateRandomPassword();
 
-      // Generate hostel ID for bulk students
-      const hostelId = await generateHostelId(String(Gender).trim() || 'Male');
-      console.log('Generated hostel ID for bulk student:', hostelId);
-
       // Find course and branch ObjectIds by name with robust case handling
       const CourseModel = (await import('../models/Course.js')).default;
       const BranchModel = (await import('../models/Branch.js')).default;
@@ -762,6 +757,10 @@ export const bulkAddStudents = async (req, res, next) => {
         });
         continue;
       }
+
+      // Generate hostel ID for bulk students (after gender normalization)
+      const hostelId = await generateHostelId(normalizedGender);
+      console.log('Generated hostel ID for bulk student:', hostelId, 'for gender:', normalizedGender);
 
       // Normalize category with case-insensitive handling
       const normalizedCategory = normalizeCategory(String(Category).trim());

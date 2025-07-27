@@ -18,6 +18,7 @@ import {
   searchStudentByRollNumber,
   resetStudentPassword
 } from '../controllers/adminController.js';
+import { initializeHostelCounters, getCounterStatus } from '../utils/initializeCounters.js';
 import { 
   getAllLeaveRequests,
   verifyOTPAndApprove,
@@ -176,6 +177,25 @@ router.post('/students/:id/reset-password', resetStudentPassword);
 
 // Utility routes
 router.get('/branches/:course', getBranchesByCourse);
+
+// Hostel ID counter management routes
+router.post('/counters/initialize', async (req, res) => {
+  try {
+    const result = await initializeHostelCounters();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/counters/status', async (req, res) => {
+  try {
+    const counters = await getCounterStatus();
+    res.json({ success: true, counters });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Electricity bill routes
 router.post('/rooms/:roomId/electricity', addElectricityBill);
