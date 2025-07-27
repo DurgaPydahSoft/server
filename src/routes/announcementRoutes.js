@@ -1,5 +1,5 @@
 import express from 'express';
-import { adminAuth, authenticateStudent, wardenAuth } from '../middleware/authMiddleware.js';
+import { adminAuth, authenticateStudent } from '../middleware/authMiddleware.js';
 import {
   createAnnouncement,
   listAnnouncements,
@@ -28,7 +28,7 @@ const upload = multer({
 // Routes
 router.post('/', upload.single('image'), adminAuth, createAnnouncement);
 router.get('/', authenticateStudent, listAnnouncements);
-router.get('/warden', wardenAuth, listAnnouncements);
+router.get('/warden', adminAuth, listAnnouncements);
 router.get('/admin/all', adminAuth, listAllAnnouncements);
 router.delete('/:id', adminAuth, deleteAnnouncement);
 

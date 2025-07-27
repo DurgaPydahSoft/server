@@ -96,7 +96,9 @@ app.use(cors({
     "Origin",
     "Cache-Control"
   ],
-  exposedHeaders: ["Content-Range", "X-Content-Range"]
+  exposedHeaders: ["Content-Range", "X-Content-Range"],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Add pre-flight OPTIONS handler
@@ -143,7 +145,19 @@ app.get('/api/health', (req, res) => {
     cashfreeUrl: 'https://api.cashfree.com/pg',
     hasCredentials: !!(process.env.CASHFREE_CLIENT_ID && process.env.CASHFREE_CLIENT_SECRET),
     environment: process.env.NODE_ENV || 'development',
-    jwtSecretConfigured: !!process.env.JWT_SECRET
+    jwtSecretConfigured: !!process.env.JWT_SECRET,
+    corsOrigins: [
+      "https://hostel-complaint-frontend.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "https://hms.pydahsoft.in",
+      "http://192.168.232.93:3000",
+      "http://192.168.3.186:3000",
+      "http://192.168.3.148:3000",
+      "https://18ae92c8dcb6.ngrok-free.app",
+      "https://*.ngrok-free.app"
+    ],
+    timestamp: new Date().toISOString()
   });
 });
 
