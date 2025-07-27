@@ -11,15 +11,11 @@ import User from '../models/User.js';
 class NotificationService {
   constructor() {
     this.isOneSignalAvailable = isOneSignalConfigured();
-    console.log('🔔 NotificationService initialized');
-    console.log('🔔 OneSignal available:', this.isOneSignalAvailable);
   }
 
   // Send notification to a single user
   async sendToUser(userId, notificationData) {
     try {
-      console.log('🔔 Sending notification to user:', userId);
-      console.log('🔔 Notification data:', notificationData);
 
       // Get user name for personalization
       const user = await User.findById(userId).select('name');
@@ -46,17 +42,17 @@ class NotificationService {
         
         const sent = await sendOneSignalNotification(userId, payload);
         if (sent) {
-          console.log('🔔 OneSignal notification sent successfully');
+          // OneSignal notification sent successfully
         } else {
-          console.log('🔔 OneSignal notification failed, but database notification created');
+          // OneSignal notification failed, but database notification created
         }
       } else {
-        console.log('🔔 OneSignal not available, only database notification created');
+        // OneSignal not available, only database notification created
       }
 
       return dbNotification;
     } catch (error) {
-      console.error('🔔 Error sending notification to user:', error);
+      console.error('Error sending notification to user:', error);
       return null;
     }
   }
@@ -64,8 +60,6 @@ class NotificationService {
   // Send notification to multiple users
   async sendToUsers(userIds, notificationData) {
     try {
-      console.log('🔔 Sending notification to users:', userIds.length);
-      console.log('🔔 Notification data:', notificationData);
 
       const results = [];
 

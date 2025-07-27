@@ -16,12 +16,8 @@ export const isOneSignalConfigured = () => {
 export const sendOneSignalNotification = async (userId, notificationData) => {
   try {
     if (!isOneSignalConfigured()) {
-      console.log('🔔 OneSignal not configured, skipping notification');
       return false;
     }
-
-    console.log('🔔 Sending OneSignal notification to user:', userId);
-    console.log('🔔 Notification data:', notificationData);
 
     // Build the notification payload according to OneSignal documentation
     const payload = {
@@ -53,7 +49,7 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
       enable_frequency_cap: true
     };
 
-    console.log('🔔 OneSignal payload:', JSON.stringify(payload, null, 2));
+
 
     const response = await axios.post(
       'https://api.onesignal.com/notifications',
@@ -66,17 +62,9 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
       }
     );
 
-    console.log('🔔 OneSignal notification sent successfully:', response.data);
     return true;
   } catch (error) {
-    console.error('🔔 Error sending OneSignal notification:', error.response?.data || error.message);
-    if (error.response) {
-      console.error('🔔 OneSignal API Error Details:', {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data
-      });
-    }
+    console.error('Error sending OneSignal notification:', error.response?.data || error.message);
     return false;
   }
 };
@@ -85,17 +73,12 @@ export const sendOneSignalNotification = async (userId, notificationData) => {
 export const sendOneSignalBulkNotification = async (userIds, notificationData) => {
   try {
     if (!isOneSignalConfigured()) {
-      console.log('🔔 OneSignal not configured, skipping bulk notification');
       return false;
     }
 
     if (!userIds || userIds.length === 0) {
-      console.log('🔔 No user IDs provided for bulk notification');
       return false;
     }
-
-    console.log('🔔 Sending OneSignal bulk notification to users:', userIds.length);
-    console.log('🔔 Notification data:', notificationData);
 
     const payload = {
       app_id: ONESIGNAL_APP_ID,

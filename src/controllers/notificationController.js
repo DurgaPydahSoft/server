@@ -11,7 +11,7 @@ export const getNotifications = async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    console.log('🔔 Fetching notifications for user:', userId);
+
 
     const notifications = await Notification.find({ recipient: userId })
       .populate('sender', 'name email')
@@ -22,7 +22,7 @@ export const getNotifications = async (req, res) => {
 
     const total = await Notification.countDocuments({ recipient: userId });
 
-    console.log('🔔 Found notifications:', notifications.length);
+
 
     res.status(200).json({
       success: true,
@@ -35,7 +35,7 @@ export const getNotifications = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('🔔 Error fetching notifications:', error);
+    console.error('Error fetching notifications:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch notifications',

@@ -26,7 +26,7 @@ const attendanceSchema = new mongoose.Schema({
   },
   markedBy: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    ref: 'Admin',
     required: [true, 'Marked by reference is required']
   },
   markedAt: {
@@ -75,7 +75,7 @@ attendanceSchema.statics.getAttendanceForDate = function(date) {
   return this.find({
     date: { $gte: startOfDay, $lte: endOfDay }
   }).populate('student', 'name rollNumber course branch year gender roomNumber')
-    .populate('markedBy', 'name')
+    .populate('markedBy', 'username role')
     .sort({ 'student.name': 1 });
 };
 

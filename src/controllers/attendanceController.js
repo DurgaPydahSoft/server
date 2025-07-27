@@ -100,77 +100,107 @@ export const takeAttendance = async (req, res, next) => {
     const results = [];
     const errors = [];
 
-    // Process each attendance record
+    // Extract all student IDs for batch validation
+    const studentIds = attendanceData
+      .filter(record => record.studentId)
+      .map(record => record.studentId);
+
+    // Batch validate all students at once
+    const validStudents = await User.find({ 
+      _id: { $in: studentIds }, 
+      role: 'student', 
+      hostelStatus: 'Active' 
+    }).select('_id name');
+
+    const validStudentIds = new Set(validStudents.map(student => student._id.toString()));
+    const studentMap = new Map(validStudents.map(student => [student._id.toString(), student]));
+
+    // Prepare bulk operations for attendance
+    const bulkOps = [];
+    const validRecords = [];
+
     for (const record of attendanceData) {
-      try {
-        const { studentId, morning, evening, night, notes } = record;
-        
-        if (!studentId) {
-          errors.push({ studentId, error: 'Student ID is required' });
-          continue;
-        }
+      const { studentId, morning, evening, night, notes } = record;
+      
+      if (!studentId) {
+        errors.push({ studentId, error: 'Student ID is required' });
+        continue;
+      }
 
-        // Validate student exists and is active
-        const student = await User.findOne({ 
-          _id: studentId, 
-          role: 'student', 
-          hostelStatus: 'Active' 
-        });
+      if (!validStudentIds.has(studentId)) {
+        errors.push({ studentId, error: 'Student not found or inactive' });
+        continue;
+      }
 
-        if (!student) {
-          errors.push({ studentId, error: 'Student not found or inactive' });
-          continue;
-        }
-
-        // Use upsert to create or update attendance
-        const attendance = await Attendance.findOneAndUpdate(
-          { student: studentId, date: normalizedDate },
-          {
-            morning: morning || false,
-            evening: evening || false,
-            night: night || false,
-            markedBy,
-            markedAt: new Date(),
-            notes: notes || ''
+      // Prepare upsert operation
+      bulkOps.push({
+        updateOne: {
+          filter: { student: studentId, date: normalizedDate },
+          update: {
+            $set: {
+              morning: morning || false,
+              evening: evening || false,
+              night: night || false,
+              markedBy,
+              markedAt: new Date(),
+              notes: notes || ''
+            }
           },
-          { 
-            upsert: true, 
-            new: true,
-            runValidators: true
-          }
-        );
+          upsert: true
+        }
+      });
 
-        results.push(attendance);
-      } catch (error) {
-        errors.push({ 
-          studentId: record.studentId, 
-          error: error.message 
+      validRecords.push({ studentId, student: studentMap.get(studentId) });
+    }
+
+    // Execute bulk operations
+    if (bulkOps.length > 0) {
+      const bulkResult = await Attendance.bulkWrite(bulkOps);
+      console.log(`📊 Bulk attendance operation completed: ${bulkResult.upsertedCount} inserted, ${bulkResult.modifiedCount} updated`);
+      
+      // Fetch the created/updated attendance records
+      const attendanceIds = [];
+      for (const record of validRecords) {
+        const attendance = await Attendance.findOne({ 
+          student: record.studentId, 
+          date: normalizedDate 
         });
+        if (attendance) {
+          results.push(attendance);
+          attendanceIds.push(attendance._id);
+        }
       }
     }
 
-    // Send notification to students about attendance being taken
-    if (results.length > 0) {
+    // Send notifications to students about attendance being taken (batch processing)
+    if (validRecords.length > 0) {
       try {
-        // Populate student details for personalized notifications
-        const attendanceWithStudents = await Attendance.find({
-          _id: { $in: results.map(att => att._id) }
-        }).populate('student', 'name');
-
-        // Send individual notifications with student names
-        for (const att of attendanceWithStudents) {
-          const student = att.student;
-          const studentName = student?.name || 'Student';
-        
-          await notificationService.sendToUser(student._id, {
-          type: 'system',
-            message: `📊 your attendance has been marked for ${normalizedDate.toDateString()}`,
-          sender: markedBy,
-          onModel: 'Attendance'
-        });
+        // Send notifications in batches to avoid overwhelming the system
+        const batchSize = 10;
+        for (let i = 0; i < validRecords.length; i += batchSize) {
+          const batch = validRecords.slice(i, i + batchSize);
+          
+          // Process batch in parallel
+          const notificationPromises = batch.map(async (record) => {
+            const student = record.student;
+            const studentName = student?.name || 'Student';
+            
+            try {
+              await notificationService.sendToUser(student._id, {
+                type: 'system',
+                message: `📊 your attendance has been marked for ${normalizedDate.toDateString()}`,
+                sender: markedBy,
+                onModel: 'Attendance'
+              });
+            } catch (error) {
+              console.error(`Failed to send notification to student ${student._id}:`, error);
+            }
+          });
+          
+          await Promise.all(notificationPromises);
         }
 
-        console.log(`🔔 Attendance notifications sent to ${attendanceWithStudents.length} students`);
+        // Attendance notifications sent to students in batches
       } catch (notificationError) {
         console.error('Error sending attendance notification:', notificationError);
       }
@@ -209,7 +239,9 @@ export const getAttendanceForDate = async (req, res, next) => {
           { path: 'branch', select: 'name code' }
         ]
       })
-      .populate('markedBy', 'name');
+      .populate('markedBy', 'username role');
+
+
 
     // Apply filters to the populated attendance records
     if (course) {
@@ -321,8 +353,12 @@ export const getAttendanceForDateRange = async (req, res, next) => {
           { path: 'branch', select: 'name code' }
         ]
       })
-      .populate('markedBy', 'name')
+      .populate('markedBy', 'username role')
       .sort({ date: -1, 'student.name': 1 });
+
+
+
+
 
     // Apply additional filters to the populated attendance records
     if (course) {
