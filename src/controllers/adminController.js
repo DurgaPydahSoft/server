@@ -1055,7 +1055,7 @@ export const updateStudent = async (req, res, next) => {
     }
 
     // Validate phone numbers
-    if (studentPhone && !/^[0-9]{10}$/.test(studentPhone)) {
+    if (studentPhone && studentPhone.trim() && !/^[0-9]{10}$/.test(studentPhone)) {
       throw createError(400, 'Student phone number must be 10 digits.');
     }
     if (parentPhone && !/^[0-9]{10}$/.test(parentPhone)) {
@@ -1120,7 +1120,7 @@ export const updateStudent = async (req, res, next) => {
     if (gender) student.gender = gender;
     if (category) student.category = category;
     if (roomNumber) student.roomNumber = roomNumber;
-    if (studentPhone) student.studentPhone = studentPhone;
+    if (studentPhone !== undefined) student.studentPhone = studentPhone;
     if (parentPhone) student.parentPhone = parentPhone;
     if (batch) student.batch = batch;
     if (academicYear) student.academicYear = academicYear;
