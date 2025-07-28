@@ -1091,4 +1091,281 @@ export const toggleAI = async (req, res) => {
   }
 };
 
- 
+// Warden: Create complaint on behalf of student or facility issue
+export const createWardenComplaint = async (req, res, next) => {
+  try {
+    const { 
+      complaintType, 
+      studentId, 
+      category, 
+      subCategory, 
+      description, 
+      priority = 'medium',
+      raisedBy = 'warden'
+    } = req.body;
+    const wardenId = req.warden._id;
+
+    console.log('📝 Warden creating complaint:', {
+      complaintType,
+      studentId,
+      category,
+      subCategory,
+      description,
+      priority,
+      raisedBy
+    });
+
+    // Validate required fields
+    if (!category || !description) {
+      return res.status(400).json({
+        success: false,
+        message: 'Category and description are required'
+      });
+    }
+
+    if (complaintType === 'student' && !studentId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID is required for student complaints'
+      });
+    }
+
+    // Validate that student exists if it's a student complaint
+    if (complaintType === 'student' && studentId) {
+      const student = await User.findById(studentId);
+      if (!student) {
+        return res.status(400).json({
+          success: false,
+          message: 'Selected student not found'
+        });
+      }
+    }
+
+    // Handle image upload if present
+    let imageUrl = null;
+    if (req.file) {
+      try {
+        console.log('📝 Uploading image to S3...');
+        imageUrl = await uploadToS3(req.file, 'complaints');
+        console.log('📝 Image uploaded successfully:', imageUrl);
+      } catch (uploadError) {
+        console.error('📝 Error uploading image:', uploadError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to upload image',
+          error: uploadError.message
+        });
+      }
+    }
+
+    // Create complaint object
+    const complaintData = {
+      description,
+      category,
+      subCategory,
+      imageUrl,
+      priority,
+      raisedBy,
+      warden: wardenId,
+      complaintType
+    };
+
+    // Add student reference only if it's a student complaint
+    if (complaintType === 'student' && studentId) {
+      complaintData.student = studentId;
+    }
+
+    const complaint = new Complaint(complaintData);
+    await complaint.save();
+
+    // Populate student details if it's a student complaint
+    if (complaintType === 'student' && studentId) {
+      await complaint.populate('student', 'name email rollNumber roomNumber category');
+    }
+
+    console.log('📝 Warden complaint created successfully:', complaint._id);
+
+    // Check if AI is enabled for this category
+    const aiConfig = await AIConfig.getConfig();
+    let isAIEnabled = aiConfig?.isEnabled && aiConfig?.categories[category]?.aiEnabled;
+    
+    // Check if there are any active members available
+    const activeMembers = await Member.find({ isActive: true });
+    
+    if (activeMembers.length === 0) {
+      isAIEnabled = false;
+    }
+
+    // Send notification to all admins
+    try {
+      const admins = await Admin.find({ 
+        role: { $in: ['admin', 'super_admin', 'sub_admin'] },
+        isActive: true
+      });
+
+      if (admins.length > 0) {
+        const adminIds = admins.map(admin => admin._id);
+        
+        // Send notification to all admins
+        for (const adminId of adminIds) {
+          await notificationService.sendComplaintNotification(
+            adminId,
+            complaint,
+            complaintType === 'student' ? complaint.student?.name : 'Warden',
+            complaintType === 'student' ? studentId : wardenId
+          );
+        }
+
+        console.log('🔔 Warden complaint notification sent to', adminIds.length, 'admins');
+      } else {
+        console.log('🔔 No active admins found for notification');
+      }
+    } catch (notificationError) {
+      console.error('🔔 Error sending warden complaint notification:', notificationError);
+    }
+
+    // Process with AI if enabled
+    if (isAIEnabled) {
+      try {
+        console.log('🤖 Processing warden complaint with AI...');
+        await aiService.processComplaint(complaint._id);
+        console.log('🤖 AI processing completed for warden complaint');
+      } catch (aiError) {
+        console.error('🤖 Error in AI processing for warden complaint:', aiError);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Complaint created successfully',
+      data: complaint
+    });
+
+  } catch (error) {
+    console.error('Error creating warden complaint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create complaint',
+      error: error.message
+    });
+  }
+};
+
+// Warden: Get timeline for any complaint (student or warden raised)
+export const wardenGetTimeline = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log('🔍 Warden timeline request for ID:', id);
+    
+    // Validate ID
+    if (!id || id === 'undefined') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid complaint ID'
+      });
+    }
+    
+    // Find the complaint
+    const complaint = await Complaint.findById(id)
+      .populate('student', 'name rollNumber roomNumber category')
+      .populate('assignedTo', 'name category')
+      .populate('warden', 'name');
+
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    console.log('🔍 Found complaint:', complaint._id);
+
+    // Get timeline from status history
+    const timeline = complaint.statusHistory || [];
+
+    res.json({
+      success: true,
+      data: {
+        timeline,
+        complaint
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching warden timeline:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch timeline',
+      error: error.message
+    });
+  }
+};
+
+// Warden: List all complaints (student and facility)
+export const listWardenComplaints = async (req, res) => {
+  try {
+    const { type, status, page = 1, limit = 50 } = req.query;
+    const skip = (page - 1) * limit;
+
+    // Build query
+    const query = {};
+
+    // Filter by type
+    if (type === 'student') {
+      query.student = { $exists: true, $ne: null };
+    } else if (type === 'facility') {
+      query.$or = [
+        { student: { $exists: false } },
+        { student: null }
+      ];
+    } else if (type === 'warden') {
+      query.raisedBy = 'warden';
+    }
+
+    // Filter by status
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+
+    // Get complaints with pagination
+    const complaints = await Complaint.find(query)
+      .populate('student', 'name rollNumber roomNumber category')
+      .populate('assignedTo', 'name category phone')
+      .populate('warden', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    // Get total count
+    const total = await Complaint.countDocuments(query);
+
+    console.log('📝 Warden fetched complaints:', {
+      type,
+      status,
+      count: complaints.length,
+      total
+    });
+
+    res.json({
+      success: true,
+      data: {
+        complaints,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching warden complaints:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch complaints',
+      error: error.message
+    });
+  }
+};

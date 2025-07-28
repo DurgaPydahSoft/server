@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticateStudent, adminAuth } from '../middleware/authMiddleware.js';
+import { authenticateStudent, adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
 import {
   createComplaint,
   listMyComplaints,
@@ -15,7 +15,10 @@ import {
   getAIStats,
   updateMemberEfficiency,
   quickAISetup,
-  toggleAI
+  toggleAI,
+  createWardenComplaint,
+  listWardenComplaints,
+  wardenGetTimeline
 } from '../controllers/complaintController.js';
 import multer from 'multer';
 
@@ -36,12 +39,15 @@ const upload = multer({
   },
 });
 
+// Warden routes (must come before parameterized routes)
+router.post('/warden', wardenAuth, upload.single('image'), createWardenComplaint);
+router.get('/warden', wardenAuth, listWardenComplaints);
+router.get('/warden/:id/timeline', wardenAuth, wardenGetTimeline);
+router.get('/warden/:id/details', wardenAuth, getComplaintDetails);
+
 // Student routes
 router.post('/', authenticateStudent, upload.single('image'), createComplaint);
 router.get('/my', authenticateStudent, listMyComplaints);
-router.get('/:id', authenticateStudent, getComplaintDetails);
-router.post('/:id/feedback', authenticateStudent, giveFeedback);
-router.get('/:id/timeline', authenticateStudent, getComplaintTimeline);
 
 // AI processing routes
 router.post('/:id/ai-process', authenticateStudent, processComplaintWithAI);
@@ -49,17 +55,20 @@ router.post('/admin/:id/ai-process', adminAuth, processComplaintWithAI);
 
 // Admin routes
 router.get('/admin/all', adminAuth, listAllComplaints);
-router.get('/admin/:id', adminAuth, getComplaintDetails);
-router.put('/admin/:id/status', adminAuth, updateComplaintStatus);
-router.get('/admin/:id/timeline', adminAuth, adminGetTimeline);
-
-// AI configuration routes
 router.get('/admin/ai/config', adminAuth, getAIConfig);
 router.put('/admin/ai/config', adminAuth, updateAIConfig);
 router.get('/admin/ai/stats', adminAuth, getAIStats);
 router.put('/admin/members/:memberId/efficiency', adminAuth, updateMemberEfficiency);
 router.post('/admin/ai/quick-setup', adminAuth, quickAISetup);
 router.post('/admin/ai/toggle', adminAuth, toggleAI);
+
+// Parameterized routes (must come last)
+router.get('/:id', authenticateStudent, getComplaintDetails);
+router.post('/:id/feedback', authenticateStudent, giveFeedback);
+router.get('/:id/timeline', authenticateStudent, getComplaintTimeline);
+router.get('/admin/:id', adminAuth, getComplaintDetails);
+router.put('/admin/:id/status', adminAuth, updateComplaintStatus);
+router.get('/admin/:id/timeline', adminAuth, adminGetTimeline);
 
 
 export default router; 
