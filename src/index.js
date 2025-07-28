@@ -299,7 +299,7 @@ app.use('/api/complaints', complaintRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/polls', pollRoutes);
-app.use('/api/menu', menuRoutes);
+app.use('/api/cafeteria/menu', menuRoutes);
 app.use('/api/bulk-outing', bulkOutingRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/foundlost', foundLostRoutes);
