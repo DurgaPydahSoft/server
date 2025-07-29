@@ -1,10 +1,11 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import { adminAuth, authenticateStudent, protect } from '../middleware/authMiddleware.js';
+import { adminAuth, wardenAuth, authenticateStudent, protect } from '../middleware/authMiddleware.js';
 import Admin from '../models/Admin.js';
 import User from '../models/User.js';
 import {
   getRooms,
+  getWardenRooms,
   addRoom,
   updateRoom,
   deleteRoom,
@@ -93,6 +94,9 @@ router.get('/stats', adminAuth, getRoomStats);
 // Get rooms with bed availability for student registration - admin only
 router.get('/bed-availability', adminAuth, getRoomsWithBedAvailability);
 
+// Get rooms for warden - warden only
+router.get('/warden', wardenAuth, getWardenRooms);
+
 // Get students in a specific room - admin only
 router.get('/:roomId/students', adminAuth, getRoomStudents);
 
@@ -110,6 +114,12 @@ router.post('/bulk-electricity-bills', adminAuth, addBulkElectricityBills);
 router.post('/:roomId/electricity-bill', adminAuth, addOrUpdateElectricityBill);
 router.get('/:roomId/electricity-bill', adminAuth, getElectricityBills);
 router.get('/electricity-default-rate', adminAuth, getDefaultElectricityRate);
+
+// Warden electricity bill routes - warden only
+router.post('/warden/bulk-electricity-bills', wardenAuth, addBulkElectricityBills);
+router.post('/warden/:roomId/electricity-bill', wardenAuth, addOrUpdateElectricityBill);
+router.get('/warden/:roomId/electricity-bill', wardenAuth, getElectricityBills);
+router.get('/warden/electricity-default-rate', wardenAuth, getDefaultElectricityRate);
 
 // Student electricity bill route - student only
 router.get('/student/electricity-bills', authenticateStudent, getStudentRoomBills);

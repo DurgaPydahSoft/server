@@ -46,6 +46,63 @@ export const getRooms = async (req, res, next) => {
   }
 };
 
+// Get rooms for warden with hostel type filtering
+export const getWardenRooms = async (req, res, next) => {
+  try {
+    const { gender, category, includeLastBill } = req.query;
+    const warden = req.warden;
+    
+    // Filter rooms based on warden's hostel type
+    const query = {};
+    
+    // Map hostel type to gender
+    if (warden.hostelType) {
+      const hostelType = warden.hostelType.toLowerCase();
+      if (hostelType === 'boys') {
+        query.gender = 'Male';
+      } else if (hostelType === 'girls') {
+        query.gender = 'Female';
+      }
+    }
+    
+    if (gender) query.gender = gender;
+    if (category) query.category = category;
+
+    const rooms = await Room.find(query).sort({ roomNumber: 1 });
+    
+    // Get student count for each room and optionally the last bill
+    const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
+      const studentCount = await User.countDocuments({
+        gender: room.gender,
+        category: room.category,
+        roomNumber: room.roomNumber,
+        role: 'student'
+      });
+      
+      const roomObject = room.toObject();
+
+      if (includeLastBill === 'true' && roomObject.electricityBills?.length > 0) {
+        // Sort by month to find the latest bill
+        roomObject.lastBill = [...roomObject.electricityBills].sort((a, b) => b.month.localeCompare(a.month))[0];
+      }
+
+      return {
+        ...roomObject,
+        studentCount
+      };
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        rooms: roomsWithDetails
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Add a new room
 export const addRoom = async (req, res, next) => {
   try {
