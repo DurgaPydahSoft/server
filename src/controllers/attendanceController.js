@@ -323,10 +323,22 @@ export const getAttendanceForDate = async (req, res, next) => {
     }).populate('student', '_id name');
 
     // Create a set of student IDs who are on approved leave
-    const studentsOnLeave = new Set(approvedLeaves.map(leave => leave.student._id.toString()));
+    const studentsOnLeave = new Set(approvedLeaves
+      .filter(leave => leave.student) // Filter out leaves with null student
+      .map(leave => leave.student._id.toString())
+    );
 
     // Add isOnLeave flag to attendance records
     attendance = attendance.map(att => {
+      // Skip records with null student
+      if (!att.student) {
+        return {
+          ...att.toObject(),
+          student: null,
+          isOnLeave: false
+        };
+      }
+      
       const isOnLeave = studentsOnLeave.has(att.student._id.toString());
       return {
         ...att.toObject(),
@@ -473,6 +485,11 @@ export const getAttendanceForDateRange = async (req, res, next) => {
     // Create a map of student IDs to their leave dates
     const studentLeaveDates = new Map();
     approvedLeaves.forEach(leave => {
+      // Skip leaves with null student
+      if (!leave.student) {
+        return;
+      }
+      
       const studentId = leave.student._id.toString();
       if (!studentLeaveDates.has(studentId)) {
         studentLeaveDates.set(studentId, new Set());
@@ -496,6 +513,15 @@ export const getAttendanceForDateRange = async (req, res, next) => {
 
     // Add isOnLeave flag to attendance records
     attendance = attendance.map(att => {
+      // Skip records with null student
+      if (!att.student) {
+        return {
+          ...att.toObject(),
+          student: null,
+          isOnLeave: false
+        };
+      }
+      
       const studentId = att.student._id.toString();
       const leaveDates = studentLeaveDates.get(studentId);
       const dateStr = new Date(att.date).toISOString().split('T')[0];
@@ -900,12 +926,18 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     }).populate('student', '_id name');
 
     // Create a set of student IDs who are on approved leave
-    const studentsOnLeave = new Set(approvedLeaves.map(leave => leave.student._id.toString()));
+    const studentsOnLeave = new Set(approvedLeaves
+      .filter(leave => leave.student) // Filter out leaves with null student
+      .map(leave => leave.student._id.toString())
+    );
 
     // Create a map of student attendance
     const attendanceMap = new Map();
     attendance.forEach(att => {
-      attendanceMap.set(att.student._id.toString(), att);
+      // Skip records with null student
+      if (att.student) {
+        attendanceMap.set(att.student._id.toString(), att);
+      }
     });
 
     // Combine student data with attendance status
@@ -1070,6 +1102,11 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     // Create a map of student IDs to their leave dates
     const studentLeaveDates = new Map();
     approvedLeaves.forEach(leave => {
+      // Skip leaves with null student
+      if (!leave.student) {
+        return;
+      }
+      
       const studentId = leave.student._id.toString();
       if (!studentLeaveDates.has(studentId)) {
         studentLeaveDates.set(studentId, new Set());
@@ -1093,6 +1130,16 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
 
     // Add isOnLeave flag to attendance records
     const attendanceWithLeaveStatus = attendance.map(att => {
+      // Skip records with null student
+      if (!att.student) {
+        return {
+          ...att.toObject(),
+          student: null,
+          isOnLeave: false,
+          status: 'Absent'
+        };
+      }
+      
       const studentId = att.student._id.toString();
       const leaveDates = studentLeaveDates.get(studentId);
       const dateStr = new Date(att.date).toISOString().split('T')[0];
