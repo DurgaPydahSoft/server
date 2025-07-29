@@ -622,6 +622,64 @@ export const requestQrView = async (req, res, next) => {
   }
 };
 
+// Request incoming QR view (for students to view incoming QR)
+export const requestIncomingQrView = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const studentId = req.user._id;
+    const leave = await Leave.findById(id);
+    
+    if (!leave) {
+      return res.status(404).json({ success: false, message: 'Leave not found' });
+    }
+    
+    if (String(leave.student) !== String(studentId)) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    }
+    
+    // Check if leave is approved
+    if (leave.status !== 'Approved') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Incoming QR code is only available for approved leaves'
+      });
+    }
+    
+    // Check if incoming QR is generated
+    if (!leave.incomingQrGenerated) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Incoming QR not yet generated. Please scan outgoing QR first.',
+        outgoingVisitCount: leave.outgoingVisitCount,
+        incomingVisitCount: leave.incomingVisitCount
+      });
+    }
+    
+    // Check if incoming QR has expired
+    const now = new Date();
+    if (now > leave.incomingQrExpiresAt) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Incoming QR has expired',
+        outgoingVisitCount: leave.outgoingVisitCount,
+        incomingVisitCount: leave.incomingVisitCount,
+        expiredAt: leave.incomingQrExpiresAt
+      });
+    }
+    
+    // Return success - Incoming QR can be viewed
+    res.json({ 
+      success: true, 
+      outgoingVisitCount: leave.outgoingVisitCount,
+      incomingVisitCount: leave.incomingVisitCount,
+      incomingQrGenerated: leave.incomingQrGenerated,
+      incomingQrExpiresAt: leave.incomingQrExpiresAt
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Record a visit when QR is scanned by security
 export const recordVisit = async (req, res, next) => {
   try {
@@ -703,22 +761,40 @@ export const recordVisit = async (req, res, next) => {
     leave.visits.push({
       scannedAt: now,
       scannedBy,
-      location
+      location,
+      visitType: 'outgoing' // Default to outgoing for existing functionality
     });
     
     // Ensure visit count doesn't exceed max visits
     leave.visitCount = Math.min(leave.visits.length, leave.maxVisits);
+    
+    // Update outgoing visit count
+    leave.outgoingVisitCount = leave.visits.filter(v => v.visitType === 'outgoing').length;
     
     // Check if max visits reached
     if (leave.visitCount >= leave.maxVisits) {
       leave.visitLocked = true;
     }
     
+    // Generate incoming QR if this is the first outgoing visit
+    if (leave.outgoingVisitCount === 1 && !leave.incomingQrGenerated) {
+      leave.incomingQrGenerated = true;
+      leave.incomingQrGeneratedAt = now;
+      
+      // Set incoming QR expiry to 24 hours from now or end of leave period, whichever is earlier
+      const twentyFourHoursFromNow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      const leaveEndDate = leave.applicationType === 'Leave' ? new Date(leave.endDate) : new Date(leave.permissionDate);
+      leave.incomingQrExpiresAt = new Date(Math.min(twentyFourHoursFromNow.getTime(), leaveEndDate.getTime()));
+    }
+    
     console.log(`🔍 Recording visit for leave ${id}:`);
     console.log(`  - Previous visit count: ${leave.visits.length - 1}`);
     console.log(`  - New visit count: ${leave.visitCount}`);
+    console.log(`  - Outgoing visits: ${leave.outgoingVisitCount}`);
+    console.log(`  - Incoming visits: ${leave.incomingVisitCount}`);
     console.log(`  - Max visits: ${leave.maxVisits}`);
     console.log(`  - Visit locked: ${leave.visitLocked}`);
+    console.log(`  - Incoming QR generated: ${leave.incomingQrGenerated}`);
     
     await leave.save();
     
@@ -728,7 +804,112 @@ export const recordVisit = async (req, res, next) => {
       visitCount: leave.visitCount,
       maxVisits: leave.maxVisits,
       visitLocked: leave.visitLocked,
-      remainingVisits: leave.maxVisits - leave.visitCount
+      remainingVisits: leave.maxVisits - leave.visitCount,
+      outgoingVisitCount: leave.outgoingVisitCount,
+      incomingVisitCount: leave.incomingVisitCount,
+      incomingQrGenerated: leave.incomingQrGenerated,
+      incomingQrExpiresAt: leave.incomingQrExpiresAt
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Record an incoming visit when incoming QR is scanned by security
+export const recordIncomingVisit = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { scannedBy, location = 'Main Gate' } = req.body;
+    
+    const leave = await Leave.findById(id);
+    if (!leave) {
+      return res.status(404).json({ success: false, message: 'Leave not found' });
+    }
+    
+    // Check if leave is approved
+    if (leave.status !== 'Approved') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Only approved leaves can be scanned',
+        outgoingVisitCount: leave.outgoingVisitCount,
+        incomingVisitCount: leave.incomingVisitCount
+      });
+    }
+    
+    // Check if incoming QR is generated
+    if (!leave.incomingQrGenerated) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Incoming QR not yet generated. Please scan outgoing QR first.',
+        outgoingVisitCount: leave.outgoingVisitCount,
+        incomingVisitCount: leave.incomingVisitCount
+      });
+    }
+    
+    // Check if incoming QR has expired
+    const now = new Date();
+    if (now > leave.incomingQrExpiresAt) {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Incoming QR has expired',
+        outgoingVisitCount: leave.outgoingVisitCount,
+        incomingVisitCount: leave.incomingVisitCount,
+        expiredAt: leave.incomingQrExpiresAt
+      });
+    }
+    
+    // Check for duplicate incoming scan within 30 seconds
+    const thirtySecondsAgo = new Date(now.getTime() - 30 * 1000);
+    const recentIncomingScan = leave.visits.find(visit => 
+      visit.scannedAt > thirtySecondsAgo && 
+      visit.scannedBy === scannedBy &&
+      visit.visitType === 'incoming'
+    );
+    
+    if (recentIncomingScan) {
+      return res.status(409).json({ 
+        success: false, 
+        message: 'Incoming visit already recorded recently (within 30 seconds)',
+        scannedAt: recentIncomingScan.scannedAt,
+        outgoingVisitCount: leave.outgoingVisitCount,
+        incomingVisitCount: leave.incomingVisitCount
+      });
+    }
+    
+    // Record the incoming visit
+    leave.visits.push({
+      scannedAt: now,
+      scannedBy,
+      location,
+      visitType: 'incoming'
+    });
+    
+    // Update incoming visit count
+    leave.incomingVisitCount = leave.visits.filter(v => v.visitType === 'incoming').length;
+    
+    // Mark leave as completed when incoming QR is scanned
+    // This removes the student from "On Leave" status even if they return before end date
+    leave.verificationStatus = 'Completed';
+    leave.completedAt = now;
+    
+    console.log(`🔍 Recording incoming visit for leave ${id}:`);
+    console.log(`  - Outgoing visits: ${leave.outgoingVisitCount}`);
+    console.log(`  - New incoming visit count: ${leave.incomingVisitCount}`);
+    console.log(`  - Incoming QR generated: ${leave.incomingQrGenerated}`);
+    console.log(`  - Incoming QR expires at: ${leave.incomingQrExpiresAt}`);
+    console.log(`  - Leave status marked as completed`);
+    
+    await leave.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Incoming visit recorded successfully - Leave completed',
+      outgoingVisitCount: leave.outgoingVisitCount,
+      incomingVisitCount: leave.incomingVisitCount,
+      incomingQrGenerated: leave.incomingQrGenerated,
+      incomingQrExpiresAt: leave.incomingQrExpiresAt,
+      verificationStatus: 'Completed',
+      completedAt: leave.completedAt
     });
   } catch (error) {
     next(error);
@@ -769,10 +950,14 @@ export const getLeaveById = async (req, res, next) => {
       success: true,
       data: {
         ...leave.toObject(),
-        visitCount: leave.visitCount,
-        maxVisits: leave.maxVisits,
-        remainingVisits: leave.maxVisits - leave.visitCount,
-        visitLocked: leave.visitLocked
+        visitCount: leave.visits.length,
+        outgoingVisitCount: leave.visits.filter(v => v.visitType === 'outgoing').length,
+        incomingVisitCount: leave.visits.filter(v => v.visitType === 'incoming').length,
+        maxVisits: leave.maxVisits || 2,
+        visitLocked: leave.visitLocked,
+        isQrAvailable: leave.isQrAvailable,
+        displayDate: leave.displayDate,
+        displayEndDate: leave.displayEndDate
       }
     };
     

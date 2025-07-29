@@ -1,5 +1,6 @@
 import Attendance from '../models/Attendance.js';
 import User from '../models/User.js';
+import Leave from '../models/Leave.js';
 import { createError } from '../utils/error.js';
 import notificationService from '../utils/notificationService.js';
 
@@ -63,11 +64,41 @@ export const getStudentsForAttendance = async (req, res, next) => {
       .filter(att => att.student && att.student._id) // Additional safety check
       .map(att => att.student._id.toString());
 
+    // Get approved leaves for the date
+    const startOfDay = new Date(normalizedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(normalizedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      verificationStatus: { $ne: 'Completed' }, // Exclude completed leaves
+      $or: [
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: endOfDay },
+          endDate: { $gte: startOfDay }
+        },
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    console.log('🔍 getStudentsForAttendance - Found approved leaves:', approvedLeaves.length);
+
+    // Create a set of student IDs who are on approved leave
+    const studentsOnLeave = new Set(approvedLeaves.map(leave => leave.student._id.toString()));
+
     // Combine student data with attendance status
     const studentsWithAttendance = students.map(student => {
       const attendance = validAttendance.find(att => 
         att.student && att.student._id && att.student._id.toString() === student._id.toString()
       );
+      
+      // Check if student is on approved leave
+      const isOnLeave = studentsOnLeave.has(student._id.toString());
       
       return {
         ...student, // No need for .toObject() since we're using lean()
@@ -75,15 +106,16 @@ export const getStudentsForAttendance = async (req, res, next) => {
           morning: attendance.morning || false,
           evening: attendance.evening || false,
           night: attendance.night || false,
-          status: attendance.status || 'Absent',
-          percentage: attendance.percentage || 0
+          status: isOnLeave ? 'On Leave' : (attendance.status || 'Absent'),
+          percentage: isOnLeave ? 100 : (attendance.percentage || 0)
         } : {
           morning: false,
           evening: false,
           night: false,
-          status: 'Absent',
-          percentage: 0
-        }
+          status: isOnLeave ? 'On Leave' : 'Absent',
+          percentage: isOnLeave ? 100 : 0
+        },
+        isOnLeave: isOnLeave
       };
     });
 
@@ -267,6 +299,44 @@ export const getAttendanceForDate = async (req, res, next) => {
       })
       .populate('markedBy', 'username role');
 
+    // Get approved leaves for the date
+    const startOfDay = new Date(normalizedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(normalizedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      $or: [
+        // For Leave applications - check if the date falls within the leave period
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: endOfDay },
+          endDate: { $gte: startOfDay }
+        },
+        // For Permission applications - check if the date matches the permission date
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    // Create a set of student IDs who are on approved leave
+    const studentsOnLeave = new Set(approvedLeaves.map(leave => leave.student._id.toString()));
+
+    // Add isOnLeave flag to attendance records
+    attendance = attendance.map(att => {
+      const isOnLeave = studentsOnLeave.has(att.student._id.toString());
+      return {
+        ...att.toObject(),
+        student: {
+          ...att.student.toObject(),
+          isOnLeave: isOnLeave
+        }
+      };
+    });
+
 
 
     // Apply filters to the populated attendance records
@@ -382,6 +452,64 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       .populate('markedBy', 'username role')
       .sort({ date: -1, 'student.name': 1 });
 
+    // Get approved leaves for the date range
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      $or: [
+        // For Leave applications - check if any date in the range falls within the leave period
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: end },
+          endDate: { $gte: start }
+        },
+        // For Permission applications - check if the permission date falls within the range
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: start, $lte: end }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    // Create a map of student IDs to their leave dates
+    const studentLeaveDates = new Map();
+    approvedLeaves.forEach(leave => {
+      const studentId = leave.student._id.toString();
+      if (!studentLeaveDates.has(studentId)) {
+        studentLeaveDates.set(studentId, new Set());
+      }
+      
+      if (leave.applicationType === 'Leave') {
+        // Add all dates in the leave period
+        const currentDate = new Date(leave.startDate);
+        const endDate = new Date(leave.endDate);
+        while (currentDate <= endDate) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          studentLeaveDates.get(studentId).add(dateStr);
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+      } else if (leave.applicationType === 'Permission') {
+        // Add the permission date
+        const dateStr = new Date(leave.permissionDate).toISOString().split('T')[0];
+        studentLeaveDates.get(studentId).add(dateStr);
+      }
+    });
+
+    // Add isOnLeave flag to attendance records
+    attendance = attendance.map(att => {
+      const studentId = att.student._id.toString();
+      const leaveDates = studentLeaveDates.get(studentId);
+      const dateStr = new Date(att.date).toISOString().split('T')[0];
+      const isOnLeave = leaveDates && leaveDates.has(dateStr);
+      
+      return {
+        ...att.toObject(),
+        student: {
+          ...att.student.toObject(),
+          isOnLeave: isOnLeave
+        }
+      };
+    });
+
 
 
 
@@ -467,12 +595,61 @@ export const getMyAttendance = async (req, res, next) => {
 
     const attendance = await Attendance.getStudentAttendance(studentId, start, end);
 
+    // Get approved leaves for the student in the date range
+    const approvedLeaves = await Leave.find({
+      student: studentId,
+      status: 'Approved',
+      $or: [
+        // For Leave applications - check if any date in the range falls within the leave period
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: end },
+          endDate: { $gte: start }
+        },
+        // For Permission applications - check if the permission date falls within the range
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: start, $lte: end }
+        }
+      ]
+    });
+
+    // Create a set of dates when the student was on leave
+    const leaveDates = new Set();
+    approvedLeaves.forEach(leave => {
+      if (leave.applicationType === 'Leave') {
+        // Add all dates in the leave period
+        const currentDate = new Date(leave.startDate);
+        const endDate = new Date(leave.endDate);
+        while (currentDate <= endDate) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          leaveDates.add(dateStr);
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+      } else if (leave.applicationType === 'Permission') {
+        // Add the permission date
+        const dateStr = new Date(leave.permissionDate).toISOString().split('T')[0];
+        leaveDates.add(dateStr);
+      }
+    });
+
+    // Add isOnLeave flag to attendance records
+    const attendanceWithLeaveStatus = attendance.map(att => {
+      const dateStr = new Date(att.date).toISOString().split('T')[0];
+      const isOnLeave = leaveDates.has(dateStr);
+      return {
+        ...att.toObject(),
+        isOnLeave: isOnLeave
+      };
+    });
+
     // Calculate attendance statistics
     const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
-    const presentDays = attendance.filter(att => att.morning || att.evening).length;
-    const fullyPresentDays = attendance.filter(att => att.morning && att.evening).length;
-    const partiallyPresentDays = attendance.filter(att => (att.morning || att.evening) && !(att.morning && att.evening)).length;
-    const absentDays = totalDays - presentDays;
+    const presentDays = attendanceWithLeaveStatus.filter(att => (att.morning || att.evening) && !att.isOnLeave).length;
+    const fullyPresentDays = attendanceWithLeaveStatus.filter(att => att.morning && att.evening && !att.isOnLeave).length;
+    const partiallyPresentDays = attendanceWithLeaveStatus.filter(att => (att.morning || att.evening) && !(att.morning && att.evening) && !att.isOnLeave).length;
+    const onLeaveDays = attendanceWithLeaveStatus.filter(att => att.isOnLeave).length;
+    const absentDays = totalDays - presentDays - onLeaveDays;
 
     const statistics = {
       totalDays,
@@ -480,13 +657,14 @@ export const getMyAttendance = async (req, res, next) => {
       fullyPresentDays,
       partiallyPresentDays,
       absentDays,
+      onLeaveDays,
       attendancePercentage: totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0
     };
 
     res.json({
       success: true,
       data: {
-        attendance,
+        attendance: attendanceWithLeaveStatus,
         statistics,
         startDate: start,
         endDate: end

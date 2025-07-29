@@ -125,7 +125,7 @@ const leaveSchema = new mongoose.Schema({
   },
   verificationStatus: {
     type: String,
-    enum: ['Not Verified', 'Verified', 'Expired'],
+    enum: ['Not Verified', 'Verified', 'Expired', 'Completed'],
     default: 'Not Verified'
   },
   verifiedBy: {
@@ -133,6 +133,9 @@ const leaveSchema = new mongoose.Schema({
     trim: true
   },
   verifiedAt: {
+    type: Date
+  },
+  completedAt: {
     type: Date
   },
   // Visit tracking fields
@@ -156,11 +159,35 @@ const leaveSchema = new mongoose.Schema({
     location: {
       type: String, // Optional: scan location
       default: 'Main Gate'
+    },
+    visitType: {
+      type: String,
+      enum: ['outgoing', 'incoming'],
+      default: 'outgoing'
     }
   }],
   visitLocked: {
     type: Boolean,
     default: false
+  },
+  // New fields for incoming QR functionality
+  outgoingVisitCount: {
+    type: Number,
+    default: 0
+  },
+  incomingVisitCount: {
+    type: Number,
+    default: 0
+  },
+  incomingQrGenerated: {
+    type: Boolean,
+    default: false
+  },
+  incomingQrGeneratedAt: {
+    type: Date
+  },
+  incomingQrExpiresAt: {
+    type: Date
   },
   // New field to track QR availability window
   qrAvailableFrom: {

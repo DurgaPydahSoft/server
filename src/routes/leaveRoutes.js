@@ -9,7 +9,9 @@ import {
   getApprovedLeaves,
   updateVerificationStatus,
   requestQrView,
+  requestIncomingQrView,
   recordVisit,
+  recordIncomingVisit,
   getStayInHostelRequestsForWarden,
   getStayInHostelRequestsForPrincipal,
   wardenRecommendation,
@@ -78,11 +80,20 @@ router.post('/verify', updateVerificationStatus);
 // Student QR view limit route
 router.post('/qr-view/:id', protect, authenticateStudent, requestQrView);
 
+// Student incoming QR view route
+router.post('/incoming-qr-view/:id', protect, authenticateStudent, requestIncomingQrView);
+
 // QR scanning route that records visits (public access)
 router.post('/qr/:id', recordVisit);
 
+// Incoming QR scanning route that records incoming visits (public access)
+router.post('/incoming-qr/:id', recordIncomingVisit);
+
 // Visit recording route
 router.post('/:id/record-visit', recordVisit);
+
+// Incoming visit recording route
+router.post('/:id/record-incoming-visit', recordIncomingVisit);
 
 // Public route for QR scanning (must be last to avoid conflicts)
 router.get('/:id', getLeaveById);
