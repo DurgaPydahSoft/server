@@ -879,7 +879,14 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     console.log('🎓 Attendance query:', attendanceQuery);
     
     const attendance = await Attendance.find(attendanceQuery)
-      .populate('student', 'name rollNumber course branch year gender roomNumber');
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender roomNumber',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
 
     console.log('🎓 Found attendance records:', attendance.length);
     if (attendance.length > 0) {
@@ -1077,8 +1084,14 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     const attendance = await Attendance.find({
       student: { $in: studentIds },
       date: { $gte: start, $lte: end }
-    }).populate('student', 'name rollNumber course branch year gender roomNumber')
-      .sort({ date: -1, 'student.name': 1 });
+    }).populate({
+      path: 'student',
+      select: 'name rollNumber course branch year gender roomNumber',
+      populate: [
+        { path: 'course', select: 'name code' },
+        { path: 'branch', select: 'name code' }
+      ]
+    }).sort({ date: -1, 'student.name': 1 });
 
     // Get approved leaves for the date range
     const approvedLeaves = await Leave.find({
