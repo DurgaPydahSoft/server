@@ -794,7 +794,7 @@ export const deleteAttendance = async (req, res, next) => {
 // Get attendance for principal's course for a specific date
 export const getPrincipalAttendanceForDate = async (req, res, next) => {
   try {
-    const { date, branch, gender, studentId } = req.query;
+    const { date, branch, gender, studentId, status } = req.query;
     const principal = req.principal;
     const normalizedDate = normalizeDate(date || new Date());
 
@@ -803,7 +803,8 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
       course: principal.course,
       branch,
       gender,
-      studentId
+      studentId,
+      status
     });
 
     // Build query for students in principal's course
@@ -876,6 +877,31 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
       });
     }
 
+    // Get approved leaves for the date
+    const startOfDay = new Date(normalizedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(normalizedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      verificationStatus: { $ne: 'Completed' }, // Exclude completed leaves
+      $or: [
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: endOfDay },
+          endDate: { $gte: startOfDay }
+        },
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    // Create a set of student IDs who are on approved leave
+    const studentsOnLeave = new Set(approvedLeaves.map(leave => leave.student._id.toString()));
+
     // Create a map of student attendance
     const attendanceMap = new Map();
     attendance.forEach(att => {
@@ -885,16 +911,26 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     // Combine student data with attendance status
     const studentsWithAttendance = students.map(student => {
       const studentAttendance = attendanceMap.get(student._id.toString());
+      const isOnLeave = studentsOnLeave.has(student._id.toString());
+      
+      let status;
+      if (isOnLeave) {
+        status = 'On Leave';
+      } else if (studentAttendance) {
+        status = (studentAttendance.morning && studentAttendance.evening && studentAttendance.night) ? 'Present' : 
+                 (studentAttendance.morning || studentAttendance.evening || studentAttendance.night) ? 'Partial' : 'Absent';
+      } else {
+        status = 'Absent';
+      }
       
       const result = {
         ...student.toObject(),
         morning: studentAttendance?.morning || false,
         evening: studentAttendance?.evening || false,
         night: studentAttendance?.night || false,
-        status: studentAttendance ? 
-          (studentAttendance.morning && studentAttendance.evening && studentAttendance.night ? 'Present' : 
-           studentAttendance.morning || studentAttendance.evening || studentAttendance.night ? 'Partial' : 'Absent') : 'Absent',
-        notes: studentAttendance?.notes || ''
+        status: status,
+        notes: studentAttendance?.notes || '',
+        isOnLeave: isOnLeave
       };
       
       console.log('🎓 Student attendance:', {
@@ -902,36 +938,59 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
         status: result.status,
         morning: result.morning,
         evening: result.evening,
-        night: result.night
+        night: result.night,
+        isOnLeave: result.isOnLeave
       });
       
       return result;
     });
 
-    console.log('🎓 Students with attendance:', studentsWithAttendance.length);
+    // Apply status filter if provided
+    let filteredAttendance = studentsWithAttendance;
+    if (status) {
+      filteredAttendance = studentsWithAttendance.filter(student => {
+        if (status === 'Present') return student.status === 'Present';
+        if (status === 'Partial') return student.status === 'Partial';
+        if (status === 'Absent') return student.status === 'Absent';
+        if (status === 'On Leave') return student.status === 'On Leave';
+        return true;
+      });
+    }
+
+    console.log('🎓 Students with attendance after filtering:', filteredAttendance.length);
 
     // Calculate statistics
-    const totalStudents = studentsWithAttendance.length;
-    const presentToday = studentsWithAttendance.filter(s => s.status === 'Present').length;
-    const absentToday = studentsWithAttendance.filter(s => s.status === 'Absent').length;
-    const attendanceRate = totalStudents > 0 ? Math.round((presentToday / totalStudents) * 100) : 0;
+    const totalStudents = filteredAttendance.length;
+    const morningPresent = filteredAttendance.filter(s => s.morning).length;
+    const eveningPresent = filteredAttendance.filter(s => s.evening).length;
+    const nightPresent = filteredAttendance.filter(s => s.night).length;
+    const fullyPresent = filteredAttendance.filter(s => s.status === 'Present').length;
+    const partiallyPresent = filteredAttendance.filter(s => s.status === 'Partial').length;
+    const absent = filteredAttendance.filter(s => s.status === 'Absent').length;
+    const onLeave = filteredAttendance.filter(s => s.status === 'On Leave').length;
+
+    const statistics = {
+      totalStudents,
+      morningPresent,
+      eveningPresent,
+      nightPresent,
+      fullyPresent,
+      partiallyPresent,
+      absent,
+      onLeave
+    };
 
     const response = {
       success: true,
       data: {
-        attendance: studentsWithAttendance,
-        statistics: {
-          totalStudents,
-          presentToday,
-          absentToday,
-          attendanceRate
-        },
+        attendance: filteredAttendance,
+        statistics,
         date: normalizedDate,
         course: principal.course
       }
     };
 
-    console.log('🎓 Sending response with', studentsWithAttendance.length, 'attendance records');
+    console.log('🎓 Sending response with', filteredAttendance.length, 'attendance records');
     res.json(response);
   } catch (error) {
     console.error('🎓 Error in getPrincipalAttendanceForDate:', error);
@@ -942,7 +1001,7 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
 // Get attendance for principal's course for a date range
 export const getPrincipalAttendanceForRange = async (req, res, next) => {
   try {
-    const { startDate, endDate, branch, gender, studentId } = req.query;
+    const { startDate, endDate, branch, gender, studentId, status } = req.query;
     const principal = req.principal;
     
     if (!startDate || !endDate) {
@@ -989,30 +1048,114 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     }).populate('student', 'name rollNumber course branch year gender roomNumber')
       .sort({ date: -1, 'student.name': 1 });
 
+    // Get approved leaves for the date range
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      verificationStatus: { $ne: 'Completed' }, // Exclude completed leaves
+      $or: [
+        // For Leave applications - check if any date in the range falls within the leave period
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: end },
+          endDate: { $gte: start }
+        },
+        // For Permission applications - check if the permission date falls within the range
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: start, $lte: end }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    // Create a map of student IDs to their leave dates
+    const studentLeaveDates = new Map();
+    approvedLeaves.forEach(leave => {
+      const studentId = leave.student._id.toString();
+      if (!studentLeaveDates.has(studentId)) {
+        studentLeaveDates.set(studentId, new Set());
+      }
+      
+      if (leave.applicationType === 'Leave') {
+        // Add all dates in the leave period
+        const currentDate = new Date(leave.startDate);
+        const endDate = new Date(leave.endDate);
+        while (currentDate <= endDate) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          studentLeaveDates.get(studentId).add(dateStr);
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+      } else if (leave.applicationType === 'Permission') {
+        // Add the permission date
+        const dateStr = new Date(leave.permissionDate).toISOString().split('T')[0];
+        studentLeaveDates.get(studentId).add(dateStr);
+      }
+    });
+
+    // Add isOnLeave flag to attendance records
+    const attendanceWithLeaveStatus = attendance.map(att => {
+      const studentId = att.student._id.toString();
+      const leaveDates = studentLeaveDates.get(studentId);
+      const dateStr = new Date(att.date).toISOString().split('T')[0];
+      const isOnLeave = leaveDates && leaveDates.has(dateStr);
+      
+      let status;
+      if (isOnLeave) {
+        status = 'On Leave';
+      } else {
+        status = (att.morning && att.evening && att.night) ? 'Present' : 
+                 (att.morning || att.evening || att.night) ? 'Partial' : 'Absent';
+      }
+      
+      return {
+        ...att.toObject(),
+        student: {
+          ...att.student.toObject(),
+          isOnLeave: isOnLeave
+        },
+        status: status
+      };
+    });
+
+    // Apply status filter if provided
+    let filteredAttendance = attendanceWithLeaveStatus;
+    if (status) {
+      filteredAttendance = attendanceWithLeaveStatus.filter(att => {
+        if (status === 'Present') return att.status === 'Present';
+        if (status === 'Partial') return att.status === 'Partial';
+        if (status === 'Absent') return att.status === 'Absent';
+        if (status === 'On Leave') return att.status === 'On Leave';
+        return true;
+      });
+    }
+
     // Calculate statistics
     const totalStudents = students.length;
     const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
     const totalPossibleAttendance = totalStudents * totalDays;
     
-    const presentRecords = attendance.filter(att => att.morning && att.evening && att.night).length;
-    const partialRecords = attendance.filter(att => (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)).length;
-    const absentRecords = totalPossibleAttendance - presentRecords - partialRecords;
+    const presentRecords = filteredAttendance.filter(att => att.status === 'Present').length;
+    const partialRecords = filteredAttendance.filter(att => att.status === 'Partial').length;
+    const absentRecords = filteredAttendance.filter(att => att.status === 'Absent').length;
+    const onLeaveRecords = filteredAttendance.filter(att => att.status === 'On Leave').length;
     
     const overallAttendanceRate = totalPossibleAttendance > 0 ? 
       Math.round(((presentRecords + partialRecords) / totalPossibleAttendance) * 100) : 0;
 
+    const statistics = {
+      totalStudents,
+      totalDays,
+      presentRecords,
+      partialRecords,
+      absentRecords,
+      onLeaveRecords,
+      overallAttendanceRate
+    };
+
     res.json({
       success: true,
       data: {
-        attendance,
-        statistics: {
-          totalStudents,
-          totalDays,
-          presentRecords,
-          partialRecords,
-          absentRecords,
-          overallAttendanceRate
-        },
+        attendance: filteredAttendance,
+        statistics,
         startDate: start,
         endDate: end,
         course: principal.course
