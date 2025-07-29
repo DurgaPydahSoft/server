@@ -44,13 +44,20 @@ export const adminAuth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Handle different possible JWT payload structures
+    const userId = decoded._id || decoded.id || decoded.userId;
+    
+    if (!userId) {
+      return next(createError(401, 'Invalid token structure'));
+    }
 
-    // This is the critical fix: using decoded._id
-    let admin = await Admin.findById(decoded._id).select('-password');
+    // This is the critical fix: using userId from decoded token
+    let admin = await Admin.findById(userId).select('-password');
     
     // Populate course for principals
     if (admin && admin.role === 'principal' && admin.course) {
-      admin = await Admin.findById(decoded._id).select('-password').populate('course', 'name code');
+      admin = await Admin.findById(userId).select('-password').populate('course', 'name code');
     }
 
     if (!admin || !admin.isActive) {
@@ -58,8 +65,10 @@ export const adminAuth = async (req, res, next) => {
     }
     
     req.admin = admin; // Attach the admin object to the request
+    req.user = admin; // Also attach as user for consistency
     next();
   } catch (error) {
+    console.error('AdminAuth middleware error:', error);
     return next(createError(401, 'Not authorized, token failed'));
   }
 };
@@ -77,16 +86,25 @@ export const wardenAuth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Handle different possible JWT payload structures
+    const userId = decoded._id || decoded.id || decoded.userId;
+    
+    if (!userId) {
+      return next(createError(401, 'Invalid token structure'));
+    }
 
-    const admin = await Admin.findById(decoded._id).select('-password');
+    const admin = await Admin.findById(userId).select('-password');
 
     if (!admin || !admin.isActive || admin.role !== 'warden') {
       return next(createError(401, 'Warden not found or is not active'));
     }
     
     req.warden = admin; // Attach the warden object to the request
+    req.user = admin; // Also attach as user for consistency
     next();
   } catch (error) {
+    console.error('WardenAuth middleware error:', error);
     return next(createError(401, 'Not authorized, token failed'));
   }
 };
@@ -155,12 +173,19 @@ export const principalAuth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Handle different possible JWT payload structures
+    const userId = decoded._id || decoded.id || decoded.userId;
+    
+    if (!userId) {
+      return next(createError(401, 'Invalid token structure'));
+    }
 
-    let admin = await Admin.findById(decoded._id).select('-password');
+    let admin = await Admin.findById(userId).select('-password');
     
     // Populate course for principals
     if (admin && admin.role === 'principal' && admin.course) {
-      admin = await Admin.findById(decoded._id).select('-password').populate('course', 'name code');
+      admin = await Admin.findById(userId).select('-password').populate('course', 'name code');
     }
 
     if (!admin || !admin.isActive || admin.role !== 'principal') {
@@ -168,8 +193,10 @@ export const principalAuth = async (req, res, next) => {
     }
     
     req.principal = admin; // Attach the principal object to the request
+    req.user = admin; // Also attach as user for consistency
     next();
   } catch (error) {
+    console.error('PrincipalAuth middleware error:', error);
     return next(createError(401, 'Not authorized, token failed'));
   }
 };

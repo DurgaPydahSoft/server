@@ -21,7 +21,8 @@ import {
   wardenRejectLeave,
   getPrincipalLeaveRequests,
   principalApproveLeave,
-  principalRejectLeave
+  principalRejectLeave,
+  getStudentLeaveHistory
 } from '../controllers/leaveController.js';
 import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
@@ -68,6 +69,9 @@ router.post('/warden/recommendation', wardenAuth, wardenRecommendation);
 router.get('/principal/all', principalAuth, getPrincipalLeaveRequests);
 router.post('/principal/approve', principalAuth, principalApproveLeave);
 router.post('/principal/reject', principalAuth, principalRejectLeave);
+
+// Principal route for student leave history
+router.get('/student/:studentId/history', principalAuth, getStudentLeaveHistory);
 
 // Principal routes for Stay in Hostel requests
 router.get('/principal/stay-in-hostel', principalAuth, getStayInHostelRequestsForPrincipal);

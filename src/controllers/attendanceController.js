@@ -1142,13 +1142,13 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
       Math.round(((presentRecords + partialRecords) / totalPossibleAttendance) * 100) : 0;
 
     const statistics = {
-      totalStudents,
-      totalDays,
-      presentRecords,
-      partialRecords,
-      absentRecords,
+          totalStudents,
+          totalDays,
+          presentRecords,
+          partialRecords,
+          absentRecords,
       onLeaveRecords,
-      overallAttendanceRate
+          overallAttendanceRate
     };
 
     res.json({

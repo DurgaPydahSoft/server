@@ -26,6 +26,10 @@ router.get('/stats', adminAuth, getAttendanceStats);
 router.put('/update', adminAuth, updateAttendance);
 router.delete('/:studentId/:date', adminAuth, deleteAttendance);
 
+// Warden-specific routes (if needed)
+router.get('/warden/date', wardenAuth, getAttendanceForDate);
+router.get('/warden/range', wardenAuth, getAttendanceForDateRange);
+
 // Student routes
 router.get('/my-attendance', protect, getMyAttendance);
 
