@@ -16,7 +16,8 @@ import {
   clearTempStudents,
   renewBatches,
   searchStudentByRollNumber,
-  resetStudentPassword
+  resetStudentPassword,
+  updateStudentYears
 } from '../controllers/adminController.js';
 import { initializeHostelCounters, getCounterStatus } from '../utils/initializeCounters.js';
 import { 
@@ -151,6 +152,9 @@ router.get('/students/course-counts', getCourseCounts);
 
 // New route for renewing student batches
 router.post('/students/renew-batch', renewBatches);
+
+// New route for updating student years based on batch
+router.post('/students/update-years', updateStudentYears);
 
 // Routes for /students (exact path)
 router.post('/students', imageUpload.fields([
