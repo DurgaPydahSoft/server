@@ -139,6 +139,30 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid room number for the selected gender and category!`
     }
   },
+  bedNumber: {
+    type: String,
+    required: false, // Optional field
+    validate: {
+      validator: function(v) {
+        if (this.role !== 'student' || !v) return true; // Allow empty for non-students or optional
+        // Format validation: "320 Bed 1", "320 Bed 2", etc.
+        return /^\d{3} Bed \d+$/.test(v);
+      },
+      message: props => `${props.value} is not a valid bed number format! Must be "RoomNumber Bed Number" (e.g., "320 Bed 1")`
+    }
+  },
+  lockerNumber: {
+    type: String,
+    required: false, // Optional field
+    validate: {
+      validator: function(v) {
+        if (this.role !== 'student' || !v) return true; // Allow empty for non-students or optional
+        // Format validation: "320 Locker 1", "320 Locker 2", etc.
+        return /^\d{3} Locker \d+$/.test(v);
+      },
+      message: props => `${props.value} is not a valid locker number format! Must be "RoomNumber Locker Number" (e.g., "320 Locker 1")`
+    }
+  },
   studentPhone: {
     type: String,
     required: false, // Make student phone optional

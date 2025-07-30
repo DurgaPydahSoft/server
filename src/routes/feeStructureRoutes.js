@@ -8,7 +8,8 @@ import {
   getFeeStructureStats,
   testFeeStructure,
   createSampleFeeStructures,
-  fixInactiveFeeStructures
+  fixInactiveFeeStructures,
+  getFeeStructureForAdmitCard
 } from '../controllers/feeStructureController.js';
 import { adminAuth, restrictTo } from '../middleware/authMiddleware.js';
 
@@ -23,6 +24,7 @@ router.post('/fix-inactive', adminAuth, restrictTo('super_admin', 'admin'), fixI
 router.get('/', getFeeStructures);
 router.get('/academic-years', getAcademicYears);
 router.get('/stats', getFeeStructureStats);
+router.get('/admit-card/:academicYear/:category', getFeeStructureForAdmitCard);
 router.get('/:academicYear/:category', getFeeStructure);
 
 // Admin only routes

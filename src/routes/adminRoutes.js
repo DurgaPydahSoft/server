@@ -17,7 +17,11 @@ import {
   renewBatches,
   searchStudentByRollNumber,
   resetStudentPassword,
-  updateStudentYears
+  updateStudentYears,
+  getStudentsForAdmitCards,
+  generateAdmitCard,
+  generateBulkAdmitCards,
+  getRoomBedLockerAvailability
 } from '../controllers/adminController.js';
 import { initializeHostelCounters, getCounterStatus } from '../utils/initializeCounters.js';
 import { 
@@ -167,8 +171,13 @@ router.get('/students', getStudents);
 // Specific sub-paths of /students/ should come before dynamic /students/:id
 router.delete('/students/temp-clear', clearTempStudents);
 
+// Admit card routes (must come before dynamic /students/:id routes)
+router.get('/students/admit-cards', getStudentsForAdmitCards);
+router.post('/students/bulk-admit-cards', generateBulkAdmitCards);
+
 // Dynamic routes for /students/:id
 router.get('/students/:id', getStudentById);
+router.post('/students/:id/admit-card', generateAdmitCard);
 router.put('/students/:id', imageUpload.fields([
   { name: 'studentPhoto', maxCount: 1 },
   { name: 'guardianPhoto1', maxCount: 1 },
@@ -204,5 +213,8 @@ router.get('/counters/status', async (req, res) => {
 // Electricity bill routes
 router.post('/rooms/:roomId/electricity', addElectricityBill);
 router.get('/rooms/:roomId/electricity', getElectricityBills);
+
+// Room bed/locker availability route
+router.get('/rooms/:roomNumber/bed-locker-availability', getRoomBedLockerAvailability);
 
 export default router; 

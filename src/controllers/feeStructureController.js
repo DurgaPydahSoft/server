@@ -443,4 +443,65 @@ export const fixInactiveFeeStructures = async (req, res) => {
       message: 'Internal server error'
     });
   }
+};
+
+// Get fee structure for admit card generation
+export const getFeeStructureForAdmitCard = async (req, res) => {
+  try {
+    console.log('🔍 Backend: getFeeStructureForAdmitCard called');
+    console.log('🔍 Backend: Params:', req.params);
+    
+    const { academicYear, category } = req.params;
+    
+    if (!academicYear || !category) {
+      return res.status(400).json({
+        success: false,
+        message: 'Academic year and category are required'
+      });
+    }
+
+    console.log('🔍 Backend: Searching for fee structure:', { academicYear, category });
+    
+    const feeStructure = await FeeStructure.findOne({ 
+      academicYear, 
+      category, 
+      isActive: true 
+    });
+
+    console.log('🔍 Backend: Found fee structure:', feeStructure);
+
+    if (!feeStructure) {
+      return res.json({
+        success: true,
+        data: {
+          academicYear,
+          category,
+          term1Fee: 0,
+          term2Fee: 0,
+          term3Fee: 0,
+          totalFee: 0,
+          found: false
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        academicYear: feeStructure.academicYear,
+        category: feeStructure.category,
+        term1Fee: feeStructure.term1Fee,
+        term2Fee: feeStructure.term2Fee,
+        term3Fee: feeStructure.term3Fee,
+        totalFee: feeStructure.totalFee,
+        found: true
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching fee structure for admit card:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
 }; 

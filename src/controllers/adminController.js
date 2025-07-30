@@ -12,6 +12,26 @@ import xlsx from 'xlsx';
 import Branch from '../models/Branch.js';
 import Course from '../models/Course.js';
 import Counter from '../models/Counter.js';
+import axios from 'axios';
+
+// Helper function to fetch image and convert to base64
+const fetchImageAsBase64 = async (imageUrl) => {
+  try {
+    const response = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000
+    });
+    
+    const buffer = Buffer.from(response.data, 'binary');
+    const base64 = buffer.toString('base64');
+    const mimeType = response.headers['content-type'] || 'image/jpeg';
+    
+    return `data:${mimeType};base64,${base64}`;
+  } catch (error) {
+    console.error('Error fetching image:', error);
+    return null;
+  }
+};
 
 // Function to generate hostel ID (imported from studentController)
 const generateHostelId = async (gender) => {
@@ -56,6 +76,8 @@ export const addStudent = async (req, res, next) => {
       branch,
       category,
       roomNumber,
+      bedNumber,
+      lockerNumber,
       studentPhone,
       parentPhone,
       batch,
@@ -84,6 +106,43 @@ export const addStudent = async (req, res, next) => {
     const studentCount = await User.countDocuments({ roomNumber, gender, category, role: 'student' });
     if (studentCount >= roomDoc.bedCount) {
       throw createError(400, 'Room is full. Cannot register more students.');
+    }
+
+    // Validate bed and locker assignment if provided
+    if (bedNumber) {
+      // Check if bed is already occupied
+      const bedOccupied = await User.findOne({ 
+        bedNumber, 
+        role: 'student',
+        hostelStatus: 'Active'
+      });
+      if (bedOccupied) {
+        throw createError(400, 'Selected bed is already occupied');
+      }
+      
+      // Validate bed format matches room
+      const expectedBedFormat = `${roomNumber} Bed `;
+      if (!bedNumber.startsWith(expectedBedFormat)) {
+        throw createError(400, 'Invalid bed number format for this room');
+      }
+    }
+
+    if (lockerNumber) {
+      // Check if locker is already occupied
+      const lockerOccupied = await User.findOne({ 
+        lockerNumber, 
+        role: 'student',
+        hostelStatus: 'Active'
+      });
+      if (lockerOccupied) {
+        throw createError(400, 'Selected locker is already occupied');
+      }
+      
+      // Validate locker format matches room
+      const expectedLockerFormat = `${roomNumber} Locker `;
+      if (!lockerNumber.startsWith(expectedLockerFormat)) {
+        throw createError(400, 'Invalid locker number format for this room');
+      }
     }
 
     // Generate hostel ID
@@ -126,6 +185,8 @@ export const addStudent = async (req, res, next) => {
       branch,
       category,
       roomNumber,
+      bedNumber,
+      lockerNumber,
       studentPhone,
       parentPhone,
       batch,
@@ -1052,12 +1113,15 @@ export const updateStudent = async (req, res, next) => {
   try {
     const { 
       name, 
+      rollNumber,
       course, 
       year,
       branch, 
       gender,
       category,
       roomNumber, 
+      bedNumber,
+      lockerNumber,
       studentPhone, 
       parentPhone,
       batch,
@@ -1136,6 +1200,47 @@ export const updateStudent = async (req, res, next) => {
       throw createError(400, 'Invalid hostel status');
     }
 
+    // Validate bed and locker assignment if provided
+    if (bedNumber) {
+      // Check if bed is already occupied by another student
+      const bedOccupied = await User.findOne({ 
+        bedNumber, 
+        role: 'student',
+        hostelStatus: 'Active',
+        _id: { $ne: student._id } // Exclude current student
+      });
+      if (bedOccupied) {
+        throw createError(400, 'Selected bed is already occupied by another student');
+      }
+      
+      // Validate bed format matches room
+      const roomToCheck = roomNumber || student.roomNumber;
+      const expectedBedFormat = `${roomToCheck} Bed `;
+      if (!bedNumber.startsWith(expectedBedFormat)) {
+        throw createError(400, 'Invalid bed number format for this room');
+      }
+    }
+
+    if (lockerNumber) {
+      // Check if locker is already occupied by another student
+      const lockerOccupied = await User.findOne({ 
+        lockerNumber, 
+        role: 'student',
+        hostelStatus: 'Active',
+        _id: { $ne: student._id } // Exclude current student
+      });
+      if (lockerOccupied) {
+        throw createError(400, 'Selected locker is already occupied by another student');
+      }
+      
+      // Validate locker format matches room
+      const roomToCheck = roomNumber || student.roomNumber;
+      const expectedLockerFormat = `${roomToCheck} Locker `;
+      if (!lockerNumber.startsWith(expectedLockerFormat)) {
+        throw createError(400, 'Invalid locker number format for this room');
+      }
+    }
+
     // Handle photo uploads
     if (req.files) {
       if (req.files.studentPhoto && req.files.studentPhoto[0]) {
@@ -1178,12 +1283,15 @@ export const updateStudent = async (req, res, next) => {
 
     // Update fields
     if (name) student.name = name;
+    if (rollNumber) student.rollNumber = rollNumber;
     if (course) student.course = course;
     if (year) student.year = year;
     if (branch) student.branch = branch;
     if (gender) student.gender = gender;
     if (category) student.category = category;
     if (roomNumber) student.roomNumber = roomNumber;
+    if (bedNumber !== undefined) student.bedNumber = bedNumber;
+    if (lockerNumber !== undefined) student.lockerNumber = lockerNumber;
     if (studentPhone !== undefined) student.studentPhone = studentPhone;
     if (parentPhone) student.parentPhone = parentPhone;
     if (batch) student.batch = batch;
@@ -1233,6 +1341,8 @@ export const updateStudent = async (req, res, next) => {
           branch: student.branch,
           category: student.category,
           roomNumber: student.roomNumber,
+          bedNumber: student.bedNumber,
+          lockerNumber: student.lockerNumber,
           studentPhone: student.studentPhone,
           parentPhone: student.parentPhone,
           email: student.email,
@@ -1992,3 +2102,299 @@ export const updateStudentYears = async (req, res, next) => {
     next(error);
   }
 }; 
+
+// Get students for admit card generation
+export const getStudentsForAdmitCards = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 20, search = '', course = '', year = '', category = '' } = req.query;
+    
+    const query = { role: 'student' };
+    
+    // Add search filter
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { rollNumber: { $regex: search, $options: 'i' } },
+        { hostelId: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Add filters
+    if (course) {
+      // Handle course filtering - course can be either ObjectId or string
+      if (course.match(/^[0-9a-fA-F]{24}$/)) {
+        // If it's a valid ObjectId, use it directly
+        query.course = course;
+      } else {
+        // If it's a string (course name), we need to find the course first
+        try {
+          const Course = (await import('../models/Course.js')).default;
+          const courseDoc = await Course.findOne({ name: { $regex: course, $options: 'i' } });
+          if (courseDoc) {
+            query.course = courseDoc._id;
+          } else {
+            // If course not found, return empty result
+            return res.json({
+              success: true,
+              data: {
+                students: [],
+                pagination: {
+                  current: parseInt(page),
+                  total: 0,
+                  totalStudents: 0
+                }
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Error finding course:', error);
+          // Fallback to string matching if course lookup fails
+          query.course = { $regex: course, $options: 'i' };
+        }
+      }
+    }
+    if (year) query.year = year;
+    if (category) query.category = category;
+    
+    const skip = (page - 1) * limit;
+    
+    console.log('Admit cards query:', JSON.stringify(query, null, 2));
+    
+    const students = await User.find(query)
+      .populate('course', 'name')
+      .populate('branch', 'name')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address');
+    
+    const total = await User.countDocuments(query);
+    
+    console.log('Admit cards results:', students.length, 'students found');
+    
+    res.json({
+      success: true,
+      data: {
+        students,
+        pagination: {
+          current: parseInt(page),
+          total: Math.ceil(total / limit),
+          totalStudents: total
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error in getStudentsForAdmitCards:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch students for admit cards',
+      error: error.message
+    });
+  }
+};
+
+// Generate individual admit card
+export const generateAdmitCard = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    const student = await User.findById(id)
+      .populate('course', 'name')
+      .populate('branch', 'name');
+    
+    if (!student || student.role !== 'student') {
+      throw createError(404, 'Student not found');
+    }
+    
+    // Check if student has photo
+    if (!student.studentPhoto) {
+      throw createError(400, 'Student photo is required for admit card generation');
+    }
+    
+    // Fetch the image and convert to base64
+    let photoBase64 = null;
+    if (student.studentPhoto) {
+      photoBase64 = await fetchImageAsBase64(student.studentPhoto);
+      if (!photoBase64) {
+        throw createError(400, 'Failed to fetch student photo');
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        student: {
+          id: student._id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          course: student.course?.name || student.course,
+          year: student.year,
+          branch: student.branch?.name || student.branch,
+          gender: student.gender,
+          category: student.category,
+          roomNumber: student.roomNumber,
+          studentPhone: student.studentPhone,
+          parentPhone: student.parentPhone,
+          email: student.email,
+          batch: student.batch,
+          academicYear: student.academicYear,
+          hostelId: student.hostelId,
+          hostelStatus: student.hostelStatus,
+          studentPhoto: photoBase64, // Return base64 image instead of URL
+          address: student.address
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Generate bulk admit cards
+export const generateBulkAdmitCards = async (req, res, next) => {
+  try {
+    const { studentIds } = req.body;
+    
+    if (!studentIds || !Array.isArray(studentIds) || studentIds.length === 0) {
+      throw createError(400, 'Student IDs array is required');
+    }
+    
+    const students = await User.find({ 
+      _id: { $in: studentIds }, 
+      role: 'student' 
+    })
+    .populate('course', 'name')
+    .populate('branch', 'name')
+    .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address');
+    
+    // Check if all students have photos
+    const studentsWithoutPhotos = students.filter(s => !s.studentPhoto);
+    if (studentsWithoutPhotos.length > 0) {
+      const names = studentsWithoutPhotos.map(s => s.name).join(', ');
+      throw createError(400, `Students without photos: ${names}. All students must have photos for admit card generation.`);
+    }
+    
+    // Fetch images for all students
+    const studentsWithPhotos = [];
+    for (const student of students) {
+      try {
+        const photoBase64 = await fetchImageAsBase64(student.studentPhoto);
+        if (!photoBase64) {
+          throw createError(400, `Failed to fetch photo for student: ${student.name}`);
+        }
+        
+        studentsWithPhotos.push({
+          id: student._id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          course: student.course?.name || student.course,
+          year: student.year,
+          branch: student.branch?.name || student.branch,
+          gender: student.gender,
+          category: student.category,
+          roomNumber: student.roomNumber,
+          studentPhone: student.studentPhone,
+          parentPhone: student.parentPhone,
+          email: student.email,
+          batch: student.batch,
+          academicYear: student.academicYear,
+          hostelId: student.hostelId,
+          hostelStatus: student.hostelStatus,
+          studentPhoto: photoBase64, // Return base64 image instead of URL
+          address: student.address
+        });
+      } catch (error) {
+        console.error(`Error fetching photo for student ${student.name}:`, error);
+        throw createError(400, `Failed to fetch photo for student: ${student.name}`);
+      }
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        students: studentsWithPhotos
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get available beds and lockers for a room
+export const getRoomBedLockerAvailability = async (req, res, next) => {
+  try {
+    const { roomNumber } = req.params;
+    
+    if (!roomNumber) {
+      throw createError(400, 'Room number is required');
+    }
+
+    // Find the room
+    const room = await Room.findOne({ roomNumber });
+    if (!room) {
+      throw createError(404, 'Room not found');
+    }
+
+    // Get all students currently in this room
+    const studentsInRoom = await User.find({ 
+      roomNumber: roomNumber, 
+      role: 'student',
+      hostelStatus: 'Active'
+    }).select('bedNumber lockerNumber');
+
+    // Get occupied beds and lockers
+    const occupiedBeds = studentsInRoom
+      .filter(student => student.bedNumber)
+      .map(student => student.bedNumber);
+    
+    const occupiedLockers = studentsInRoom
+      .filter(student => student.lockerNumber)
+      .map(student => student.lockerNumber);
+
+    // Generate all possible beds and lockers based on room's bed count
+    const allBeds = [];
+    const allLockers = [];
+    
+    for (let i = 1; i <= room.bedCount; i++) {
+      const bedNumber = `${roomNumber} Bed ${i}`;
+      const lockerNumber = `${roomNumber} Locker ${i}`;
+      
+      allBeds.push({
+        value: bedNumber,
+        label: bedNumber,
+        occupied: occupiedBeds.includes(bedNumber)
+      });
+      
+      allLockers.push({
+        value: lockerNumber,
+        label: lockerNumber,
+        occupied: occupiedLockers.includes(lockerNumber)
+      });
+    }
+
+    // Filter out occupied beds and lockers for available options
+    const availableBeds = allBeds.filter(bed => !bed.occupied);
+    const availableLockers = allLockers.filter(locker => !locker.occupied);
+
+    res.json({
+      success: true,
+      data: {
+        room: {
+          roomNumber: room.roomNumber,
+          bedCount: room.bedCount,
+          gender: room.gender,
+          category: room.category
+        },
+        allBeds,
+        allLockers,
+        availableBeds,
+        availableLockers,
+        occupiedBeds,
+        occupiedLockers,
+        currentOccupancy: studentsInRoom.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

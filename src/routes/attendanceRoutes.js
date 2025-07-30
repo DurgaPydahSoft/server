@@ -12,7 +12,8 @@ import {
   getPrincipalAttendanceForRange,
   getPrincipalAttendanceStats,
   getPrincipalStudentCount,
-  getPrincipalStudentsByStatus
+  getPrincipalStudentsByStatus,
+  generateAttendanceReport
 } from '../controllers/attendanceController.js';
 import { protect, adminAuth, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
@@ -26,10 +27,12 @@ router.get('/range', adminAuth, getAttendanceForDateRange);
 router.get('/stats', adminAuth, getAttendanceStats);
 router.put('/update', adminAuth, updateAttendance);
 router.delete('/:studentId/:date', adminAuth, deleteAttendance);
+router.get('/report', adminAuth, generateAttendanceReport);
 
 // Warden-specific routes (if needed)
 router.get('/warden/date', wardenAuth, getAttendanceForDate);
 router.get('/warden/range', wardenAuth, getAttendanceForDateRange);
+router.get('/warden/report', wardenAuth, generateAttendanceReport);
 
 // Student routes
 router.get('/my-attendance', protect, getMyAttendance);
@@ -40,5 +43,6 @@ router.get('/principal/range', principalAuth, getPrincipalAttendanceForRange);
 router.get('/principal/stats', principalAuth, getPrincipalAttendanceStats);
 router.get('/principal/students/count', principalAuth, getPrincipalStudentCount);
 router.get('/principal/students/by-status', principalAuth, getPrincipalStudentsByStatus);
+router.get('/principal/report', principalAuth, generateAttendanceReport);
 
 export default router;

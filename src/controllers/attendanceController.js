@@ -1513,3 +1513,277 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
     next(error);
   }
 };
+
+// Generate comprehensive attendance report for PDF
+export const generateAttendanceReport = async (req, res, next) => {
+  try {
+    const { startDate, endDate, course, branch, gender, studentId, status, reportType } = req.query;
+    const userRole = req.admin?.role || req.user?.role;
+    const principal = req.principal; // Get principal from request
+    
+    let attendanceData = [];
+    let statistics = {};
+    let reportInfo = {};
+
+    // Determine date range
+    const start = startDate ? normalizeDate(new Date(startDate)) : normalizeDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000));
+    const end = endDate ? normalizeDate(new Date(endDate)) : normalizeDate(new Date());
+
+    if (start > end) {
+      throw createError(400, 'Start date cannot be after end date');
+    }
+
+    // Build query based on user role
+    let query = {
+      date: { $gte: start, $lte: end }
+    };
+
+    // If studentId is provided, filter by student
+    if (studentId) {
+      query.student = studentId;
+    }
+
+    // Get attendance data
+    let attendance = await Attendance.find(query)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender roomNumber',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      })
+      .populate('markedBy', 'username role')
+      .sort({ date: -1, 'student.name': 1 });
+
+    // Filter by principal's course if user is a principal
+    if (principal && principal.role === 'principal' && principal.course) {
+      const principalCourseId = typeof principal.course === 'object' ? principal.course._id : principal.course;
+      attendance = attendance.filter(att => {
+        if (!att.student || !att.student.course) return false;
+        const studentCourseId = typeof att.student.course === 'object' ? att.student.course._id : att.student.course;
+        return studentCourseId.toString() === principalCourseId.toString();
+      });
+    }
+
+    // Get approved leaves for the date range
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      $or: [
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: end },
+          endDate: { $gte: start }
+        },
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: start, $lte: end }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    // Create a map of student IDs to their leave dates
+    const studentLeaveDates = new Map();
+    approvedLeaves.forEach(leave => {
+      if (!leave.student) return;
+      
+      const studentId = leave.student._id.toString();
+      if (!studentLeaveDates.has(studentId)) {
+        studentLeaveDates.set(studentId, new Set());
+      }
+      
+      if (leave.applicationType === 'Leave') {
+        const currentDate = new Date(leave.startDate);
+        const endDate = new Date(leave.endDate);
+        while (currentDate <= endDate) {
+          const dateStr = currentDate.toISOString().split('T')[0];
+          studentLeaveDates.get(studentId).add(dateStr);
+          currentDate.setDate(currentDate.getDate() + 1);
+        }
+      } else if (leave.applicationType === 'Permission') {
+        const dateStr = new Date(leave.permissionDate).toISOString().split('T')[0];
+        studentLeaveDates.get(studentId).add(dateStr);
+      }
+    });
+
+    // Add isOnLeave flag to attendance records
+    attendance = attendance.map(att => {
+      if (!att.student) {
+        return {
+          ...att.toObject(),
+          student: null,
+          isOnLeave: false
+        };
+      }
+      
+      const studentId = att.student._id.toString();
+      const leaveDates = studentLeaveDates.get(studentId);
+      const dateStr = new Date(att.date).toISOString().split('T')[0];
+      const isOnLeave = leaveDates && leaveDates.has(dateStr);
+      
+      return {
+        ...att.toObject(),
+        student: {
+          ...att.student.toObject(),
+          isOnLeave: isOnLeave
+        }
+      };
+    });
+
+    // Apply additional filters (only if not a principal, as principal is already filtered by course)
+    if (!principal || principal.role !== 'principal') {
+      if (course) {
+        attendance = attendance.filter(att => 
+          att.student?.course?._id?.toString() === course || 
+          att.student?.course?.toString() === course
+        );
+      }
+    }
+
+    if (branch) {
+      attendance = attendance.filter(att => 
+        att.student?.branch?._id?.toString() === branch || 
+        att.student?.branch?.toString() === branch
+      );
+    }
+
+    if (gender) {
+      attendance = attendance.filter(att => 
+        att.student?.gender === gender
+      );
+    }
+
+    if (status) {
+      attendance = attendance.filter(att => {
+        const isPresent = att.morning && att.evening && att.night;
+        const isPartial = (att.morning || att.evening || att.night) && !isPresent;
+        const isAbsent = !att.morning && !att.evening && !att.night;
+        
+        if (status === 'Present') return isPresent;
+        if (status === 'Partial') return isPartial;
+        if (status === 'Absent') return isAbsent;
+        return true;
+      });
+    }
+
+    // Calculate comprehensive statistics
+    const totalRecords = attendance.length;
+    const totalStudents = new Set(attendance.map(att => att.student?._id)).size;
+    const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1;
+    
+    const morningPresent = attendance.filter(att => att.morning).length;
+    const eveningPresent = attendance.filter(att => att.evening).length;
+    const nightPresent = attendance.filter(att => att.night).length;
+    const fullyPresent = attendance.filter(att => att.morning && att.evening && att.night).length;
+    const partiallyPresent = attendance.filter(att => 
+      (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)
+    ).length;
+    const absent = attendance.filter(att => !att.morning && !att.evening && !att.night).length;
+    const onLeave = attendance.filter(att => att.student?.isOnLeave).length;
+
+    // Calculate attendance percentages
+    const totalPossibleAttendance = totalStudents * totalDays;
+    const overallAttendanceRate = totalPossibleAttendance > 0 ? 
+      Math.round(((fullyPresent + partiallyPresent) / totalPossibleAttendance) * 100) : 0;
+
+    // Generate analytics by course, branch, and gender
+    const courseAnalytics = {};
+    const branchAnalytics = {};
+    const genderAnalytics = {};
+
+    attendance.forEach(att => {
+      if (!att.student) return;
+
+      const courseName = att.student.course?.name || 'Unknown';
+      const branchName = att.student.branch?.name || 'Unknown';
+      const gender = att.student.gender || 'Unknown';
+
+      // Course analytics
+      if (!courseAnalytics[courseName]) {
+        courseAnalytics[courseName] = { total: 0, present: 0, partial: 0, absent: 0 };
+      }
+      courseAnalytics[courseName].total++;
+      if (att.morning && att.evening && att.night) courseAnalytics[courseName].present++;
+      else if (att.morning || att.evening || att.night) courseAnalytics[courseName].partial++;
+      else courseAnalytics[courseName].absent++;
+
+      // Branch analytics
+      if (!branchAnalytics[branchName]) {
+        branchAnalytics[branchName] = { total: 0, present: 0, partial: 0, absent: 0 };
+      }
+      branchAnalytics[branchName].total++;
+      if (att.morning && att.evening && att.night) branchAnalytics[branchName].present++;
+      else if (att.morning || att.evening || att.night) branchAnalytics[branchName].partial++;
+      else branchAnalytics[branchName].absent++;
+
+      // Gender analytics
+      if (!genderAnalytics[gender]) {
+        genderAnalytics[gender] = { total: 0, present: 0, partial: 0, absent: 0 };
+      }
+      genderAnalytics[gender].total++;
+      if (att.morning && att.evening && att.night) genderAnalytics[gender].present++;
+      else if (att.morning || att.evening || att.night) genderAnalytics[gender].partial++;
+      else genderAnalytics[gender].absent++;
+    });
+
+    // Calculate percentages for analytics
+    Object.keys(courseAnalytics).forEach(course => {
+      const analytics = courseAnalytics[course];
+      analytics.presentPercentage = analytics.total > 0 ? Math.round((analytics.present / analytics.total) * 100) : 0;
+      analytics.partialPercentage = analytics.total > 0 ? Math.round((analytics.partial / analytics.total) * 100) : 0;
+      analytics.absentPercentage = analytics.total > 0 ? Math.round((analytics.absent / analytics.total) * 100) : 0;
+    });
+
+    Object.keys(branchAnalytics).forEach(branch => {
+      const analytics = branchAnalytics[branch];
+      analytics.presentPercentage = analytics.total > 0 ? Math.round((analytics.present / analytics.total) * 100) : 0;
+      analytics.partialPercentage = analytics.total > 0 ? Math.round((analytics.partial / analytics.total) * 100) : 0;
+      analytics.absentPercentage = analytics.total > 0 ? Math.round((analytics.absent / analytics.total) * 100) : 0;
+    });
+
+    Object.keys(genderAnalytics).forEach(gender => {
+      const analytics = genderAnalytics[gender];
+      analytics.presentPercentage = analytics.total > 0 ? Math.round((analytics.present / analytics.total) * 100) : 0;
+      analytics.partialPercentage = analytics.total > 0 ? Math.round((analytics.partial / analytics.total) * 100) : 0;
+      analytics.absentPercentage = analytics.total > 0 ? Math.round((analytics.absent / analytics.total) * 100) : 0;
+    });
+
+    statistics = {
+      totalRecords,
+      totalStudents,
+      totalDays,
+      morningPresent,
+      eveningPresent,
+      nightPresent,
+      fullyPresent,
+      partiallyPresent,
+      absent,
+      onLeave,
+      overallAttendanceRate,
+      courseAnalytics,
+      branchAnalytics,
+      genderAnalytics
+    };
+
+    reportInfo = {
+      startDate: start,
+      endDate: end,
+      filters: { course, branch, gender, studentId, status },
+      userRole,
+      generatedAt: new Date(),
+      reportType: reportType || 'comprehensive'
+    };
+
+    res.json({
+      success: true,
+      data: {
+        attendance: attendance,
+        statistics,
+        reportInfo
+      }
+    });
+  } catch (error) {
+    console.error('Error generating attendance report:', error);
+    next(error);
+  }
+};
