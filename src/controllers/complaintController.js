@@ -1369,3 +1369,221 @@ export const listWardenComplaints = async (req, res) => {
     });
   }
 };
+
+// Principal: List complaints for their course
+export const listPrincipalComplaints = async (req, res) => {
+  try {
+    const principalId = req.user._id;
+    const { type, status } = req.query;
+    
+    console.log('🎓 Principal complaints request:', {
+      principalId,
+      type,
+      status,
+      query: req.query
+    });
+
+    // Get principal's course - principals are in Admin model, not User model
+    const principal = await Admin.findById(principalId).populate('course');
+    if (!principal || !principal.course) {
+      console.log('🎓 Principal or course not found:', { principal: !!principal, course: !!principal?.course });
+      return res.status(400).json({
+        success: false,
+        message: 'Principal course not found'
+      });
+    }
+
+    const courseId = principal.course._id || principal.course;
+    console.log('🎓 Principal course ID:', courseId);
+
+    // Build query
+    let query = {};
+    
+    // Filter by course - get complaints from students in this course
+    const courseStudents = await User.find({ course: courseId, role: 'student' }).distinct('_id');
+    console.log('🎓 Course students count:', courseStudents.length);
+    console.log('🎓 Course students:', courseStudents);
+    
+    query['student'] = { $in: courseStudents };
+    
+    // Filter by type if specified
+    if (type && type !== 'all') {
+      if (type === 'student') {
+        query.complaintType = { $ne: 'facility' };
+      } else if (type === 'facility') {
+        query.complaintType = 'facility';
+      } else if (type === 'warden') {
+        query.raisedBy = 'warden';
+      }
+    }
+    
+    // Filter by status if specified
+    if (status && status !== 'all') {
+      query.currentStatus = status;
+    }
+
+    console.log('🎓 Final query:', JSON.stringify(query, null, 2));
+
+    const complaints = await Complaint.find(query)
+      .populate('student', 'name rollNumber roomNumber course branch year')
+      .populate('assignedTo', 'name phone category')
+      .sort({ createdAt: -1 });
+
+    console.log('🎓 Found complaints:', complaints.length);
+
+    res.json({
+      success: true,
+      data: {
+        complaints,
+        total: complaints.length
+      }
+    });
+
+  } catch (error) {
+    console.error('🎓 Error fetching principal complaints:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch complaints',
+      error: error.message
+    });
+  }
+};
+
+// Principal: Get complaint timeline
+export const principalGetTimeline = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const principalId = req.user._id;
+
+    console.log('🎓 Principal timeline request:', { complaintId: id, principalId });
+
+    // Verify principal has access to this complaint - principals are in Admin model
+    const principal = await Admin.findById(principalId).populate('course');
+    if (!principal || !principal.course) {
+      console.log('🎓 Principal or course not found:', { principal: !!principal, course: !!principal?.course });
+      return res.status(400).json({
+        success: false,
+        message: 'Principal course not found'
+      });
+    }
+
+    const courseId = principal.course._id || principal.course;
+    console.log('🎓 Principal course ID:', courseId);
+
+    const courseStudents = await User.find({ course: courseId, role: 'student' }).distinct('_id');
+    console.log('🎓 Course students count:', courseStudents.length);
+    console.log('🎓 Course students:', courseStudents);
+
+    const complaint = await Complaint.findById(id)
+      .populate('student', 'name rollNumber roomNumber category')
+      .populate('assignedTo', 'name category')
+      .populate('warden', 'name');
+
+    if (!complaint) {
+      console.log('🎓 Complaint not found for ID:', id);
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    console.log('🎓 Complaint student ID:', complaint.student);
+    console.log('🎓 Complaint student ID type:', typeof complaint.student);
+    console.log('🎓 Course students types:', courseStudents.map(id => typeof id));
+    
+    // Convert to strings for comparison to handle ObjectId vs string issues
+    const courseStudentStrings = courseStudents.map(id => id.toString());
+    const complaintStudentString = complaint.student._id.toString();
+    console.log('🎓 Is complaint student in course students?', courseStudentStrings.includes(complaintStudentString));
+
+    // Check if complaint belongs to a student in principal's course
+    if (!courseStudentStrings.includes(complaintStudentString)) {
+      console.log('🎓 Access denied - complaint student not in principal course');
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this complaint'
+      });
+    }
+
+    // Get timeline from status history (same as warden function)
+    const timeline = complaint.statusHistory || [];
+    console.log('🎓 Timeline data length:', timeline.length);
+    console.log('🎓 Timeline data:', timeline);
+
+    res.json({
+      success: true,
+      data: {
+        timeline,
+        complaint
+      }
+    });
+
+  } catch (error) {
+    console.error('🎓 Error fetching principal timeline:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch timeline',
+      error: error.message
+    });
+  }
+};
+
+// Principal: Get complaint details
+export const principalGetComplaintDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const principalId = req.user._id;
+
+    console.log('🎓 Principal complaint details request:', { complaintId: id, principalId });
+
+    // Verify principal has access to this complaint - principals are in Admin model
+    const principal = await Admin.findById(principalId).populate('course');
+    if (!principal || !principal.course) {
+      return res.status(400).json({
+        success: false,
+        message: 'Principal course not found'
+      });
+    }
+
+    const courseId = principal.course._id || principal.course;
+    const courseStudents = await User.find({ course: courseId, role: 'student' }).distinct('_id');
+
+    const complaint = await Complaint.findById(id)
+      .populate('student', 'name rollNumber roomNumber course branch year')
+      .populate('assignedTo', 'name phone category');
+
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    // Convert to strings for comparison to handle ObjectId vs string issues
+    const courseStudentStrings = courseStudents.map(id => id.toString());
+    const complaintStudentString = complaint.student._id.toString();
+
+    // Check if complaint belongs to a student in principal's course
+    if (!courseStudentStrings.includes(complaintStudentString)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied to this complaint'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        complaint
+      }
+    });
+
+  } catch (error) {
+    console.error('🎓 Error fetching principal complaint details:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch complaint details',
+      error: error.message
+    });
+  }
+};

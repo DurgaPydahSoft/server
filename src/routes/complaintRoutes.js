@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticateStudent, adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
+import { authenticateStudent, adminAuth, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 import {
   createComplaint,
   listMyComplaints,
@@ -18,7 +18,10 @@ import {
   toggleAI,
   createWardenComplaint,
   listWardenComplaints,
-  wardenGetTimeline
+  wardenGetTimeline,
+  listPrincipalComplaints,
+  principalGetTimeline,
+  principalGetComplaintDetails
 } from '../controllers/complaintController.js';
 import multer from 'multer';
 
@@ -38,6 +41,11 @@ const upload = multer({
     }
   },
 });
+
+// Principal routes (must come before parameterized routes)
+router.get('/principal', principalAuth, listPrincipalComplaints);
+router.get('/principal/:id/timeline', principalAuth, principalGetTimeline);
+router.get('/principal/:id/details', principalAuth, principalGetComplaintDetails);
 
 // Warden routes (must come before parameterized routes)
 router.post('/warden', wardenAuth, upload.single('image'), createWardenComplaint);

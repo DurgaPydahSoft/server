@@ -1365,3 +1365,151 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
     next(error);
   }
 };
+
+// Get students by attendance status for principal's course
+export const getPrincipalStudentsByStatus = async (req, res, next) => {
+  try {
+    const { date, status } = req.query;
+    const principal = req.principal;
+    const normalizedDate = normalizeDate(date || new Date());
+
+    console.log('🎓 Principal students by status request:', {
+      date: normalizedDate,
+      status,
+      course: principal.course
+    });
+
+    // Handle both populated course object and course ID
+    const courseId = principal.course && typeof principal.course === 'object' 
+      ? principal.course._id 
+      : principal.course;
+
+    const studentQuery = { 
+      role: 'student', 
+      hostelStatus: 'Active',
+      course: courseId
+    };
+
+    console.log('🎓 Student query:', studentQuery);
+
+    // Get students in principal's course
+    const students = await User.find(studentQuery)
+      .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
+      .populate('course', 'name code')
+      .populate('branch', 'name code')
+      .sort({ name: 1 });
+
+    console.log('🎓 Found students:', students.length);
+
+    const studentIds = students.map(student => student._id);
+
+    // Get attendance for these students on the specified date
+    const attendanceQuery = {
+      student: { $in: studentIds },
+      date: normalizedDate
+    };
+    
+    const attendance = await Attendance.find(attendanceQuery)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year gender roomNumber studentPhoto',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
+
+    // Get approved leaves for the date
+    const startOfDay = new Date(normalizedDate);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(normalizedDate);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const approvedLeaves = await Leave.find({
+      status: 'Approved',
+      verificationStatus: { $ne: 'Completed' },
+      $or: [
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: endOfDay },
+          endDate: { $gte: startOfDay }
+        },
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      ]
+    }).populate('student', '_id name');
+
+    // Create a set of student IDs who are on approved leave
+    const studentsOnLeave = new Set(approvedLeaves
+      .filter(leave => leave.student)
+      .map(leave => leave.student._id.toString())
+    );
+
+    // Create a map of student attendance
+    const attendanceMap = new Map();
+    attendance.forEach(att => {
+      if (att.student) {
+        attendanceMap.set(att.student._id.toString(), att);
+      }
+    });
+
+    // Combine student data with attendance status
+    const studentsWithAttendance = students.map(student => {
+      const studentAttendance = attendanceMap.get(student._id.toString());
+      const isOnLeave = studentsOnLeave.has(student._id.toString());
+      
+      let status;
+      if (isOnLeave) {
+        status = 'On Leave';
+      } else if (studentAttendance) {
+        status = (studentAttendance.morning && studentAttendance.evening && studentAttendance.night) ? 'Present' : 
+                 (studentAttendance.morning || studentAttendance.evening || studentAttendance.night) ? 'Partial' : 'Absent';
+      } else {
+        status = 'Absent';
+      }
+      
+      return {
+        ...student.toObject(),
+        morning: studentAttendance?.morning || false,
+        evening: studentAttendance?.evening || false,
+        night: studentAttendance?.night || false,
+        status: status,
+        notes: studentAttendance?.notes || '',
+        isOnLeave: isOnLeave
+      };
+    });
+
+    // Filter by status if provided
+    let filteredStudents = studentsWithAttendance;
+    if (status) {
+      filteredStudents = studentsWithAttendance.filter(student => {
+        if (status === 'Present') return student.status === 'Present';
+        if (status === 'Partial') return student.status === 'Partial';
+        if (status === 'Absent') return student.status === 'Absent';
+        if (status === 'On Leave') return student.status === 'On Leave';
+        // Handle session-specific statuses
+        if (status === 'Morning') return student.morning === true;
+        if (status === 'Evening') return student.evening === true;
+        if (status === 'Night') return student.night === true;
+        return true;
+      });
+    }
+
+    console.log('🎓 Students filtered by status:', filteredStudents.length);
+
+    res.json({
+      success: true,
+      data: {
+        students: filteredStudents,
+        status: status || 'All',
+        date: normalizedDate,
+        count: filteredStudents.length
+      }
+    });
+  } catch (error) {
+    console.error('🎓 Error in getPrincipalStudentsByStatus:', error);
+    next(error);
+  }
+};
