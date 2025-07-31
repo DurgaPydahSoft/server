@@ -2,6 +2,7 @@ import Admin from '../models/Admin.js';
 import jwt from 'jsonwebtoken';
 import { createError } from '../utils/error.js';
 import { sendSubAdminRegistrationEmail } from '../utils/emailService.js';
+import { sendAdminCredentialsSMS } from '../utils/smsService.js';
 
 // Create a new sub-admin
 export const createSubAdmin = async (req, res, next) => {
@@ -13,7 +14,8 @@ export const createSubAdmin = async (req, res, next) => {
       leaveManagementCourses, 
       permissionAccessLevels,
       passwordDeliveryMethod,
-      email
+      email,
+      phoneNumber
     } = req.body;
 
     console.log('🔧 Creating sub-admin with delivery method:', passwordDeliveryMethod);
@@ -45,6 +47,18 @@ export const createSubAdmin = async (req, res, next) => {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email)) {
         throw createError(400, 'Invalid email address format');
+      }
+    }
+
+    // Validate phone number if mobile delivery is selected
+    if (passwordDeliveryMethod === 'mobile') {
+      if (!phoneNumber || !phoneNumber.trim()) {
+        throw createError(400, 'Phone number is required for mobile delivery');
+      }
+      // Basic phone number validation (at least 10 digits)
+      const phoneRegex = /^\d{10,}$/;
+      if (!phoneRegex.test(phoneNumber.replace(/\D/g, ''))) {
+        throw createError(400, 'Invalid phone number format');
       }
     }
 
@@ -80,9 +94,19 @@ export const createSubAdmin = async (req, res, next) => {
         deliveryResult = { error: emailError.message };
       }
     } else if (passwordDeliveryMethod === 'mobile') {
-      // Mobile delivery placeholder for future implementation
-      console.log('📱 Mobile delivery requested but not implemented yet');
-      deliveryResult = { message: 'Mobile delivery not implemented yet' };
+      try {
+        console.log('📱 Sending sub-admin credentials via SMS to:', phoneNumber);
+        deliveryResult = await sendAdminCredentialsSMS(
+          phoneNumber,
+          username,
+          password
+        );
+        console.log('📱 SMS sent successfully:', deliveryResult);
+      } catch (smsError) {
+        console.error('📱 Error sending SMS:', smsError);
+        // Don't fail the creation if SMS fails, but log it
+        deliveryResult = { error: smsError.message };
+      }
     } else if (!passwordDeliveryMethod) {
       // No delivery method selected
       deliveryResult = { message: 'No credentials sent - admin can provide credentials manually' };

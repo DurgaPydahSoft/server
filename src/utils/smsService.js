@@ -15,20 +15,28 @@ const BULKSMS_ENGLISH_DLT_TEMPLATE_ID = process.env.BULKSMS_ENGLISH_DLT_TEMPLATE
 const HOSTEL_TELUGU_OTP_TEMPLATE = "ప్రియమైన తల్లిదండ్రులారా, మీ {#var#} {#var#} హాస్టల్ నుండి సెలవు కోరుతున్నారు. ఈ OTP {#var#} ని షేర్ చేయండి. మీరు అంగీకరిస్తేనే -Pydah Hostel";
 const HOSTEL_ENGLISH_OTP_TEMPLATE = "Dear Parents, your child {#var#} is seeking leave from hostel. share this OTP {#var#}. Only if you would like to approve-Pydah Hostel";
 
+// Admin credential template
+const ADMIN_CREDENTIAL_TEMPLATE = "Welcome to PYDAH HOSTEL. Your Account is created with UserID: {#var#} Password: {#var#} login with link: {#var#} -Pydah";
+const ADMIN_CREDENTIAL_TEMPLATE_ID = process.env.ADMIN_CREDENTIAL_TEMPLATE_ID || "1707175393810117693"; // Admin credential template ID
+
 // Helper function to check if response is valid
 const isValidSMSResponse = (responseData) => {
   if (!responseData || typeof responseData !== 'string') {
     return false;
   }
   
-  // Check if response contains HTML (invalid)
-  if (responseData.includes('<!DOCTYPE') || responseData.includes('<html') || responseData.includes('<body')) {
-    return false;
-  }
-  
-  // Check for valid message ID patterns
+  // Check for valid message ID patterns (primary check)
   if (responseData.includes('MessageId-') || !isNaN(responseData.trim())) {
     return true;
+  }
+  
+  // Even if it contains HTML, check if it has a MessageId in the HTML
+  if (responseData.includes('<!DOCTYPE') || responseData.includes('<html') || responseData.includes('<body')) {
+    // Extract MessageId from HTML response
+    const messageIdMatch = responseData.match(/MessageId-(\d+)/);
+    if (messageIdMatch) {
+      return true;
+    }
   }
   
   return false;
@@ -36,6 +44,13 @@ const isValidSMSResponse = (responseData) => {
 
 // Helper function to extract message ID
 const extractMessageId = (responseData) => {
+  // Try to extract MessageId using regex (works for both plain text and HTML)
+  const messageIdMatch = responseData.match(/MessageId-(\d+)/);
+  if (messageIdMatch) {
+    return messageIdMatch[1];
+  }
+  
+  // Fallback to old method
   if (responseData.includes('MessageId-')) {
     return responseData.split('MessageId-')[1].split('\n')[0].trim();
   }
@@ -75,6 +90,62 @@ const sendSMSPost = async (params, isUnicode = false) => {
       }
     });
     return response;
+  }
+};
+
+// Function to send admin credentials via SMS
+export const sendAdminCredentialsSMS = async (phoneNumber, username, password) => {
+  try {
+    if (!BULKSMS_API_KEY || !BULKSMS_SENDER_ID || !BULKSMS_ENGLISH_API_URL) {
+      throw createError(500, 'SMS service configuration missing');
+    }
+
+    console.log('📱 Sending admin credentials via SMS to:', phoneNumber);
+    
+    // Replace template variables with actual values
+    const message = ADMIN_CREDENTIAL_TEMPLATE
+      .replace('{#var#}', username)
+      .replace('{#var#}', password)
+      .replace('{#var#}', 'hms.pydahsoft.in');
+    
+    const params = {
+      apikey: BULKSMS_API_KEY,
+      sender: BULKSMS_SENDER_ID,
+      number: phoneNumber,
+      message: message,
+      templateid: ADMIN_CREDENTIAL_TEMPLATE_ID
+    };
+    
+    console.log('📱 Admin credential SMS params:', {
+      message: params.message,
+      templateid: params.templateid,
+      originalTemplate: ADMIN_CREDENTIAL_TEMPLATE,
+      username: username,
+      password: password
+    });
+    
+    const response = await sendSMSPost(params, false); // isUnicode = false for English
+    
+    console.log('📱 Admin credential SMS response:', response.data);
+    
+    // Check if response is valid
+    if (isValidSMSResponse(response.data)) {
+      const messageId = extractMessageId(response.data);
+      if (messageId) {
+        console.log('✅ Admin credential SMS sent successfully with MessageId:', messageId);
+        return {
+          success: true,
+          messageId: messageId,
+          approach: 'Admin Credential Template',
+          language: 'English'
+        };
+      }
+    }
+    
+    throw new Error('Failed to send admin credential SMS');
+  } catch (error) {
+    console.error('📱 Error sending admin credential SMS:', error);
+    throw error;
   }
 };
 
