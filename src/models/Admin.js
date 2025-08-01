@@ -14,8 +14,23 @@ const adminSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['super_admin', 'sub_admin', 'warden', 'principal'],
+    enum: ['super_admin', 'sub_admin', 'warden', 'principal', 'custom'],
     default: 'sub_admin'
+  },
+  // Custom role fields
+  customRole: {
+    type: String,
+    trim: true,
+    required: function() {
+      return this.role === 'custom';
+    }
+  },
+  customRoleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CustomRole',
+    required: function() {
+      return this.role === 'custom';
+    }
   },
   hostelType: {
     type: String,
@@ -92,6 +107,12 @@ const adminSchema = new mongoose.Schema({
       if (ret.permissionAccessLevels instanceof Map) {
         ret.permissionAccessLevels = Object.fromEntries(ret.permissionAccessLevels);
       }
+      
+      // Ensure custom role fields are included
+      if (ret.customRoleId && typeof ret.customRoleId === 'object') {
+        ret.customRole = ret.customRoleId.name;
+      }
+      
       return ret;
     }
   }

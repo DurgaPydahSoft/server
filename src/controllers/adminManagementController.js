@@ -15,7 +15,8 @@ export const createSubAdmin = async (req, res, next) => {
       permissionAccessLevels,
       passwordDeliveryMethod,
       email,
-      phoneNumber
+      phoneNumber,
+      customRoleId // New field for custom role assignment
     } = req.body;
 
     console.log('🔧 Creating sub-admin with delivery method:', passwordDeliveryMethod);
@@ -26,9 +27,41 @@ export const createSubAdmin = async (req, res, next) => {
       throw createError(400, 'Username already exists');
     }
 
+    // If custom role is assigned, validate it exists and get its permissions
+    let rolePermissions = permissions;
+    let roleAccessLevels = permissionAccessLevels;
+    let roleLeaveManagementCourses = leaveManagementCourses;
+    let adminRole = 'sub_admin';
+    let customRoleName = null;
+
+    if (customRoleId) {
+      const CustomRole = (await import('../models/CustomRole.js')).default;
+      const customRole = await CustomRole.findById(customRoleId);
+      
+      if (!customRole) {
+        throw createError(400, 'Custom role not found');
+      }
+
+      if (!customRole.isActive) {
+        throw createError(400, 'Selected custom role is not active');
+      }
+
+      // Use custom role permissions and access levels
+      rolePermissions = customRole.permissions;
+      roleAccessLevels = customRole.permissionAccessLevels;
+      adminRole = 'custom';
+      customRoleName = customRole.name;
+
+      // Handle course assignment based on custom role
+      if (customRole.courseAssignment === 'selected') {
+        roleLeaveManagementCourses = customRole.assignedCourses;
+      }
+      // If courseAssignment is 'all', leaveManagementCourses will be handled dynamically
+    }
+
     // Validate leave management courses if leave_management permission is selected
-    if (permissions && permissions.includes('leave_management')) {
-      if (!leaveManagementCourses || leaveManagementCourses.length === 0) {
+    if (rolePermissions && rolePermissions.includes('leave_management')) {
+      if (!roleLeaveManagementCourses || roleLeaveManagementCourses.length === 0) {
         throw createError(400, 'At least one course must be selected for leave management permission');
       }
     }
@@ -62,25 +95,32 @@ export const createSubAdmin = async (req, res, next) => {
       }
     }
 
-    // Create new sub-admin
-    const subAdmin = new Admin({
+    // Create new admin
+    const adminData = {
       username,
       password,
-      role: 'sub_admin',
-      permissions,
-      permissionAccessLevels: permissionAccessLevels || {},
-      leaveManagementCourses: leaveManagementCourses || [],
+      role: adminRole,
+      permissions: rolePermissions,
+      permissionAccessLevels: roleAccessLevels || {},
+      leaveManagementCourses: roleLeaveManagementCourses || [],
       createdBy: req.admin._id
-    });
+    };
 
-    const savedAdmin = await subAdmin.save();
+    // Add custom role fields if applicable
+    if (customRoleId) {
+      adminData.customRoleId = customRoleId;
+      adminData.customRole = customRoleName;
+    }
+
+    const newAdmin = new Admin(adminData);
+    const savedAdmin = await newAdmin.save();
     
     // Send credentials via selected method (if any)
     let deliveryResult = null;
     
     if (passwordDeliveryMethod === 'email') {
       try {
-        console.log('📧 Sending sub-admin credentials via email to:', email);
+        console.log('📧 Sending admin credentials via email to:', email);
         deliveryResult = await sendSubAdminRegistrationEmail(
           email,
           username, // Using username as admin name for now
@@ -95,7 +135,7 @@ export const createSubAdmin = async (req, res, next) => {
       }
     } else if (passwordDeliveryMethod === 'mobile') {
       try {
-        console.log('📱 Sending sub-admin credentials via SMS to:', phoneNumber);
+        console.log('📱 Sending admin credentials via SMS to:', phoneNumber);
         deliveryResult = await sendAdminCredentialsSMS(
           phoneNumber,
           username,
@@ -178,27 +218,33 @@ export const createWarden = async (req, res, next) => {
   }
 };
 
-// Get all sub-admins
+// Get all sub-admins and custom role admins
 export const getSubAdmins = async (req, res, next) => {
   try {
-    let query = { role: 'sub_admin' };
+    let query = { 
+      $or: [
+        { role: 'sub_admin' },
+        { role: 'custom' }
+      ]
+    };
     
-    // If the current user is not a super admin, only show sub-admins they created
+    // If the current user is not a super admin, only show admins they created
     if (req.admin.role !== 'super_admin') {
       query.createdBy = req.admin._id;
     }
 
-    const subAdmins = await Admin.find(query)
+    const admins = await Admin.find(query)
       .select('-password')
       .populate('leaveManagementCourses', 'name code')
+      .populate('customRoleId', 'name description')
       .sort({ createdAt: -1 });
 
-    console.log('📝 Found sub-admins:', subAdmins.length);
+    console.log('📝 Found admins:', admins.length);
     console.log('📝 Query used:', query);
 
     res.json({
       success: true,
-      data: subAdmins
+      data: admins
     });
   } catch (error) {
     next(error);
@@ -231,33 +277,68 @@ export const getWardens = async (req, res, next) => {
   }
 };
 
-// Update sub-admin
+// Update sub-admin or custom role admin
 export const updateSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, permissions, isActive, leaveManagementCourses, permissionAccessLevels } = req.body;
+    const { username, password, permissions, isActive, leaveManagementCourses, permissionAccessLevels, customRoleId } = req.body;
 
-    console.log('📝 Updating sub-admin:', id);
-    console.log('📝 Update data:', { username, permissions, isActive, leaveManagementCourses });
+    console.log('📝 Updating admin:', id);
+    console.log('📝 Update data:', { username, permissions, isActive, leaveManagementCourses, customRoleId });
 
     // Build query based on admin role
     let query = {
       _id: id,
-      role: 'sub_admin'
+      $or: [{ role: 'sub_admin' }, { role: 'custom' }]
     };
 
-    // If current admin is not super_admin, they can only update sub-admins they created
+    // If current admin is not super_admin, they can only update admins they created
     if (req.admin.role !== 'super_admin') {
       query.createdBy = req.admin._id;
     }
 
-    const subAdmin = await Admin.findOne(query);
+    const admin = await Admin.findOne(query);
 
-    if (!subAdmin) {
-      throw createError(404, 'Sub-admin not found');
+    if (!admin) {
+      throw createError(404, 'Admin not found');
     }
 
-    console.log('📝 Current sub-admin permissions:', subAdmin.permissions);
+    console.log('📝 Current admin permissions:', admin.permissions);
+
+    // Handle custom role assignment
+    if (customRoleId !== undefined) {
+      if (customRoleId) {
+        // Assigning to custom role
+        const CustomRole = (await import('../models/CustomRole.js')).default;
+        const customRole = await CustomRole.findById(customRoleId);
+        
+        if (!customRole) {
+          throw createError(400, 'Custom role not found');
+        }
+
+        if (!customRole.isActive) {
+          throw createError(400, 'Selected custom role is not active');
+        }
+
+        admin.role = 'custom';
+        admin.customRoleId = customRoleId;
+        admin.customRole = customRole.name;
+        admin.permissions = customRole.permissions;
+        admin.permissionAccessLevels = customRole.permissionAccessLevels;
+        
+        // Handle course assignment based on custom role
+        if (customRole.courseAssignment === 'selected') {
+          admin.leaveManagementCourses = customRole.assignedCourses;
+        } else {
+          admin.leaveManagementCourses = [];
+        }
+      } else {
+        // Reverting to sub-admin
+        admin.role = 'sub_admin';
+        admin.customRoleId = undefined;
+        admin.customRole = undefined;
+      }
+    }
 
     // Validate leave management courses if leave_management permission is selected
     if (permissions && permissions.includes('leave_management')) {
@@ -267,47 +348,47 @@ export const updateSubAdmin = async (req, res, next) => {
     }
 
     // Update fields
-    if (username && username !== subAdmin.username) {
+    if (username && username !== admin.username) {
       const existingAdmin = await Admin.findOne({ username });
       if (existingAdmin) {
         throw createError(400, 'Username already exists');
       }
-      subAdmin.username = username;
+      admin.username = username;
     }
     if (password) {
-      subAdmin.password = password;
+      admin.password = password;
     }
-    if (permissions !== undefined) {
-      console.log('📝 Updating permissions from:', subAdmin.permissions, 'to:', permissions);
-      subAdmin.permissions = permissions;
+    if (permissions !== undefined && !customRoleId) {
+      console.log('📝 Updating permissions from:', admin.permissions, 'to:', permissions);
+      admin.permissions = permissions;
     }
-    if (leaveManagementCourses !== undefined) {
-      console.log('📝 Updating leave management courses from:', subAdmin.leaveManagementCourses, 'to:', leaveManagementCourses);
-      subAdmin.leaveManagementCourses = leaveManagementCourses;
+    if (leaveManagementCourses !== undefined && !customRoleId) {
+      console.log('📝 Updating leave management courses from:', admin.leaveManagementCourses, 'to:', leaveManagementCourses);
+      admin.leaveManagementCourses = leaveManagementCourses;
     }
-    if (permissionAccessLevels !== undefined) {
-      console.log('📝 Updating permission access levels from:', subAdmin.permissionAccessLevels, 'to:', permissionAccessLevels);
-      subAdmin.permissionAccessLevels = permissionAccessLevels;
+    if (permissionAccessLevels !== undefined && !customRoleId) {
+      console.log('📝 Updating permission access levels from:', admin.permissionAccessLevels, 'to:', permissionAccessLevels);
+      admin.permissionAccessLevels = permissionAccessLevels;
     }
     if (typeof isActive === 'boolean') {
-      subAdmin.isActive = isActive;
+      admin.isActive = isActive;
     }
 
-    console.log('📝 Saving sub-admin with permissions:', subAdmin.permissions);
-    const updatedAdmin = await subAdmin.save();
+    console.log('📝 Saving admin with permissions:', admin.permissions);
+    const updatedAdmin = await admin.save();
     
     // Remove password from response
     const adminResponse = updatedAdmin.toObject();
     delete adminResponse.password;
 
-    console.log('📝 Sub-admin updated successfully');
+    console.log('📝 Admin updated successfully');
 
     res.json({
       success: true,
       data: adminResponse
     });
   } catch (error) {
-    console.error('📝 Error updating sub-admin:', error);
+    console.error('📝 Error updating admin:', error);
     next(error);
   }
 };
@@ -375,7 +456,7 @@ export const updateWarden = async (req, res, next) => {
   }
 };
 
-// Delete sub-admin
+// Delete sub-admin or custom role admin
 export const deleteSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -383,23 +464,23 @@ export const deleteSubAdmin = async (req, res, next) => {
     // Build query based on admin role
     let query = {
       _id: id,
-      role: 'sub_admin'
+      $or: [{ role: 'sub_admin' }, { role: 'custom' }]
     };
 
-    // If current admin is not super_admin, they can only delete sub-admins they created
+    // If current admin is not super_admin, they can only delete admins they created
     if (req.admin.role !== 'super_admin') {
       query.createdBy = req.admin._id;
     }
 
-    const subAdmin = await Admin.findOneAndDelete(query);
+    const admin = await Admin.findOneAndDelete(query);
 
-    if (!subAdmin) {
-      throw createError(404, 'Sub-admin not found');
+    if (!admin) {
+      throw createError(404, 'Admin not found');
     }
 
     res.json({
       success: true,
-      message: 'Sub-admin deleted successfully'
+      message: 'Admin deleted successfully'
     });
   } catch (error) {
     next(error);
@@ -443,8 +524,10 @@ export const adminLogin = async (req, res, next) => {
     const { username, password } = req.body;
 
     // Find admin
-    const admin = await Admin.findOne({ username, isActive: true })
-      .populate('course', 'name code');
+    let admin = await Admin.findOne({ username, isActive: true })
+      .populate('course', 'name code')
+      .populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
+    
     if (!admin) {
       throw createError(401, 'Invalid credentials');
     }
@@ -477,6 +560,12 @@ export const adminLogin = async (req, res, next) => {
       tokenData.hostelType = admin.hostelType;
     }
 
+    // Include custom role info for custom role admins
+    if (admin.role === 'custom' && admin.customRoleId) {
+      tokenData.customRoleId = admin.customRoleId._id || admin.customRoleId;
+      tokenData.customRole = admin.customRole;
+    }
+
     const token = jwt.sign(tokenData, process.env.JWT_SECRET, { expiresIn: '24h' });
 
     // Prepare admin response data
@@ -496,6 +585,12 @@ export const adminLogin = async (req, res, next) => {
     // Include course for principals
     if (admin.role === 'principal' && admin.course) {
       adminResponse.course = admin.course;
+    }
+
+    // Include custom role info for custom role admins
+    if (admin.role === 'custom' && admin.customRoleId) {
+      adminResponse.customRoleId = admin.customRoleId;
+      adminResponse.customRole = admin.customRole;
     }
 
     res.json({

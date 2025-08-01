@@ -16,6 +16,7 @@ import {
   resetAdminPassword
 } from '../controllers/adminManagementController.js';
 import { adminAuth, superAdminAuth } from '../middleware/authMiddleware.js';
+import customRoleRoutes from './customRoleRoutes.js';
 
 const router = express.Router();
 
@@ -38,6 +39,12 @@ router.get('/validate', adminAuth, async (req, res) => {
       const Admin = (await import('../models/Admin.js')).default;
       adminData = await Admin.findById(req.admin._id).populate('course', 'name code');
     }
+
+    // Populate custom role for custom role admins
+    if (req.admin.role === 'custom' && req.admin.customRoleId) {
+      const Admin = (await import('../models/Admin.js')).default;
+      adminData = await Admin.findById(req.admin._id).populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
+    }
     
     // Prepare user response data
     const userResponse = {
@@ -57,6 +64,12 @@ router.get('/validate', adminAuth, async (req, res) => {
     // Include course for principals
     if (adminData.role === 'principal' && adminData.course) {
       userResponse.course = adminData.course;
+    }
+
+    // Include custom role info for custom role admins
+    if (adminData.role === 'custom' && adminData.customRoleId) {
+      userResponse.customRoleId = adminData.customRoleId;
+      userResponse.customRole = adminData.customRole;
     }
 
     res.json({
@@ -94,5 +107,8 @@ router.post('/principals', createPrincipal);
 router.get('/principals', getPrincipals);
 router.put('/principals/:id', updatePrincipal);
 router.delete('/principals/:id', deletePrincipal);
+
+// Custom role routes
+router.use('/custom-roles', customRoleRoutes);
 
 export default router; 

@@ -31,7 +31,7 @@ export const protect = async (req, res, next) => {
   }
 };
 
-// Admin-only middleware (includes super_admin, sub_admin, and warden)
+// Admin-only middleware (includes super_admin, sub_admin, warden, principal, and custom)
 export const adminAuth = async (req, res, next) => {
   try {
     let token;
@@ -58,6 +58,11 @@ export const adminAuth = async (req, res, next) => {
     // Populate course for principals
     if (admin && admin.role === 'principal' && admin.course) {
       admin = await Admin.findById(userId).select('-password').populate('course', 'name code');
+    }
+
+    // Populate custom role for custom role admins
+    if (admin && admin.role === 'custom' && admin.customRoleId) {
+      admin = await Admin.findById(userId).select('-password').populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
     }
 
     if (!admin || !admin.isActive) {
