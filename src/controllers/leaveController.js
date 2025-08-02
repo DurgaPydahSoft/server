@@ -77,8 +77,11 @@ export const createLeaveRequest = async (req, res, next) => {
       const end = new Date(endDate);
       const gatePass = new Date(gatePassDateTime);
       const today = new Date();
+      today.setHours(0, 0, 0, 0); // Set to start of today
+      const startDateOnly = new Date(start);
+      startDateOnly.setHours(0, 0, 0, 0); // Set to start of start date
       
-      if (start < today) {
+      if (startDateOnly < today) {
         throw createError(400, 'Start date cannot be in the past');
       }
       
@@ -114,9 +117,11 @@ export const createLeaveRequest = async (req, res, next) => {
 
       const permission = new Date(permissionDate);
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      today.setHours(0, 0, 0, 0); // Set to start of today
+      const permissionDateOnly = new Date(permission);
+      permissionDateOnly.setHours(0, 0, 0, 0); // Set to start of permission date
       
-      if (permission < today) {
+      if (permissionDateOnly < today) {
         throw createError(400, 'Permission date cannot be in the past');
       }
 
