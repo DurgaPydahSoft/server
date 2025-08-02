@@ -8,6 +8,7 @@ import FeeReminder from '../models/FeeReminder.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
+import { sendAdminCredentialsSMS } from '../utils/smsService.js';
 import xlsx from 'xlsx';
 import Branch from '../models/Branch.js';
 import Course from '../models/Course.js';
@@ -250,13 +251,38 @@ export const addStudent = async (req, res, next) => {
       }
     }
 
+    // Send SMS notification to student
+    let smsSent = false;
+    let smsError = null;
+    
+    if (studentPhone && studentPhone.trim()) {
+      try {
+        console.log('📱 Sending student credentials via SMS to:', studentPhone);
+        const smsResult = await sendAdminCredentialsSMS(
+          studentPhone,
+          rollNumber.toUpperCase(), // Using rollNumber as username
+          generatedPassword
+        );
+        smsSent = true;
+        console.log('📱 SMS sent successfully:', smsResult);
+      } catch (smsErr) {
+        smsError = smsErr.message;
+        console.error('📱 Failed to send SMS to:', studentPhone, smsErr);
+        // Don't fail the registration if SMS fails
+      }
+    } else {
+      console.log('📱 No student phone number provided, skipping SMS');
+    }
+
     res.json({
       success: true,
       data: {
         student: savedStudent,
         generatedPassword,
         emailSent,
-        emailError
+        emailError,
+        smsSent,
+        smsError
       }
     });
   } catch (error) {

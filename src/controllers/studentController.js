@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import Counter from '../models/Counter.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
+import { sendAdminCredentialsSMS } from '../utils/smsService.js';
 import XLSX from 'xlsx';
 import fs from 'fs';
 
@@ -154,7 +155,37 @@ export const addStudent = async (req, res) => {
     
     console.log('Created student:', student);
     
-    res.json(student);
+    // Send credentials via SMS if student phone is provided
+    let deliveryResult = null;
+    
+    if (studentPhone && studentPhone.trim()) {
+      try {
+        console.log('📱 Sending student credentials via SMS to:', studentPhone);
+        deliveryResult = await sendAdminCredentialsSMS(
+          studentPhone,
+          rollNumber, // Using rollNumber as username
+          'changeme' // Default password
+        );
+        console.log('📱 SMS sent successfully:', deliveryResult);
+      } catch (smsError) {
+        console.error('📱 Error sending SMS:', smsError);
+        // Don't fail the creation if SMS fails, but log it
+        deliveryResult = { error: smsError.message };
+      }
+    } else {
+      console.log('📱 No student phone number provided, skipping SMS');
+      deliveryResult = { message: 'No SMS sent - no phone number provided' };
+    }
+    
+    // Remove password from response
+    const studentResponse = student.toObject();
+    delete studentResponse.password;
+    
+    res.json({
+      success: true,
+      data: studentResponse,
+      deliveryResult
+    });
   } catch (error) {
     console.error('Error adding student:', error);
     res.status(500).json({ message: 'Error adding student', error: error.message });
