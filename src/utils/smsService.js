@@ -71,7 +71,7 @@ const sendSMSPost = async (params, isUnicode = false) => {
     // Try POST method first (recommended for BulkSMS)
     const response = await axios.post(apiUrl, null, {
       params: params,
-      timeout: 15000,
+      timeout: 30000,
       headers: {
         'Accept': 'text/plain',
         'Content-Type': 'application/x-www-form-urlencoded'
@@ -83,7 +83,7 @@ const sendSMSPost = async (params, isUnicode = false) => {
     // Fallback to GET method
     const response = await axios.get(apiUrl, {
       params: params,
-      timeout: 15000,
+      timeout: 30000,
       headers: {
         'Accept': 'text/plain',
         'Content-Type': 'application/x-www-form-urlencoded'
