@@ -27,6 +27,20 @@ const validateGatePassDateTime = (gatePassDateTime) => {
   return gatePass >= fourThirtyPM;
 };
 
+// Helper function to get IST date range for daily limit
+const getISTDateRange = () => {
+  const now = new Date();
+  const today = new Date();
+  
+  // Set to 12:00 AM IST (UTC+5:30)
+  today.setUTCHours(5, 30, 0, 0); // 12:00 AM IST = 5:30 AM UTC
+  
+  const tomorrow = new Date(today);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  
+  return { today, tomorrow };
+};
+
 // Create new leave or permission request
 export const createLeaveRequest = async (req, res, next) => {
   try {
@@ -59,6 +73,29 @@ export const createLeaveRequest = async (req, res, next) => {
     if (!['Leave', 'Permission', 'Stay in Hostel'].includes(applicationType)) {
       throw createError(400, 'Invalid application type. Must be "Leave", "Permission", or "Stay in Hostel"');
     }
+
+    // Check daily limit for this application type
+    const { today, tomorrow } = getISTDateRange();
+    
+    console.log(`🔍 Daily limit check for student ${studentId}, application type: ${applicationType}`);
+    console.log(`🔍 IST Date range: ${today.toISOString()} to ${tomorrow.toISOString()}`);
+    
+    // Check if student already has a request of this type for today
+    const existingRequest = await Leave.findOne({
+      student: studentId,
+      applicationType: applicationType,
+      createdAt: {
+        $gte: today,
+        $lt: tomorrow
+      }
+    });
+    
+    if (existingRequest) {
+      console.log(`❌ Daily limit exceeded for student ${studentId}, application type: ${applicationType}`);
+      throw createError(400, `You have only one ${applicationType} request per day`);
+    }
+    
+    console.log(`✅ Daily limit check passed for student ${studentId}, application type: ${applicationType}`);
 
     let leaveData = {
       student: studentId,
