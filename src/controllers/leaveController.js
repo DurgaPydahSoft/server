@@ -19,13 +19,12 @@ const validateTimeFormat = (time) => {
 };
 
 // Validate gate pass date and time (must be after 4:30 PM and before start date)
-const validateGatePassDateTime = (gatePassDateTime, startDate) => {
+const validateGatePassDateTime = (gatePassDateTime) => {
   const gatePass = new Date(gatePassDateTime);
-  const start = new Date(startDate);
   const fourThirtyPM = new Date(gatePass);
   fourThirtyPM.setHours(16, 30, 0, 0); // 4:30 PM
   
-  return gatePass >= fourThirtyPM && gatePass < start;
+  return gatePass >= fourThirtyPM;
 };
 
 // Create new leave or permission request
@@ -90,8 +89,8 @@ export const createLeaveRequest = async (req, res, next) => {
       }
 
       // Validate gate pass date and time
-      if (!validateGatePassDateTime(gatePassDateTime, startDate)) {
-        throw createError(400, 'Gate pass must be after 4:30 PM and before the start date');
+      if (!validateGatePassDateTime(gatePassDateTime)) {
+        throw createError(400, 'Gate pass must be after 4:30 PM');
       }
 
       leaveData = {
@@ -1886,6 +1885,43 @@ export const getStudentLeaveHistory = async (req, res, next) => {
         leaves,
         totalCount: leaves.length
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete leave request (student can delete their own requests)
+export const deleteLeaveRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const studentId = req.user.id;
+    
+    // Find the leave request
+    const leave = await Leave.findById(id);
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+    
+    // Check if the student owns this request
+    if (leave.student.toString() !== studentId) {
+      throw createError(403, 'You can only delete your own leave requests');
+    }
+    
+    // Check if the request can be deleted based on status
+    const deletableStatuses = ['Pending', 'Pending OTP Verification', 'Warden Verified', 'Warden Recommended'];
+    if (!deletableStatuses.includes(leave.status)) {
+      throw createError(400, 'Cannot delete this request. It has already been approved or rejected.');
+    }
+    
+    // Delete the request
+    await Leave.findByIdAndDelete(id);
+    
+    console.log(`🗑️ Leave request ${id} deleted by student ${studentId}`);
+    
+    res.json({
+      success: true,
+      message: 'Leave request deleted successfully'
     });
   } catch (error) {
     next(error);

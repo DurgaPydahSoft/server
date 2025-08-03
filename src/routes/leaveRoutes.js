@@ -22,7 +22,8 @@ import {
   getPrincipalLeaveRequests,
   principalApproveLeave,
   principalRejectLeave,
-  getStudentLeaveHistory
+  getStudentLeaveHistory,
+  deleteLeaveRequest
 } from '../controllers/leaveController.js';
 import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
@@ -50,6 +51,7 @@ router.get('/test', (req, res) => {
 // Student routes
 router.post('/create', protect, authenticateStudent, createLeaveRequest);
 router.get('/my-requests', protect, authenticateStudent, getStudentLeaveRequests);
+router.delete('/:id', protect, authenticateStudent, deleteLeaveRequest);
 
 // Admin routes - removed 'protect' middleware
 router.get('/all', adminAuth, getAllLeaveRequests);
