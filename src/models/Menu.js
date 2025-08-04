@@ -1,9 +1,16 @@
 import mongoose from 'mongoose';
 
+// Schema for individual menu item with optional image
+const menuItemSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  imageUrl: { type: String, default: null }
+}, { _id: false });
+
 const mealSchema = new mongoose.Schema({
-  breakfast: { type: [String], default: [] },
-  lunch: { type: [String], default: [] },
-  dinner: { type: [String], default: [] }
+  breakfast: { type: [menuItemSchema], default: [] },
+  lunch: { type: [menuItemSchema], default: [] },
+  snacks: { type: [menuItemSchema], default: [] },
+  dinner: { type: [menuItemSchema], default: [] }
 }, { _id: false });
 
 // Rating schema for individual meals

@@ -300,6 +300,12 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/polls', pollRoutes);
 app.use('/api/cafeteria/menu', menuRoutes);
+
+// Add a test endpoint to verify the route is working
+app.get('/api/cafeteria/menu/test', (req, res) => {
+  console.log('🧪 Menu test endpoint hit');
+  res.json({ message: 'Menu routes are working', timestamp: new Date().toISOString() });
+});
 app.use('/api/bulk-outing', bulkOutingRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/foundlost', foundLostRoutes);
@@ -321,6 +327,9 @@ if (process.env.NODE_ENV === 'production') {
 // Error handling middleware
 app.use(errorHandler);
 
+// Import cleanup setup
+import { setupMenuImageCleanup } from './utils/setupCleanup.js';
+
 // Start server
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
@@ -329,4 +338,8 @@ httpServer.listen(PORT, () => {
   // Start fee reminder processing
   scheduleReminderProcessing();
   console.log('💰 Fee reminder processing scheduled');
+  
+  // Start menu image cleanup
+  setupMenuImageCleanup();
+  console.log('🧹 Menu image cleanup scheduled');
 }); 

@@ -22,18 +22,22 @@ export const uploadToS3 = async (file, folder = 'announcements') => {
     const fileName = `${crypto.randomBytes(16).toString('hex')}.${fileExtension}`;
     const key = `${folder}/${fileName}`;
 
+    console.log(`📤 Uploading to S3: ${key}`);
+
     const command = new PutObjectCommand({
       Bucket: bucketName,
       Key: key,
       Body: file.buffer,
       ContentType: file.mimetype,
-      // ACL: 'public-read', // Make the object publicly readable
+      // Removed ACL since bucket doesn't support ACLs
     });
 
     await s3Client.send(command);
     
-    // Use the correct S3 URL format
-    return `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    const imageUrl = `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    console.log(`✅ Successfully uploaded to S3: ${imageUrl}`);
+    
+    return imageUrl;
   } catch (error) {
     console.error('Error uploading to S3:', error);
     throw new Error(`Failed to upload file to S3: ${error.message}`);
@@ -50,6 +54,8 @@ export const deleteFromS3 = async (imageUrl) => {
       throw new Error('Invalid image URL format');
     }
 
+    console.log(`🗑️ Attempting to delete from S3: ${key}`);
+
     const command = new DeleteObjectCommand({
       Bucket: bucketName,
       Key: key,
@@ -61,9 +67,9 @@ export const deleteFromS3 = async (imageUrl) => {
       throw new Error('Failed to delete file from S3');
     }
 
-    console.log(`Successfully deleted image from S3: ${key}`);
+    console.log(`✅ Successfully deleted image from S3: ${key}`);
   } catch (error) {
-    console.error('Error deleting from S3:', error);
+    console.error('❌ Error deleting from S3:', error);
     throw new Error(`Failed to delete file from S3: ${error.message}`);
   }
 }; 
