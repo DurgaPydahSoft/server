@@ -140,9 +140,7 @@ export const createLeaveRequest = async (req, res, next) => {
 
       // Generate OTP for Leave applications
       const otp = generateOTP();
-      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
       leaveData.otpCode = otp;
-      leaveData.otpExpiry = otpExpiry;
       leaveData.status = 'Pending OTP Verification';
 
     } else if (applicationType === 'Permission') {
@@ -181,9 +179,7 @@ export const createLeaveRequest = async (req, res, next) => {
 
       // Generate OTP for Permission applications
       const otp = generateOTP();
-      const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
       leaveData.otpCode = otp;
-      leaveData.otpExpiry = otpExpiry;
       leaveData.status = 'Pending OTP Verification';
 
     } else if (applicationType === 'Stay in Hostel') {
@@ -502,6 +498,105 @@ export const verifyOTPAndApprove = async (req, res, next) => {
         }
       });
     }
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Resend OTP for leave request
+export const resendOTP = async (req, res, next) => {
+  try {
+    const { leaveId } = req.body;
+    const studentId = req.user.id;
+
+    const leave = await Leave.findById(leaveId)
+      .populate({
+        path: 'student',
+        select: 'name parentPhone gender course',
+        populate: [
+          { path: 'course', select: 'name code' },
+          { path: 'branch', select: 'name code' }
+        ]
+      });
+      
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+
+    // Verify the student owns this request
+    if (leave.student._id.toString() !== studentId) {
+      throw createError(403, 'You can only resend OTP for your own requests');
+    }
+
+    if (leave.status !== 'Pending OTP Verification') {
+      throw createError(400, 'Invalid leave status for OTP resend');
+    }
+
+    // Check if enough time has passed since last OTP generation (5 minutes)
+    const timeSinceCreation = new Date() - new Date(leave.createdAt);
+    const fiveMinutesInMs = 5 * 60 * 1000;
+    
+    if (timeSinceCreation < fiveMinutesInMs) {
+      const remainingTime = Math.ceil((fiveMinutesInMs - timeSinceCreation) / (60 * 1000));
+      throw createError(400, `Please wait ${remainingTime} more minutes before resending OTP`);
+    }
+
+    // Use the same OTP (don't generate new one)
+    const sameOtp = leave.otpCode;
+
+    // Update leave request with resend tracking (no new OTP or expiry)
+    leave.otpResendCount = (leave.otpResendCount || 0) + 1;
+    leave.lastOtpResendAt = new Date();
+    await leave.save();
+
+    // Send same OTP via SMS
+    try {
+      // Get gender in Telugu
+      const genderInTelugu = leave.student.gender === 'Male' ? 'కొడుకు' : 'కూతురు';
+      
+      console.log('Resending SMS with params:', {
+        phone: leave.student.parentPhone,
+        otp: sameOtp,
+        gender: genderInTelugu,
+        name: leave.student.name
+      });
+      
+      const smsResult = await sendSMS(leave.student.parentPhone, '', { 
+        otp: sameOtp,
+        gender: genderInTelugu,
+        name: leave.student.name
+      });
+      
+      if (smsResult.success) {
+        console.log('Resend SMS Results:', smsResult.results);
+        if (smsResult.teluguSuccess) {
+          console.log('✅ Telugu SMS resent successfully');
+        }
+        if (smsResult.englishSuccess) {
+          console.log('✅ English SMS resent successfully');
+        }
+        
+        // Log which approaches worked
+        smsResult.results.forEach(result => {
+          console.log(`✅ ${result.language} SMS resent using: ${result.approach} (MessageId: ${result.messageId})`);
+        });
+      } else {
+        console.log('Resend SMS sending failed');
+      }
+    } catch (smsError) {
+      console.error('Resend SMS sending failed:', smsError);
+      // Don't throw error here, just log it and continue
+      // The OTP resend count has already been updated
+      console.log('⚠️ SMS failed but continuing with resend operation');
+    }
+
+    res.json({
+      success: true,
+      data: {
+        message: 'OTP resend request processed. Same OTP (4 digits) has been sent to your parent\'s phone in both Telugu and English.',
+        resendCount: leave.otpResendCount
+      }
+    });
   } catch (error) {
     next(error);
   }

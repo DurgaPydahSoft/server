@@ -167,6 +167,8 @@ export const sendSMS = async (phoneNumber, message, templateParams = {}) => {
     if (templateParams.otp) {
       // Send both Telugu and English SMS for OTP messages
       const smsResults = [];
+      let teluguSuccess = false;
+      let englishSuccess = false;
       
       // Send ONE Telugu SMS using DLT Template
       console.log('Sending Telugu SMS using DLT Template');

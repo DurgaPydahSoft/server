@@ -310,12 +310,8 @@ complaintSchema.pre('save', async function(next) {
         throw new Error('Assigned member not found');
       }
 
-      const validCategory = member.category === this.category || 
-                          (this.category === 'Maintenance' && member.category === this.subCategory);
-      
-      if (!validCategory) {
-        throw new Error('Assigned member must belong to the same category/subcategory');
-      }
+      // Removed category validation to allow any member to be assigned to any complaint
+      // This provides more flexibility in resource allocation
     } catch (error) {
       next(error);
       return;

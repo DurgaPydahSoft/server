@@ -63,13 +63,17 @@ const leaveSchema = new mongoose.Schema({
     type: String,
     required: function() { return this.applicationType !== 'Stay in Hostel'; }
   },
-  otpExpiry: {
-    type: Date,
-    required: function() { return this.applicationType !== 'Stay in Hostel'; }
-  },
   parentPhone: {
     type: String,
     required: function() { return this.applicationType !== 'Stay in Hostel'; }
+  },
+  // OTP resend tracking fields
+  otpResendCount: {
+    type: Number,
+    default: 0
+  },
+  lastOtpResendAt: {
+    type: Date
   },
   rejectionReason: {
     type: String,
