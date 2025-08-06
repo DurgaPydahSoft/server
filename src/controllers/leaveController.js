@@ -18,13 +18,32 @@ const validateTimeFormat = (time) => {
   return timeRegex.test(time);
 };
 
-// Validate gate pass date and time (must be after 4:30 PM and before start date)
-const validateGatePassDateTime = (gatePassDateTime) => {
+// Validate gate pass date and time
+const validateGatePassDateTime = (gatePassDateTime, startDate) => {
   const gatePass = new Date(gatePassDateTime);
-  const fourThirtyPM = new Date(gatePass);
-  fourThirtyPM.setHours(16, 30, 0, 0); // 4:30 PM
+  const start = new Date(startDate);
+  const today = new Date();
   
-  return gatePass >= fourThirtyPM;
+  // Set dates to start of day for comparison
+  const startDateOnly = new Date(start);
+  startDateOnly.setHours(0, 0, 0, 0);
+  const todayOnly = new Date(today);
+  todayOnly.setHours(0, 0, 0, 0);
+  
+  // Check if start date is today
+  const isStartDateToday = startDateOnly.getTime() === todayOnly.getTime();
+  
+  if (isStartDateToday) {
+    // For same day leave, any time is allowed (but not past time)
+    const now = new Date();
+    return gatePass >= now;
+  } else {
+    // For future dates, gate pass must be after 4:30 PM
+    const fourThirtyPM = new Date(gatePass);
+    fourThirtyPM.setHours(16, 30, 0, 0); // 4:30 PM
+    
+    return gatePass >= fourThirtyPM;
+  }
 };
 
 // Helper function to get IST date range for daily limit
@@ -126,8 +145,19 @@ export const createLeaveRequest = async (req, res, next) => {
       }
 
       // Validate gate pass date and time
-      if (!validateGatePassDateTime(gatePassDateTime)) {
-        throw createError(400, 'Gate pass must be after 4:30 PM');
+      if (!validateGatePassDateTime(gatePassDateTime, startDate)) {
+        const start = new Date(startDate);
+        const today = new Date();
+        const startDateOnly = new Date(start);
+        startDateOnly.setHours(0, 0, 0, 0);
+        const todayOnly = new Date(today);
+        todayOnly.setHours(0, 0, 0, 0);
+        
+        if (startDateOnly.getTime() === todayOnly.getTime()) {
+          throw createError(400, 'Gate pass time cannot be in the past for same day leave');
+        } else {
+          throw createError(400, 'Gate pass must be after 4:30 PM for future dates');
+        }
       }
 
       leaveData = {
