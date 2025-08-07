@@ -2424,3 +2424,42 @@ export const getRoomBedLockerAvailability = async (req, res, next) => {
     next(error);
   }
 };
+
+// Get student password for admit card generation
+export const getStudentTempPassword = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log('🔍 Backend: Fetching password for student ID:', id);
+    
+    // Only fetch from TempStudent collection (stores plain text passwords)
+    const tempStudent = await TempStudent.findOne({ mainStudentId: id });
+    console.log('🔍 Backend: TempStudent found:', tempStudent ? 'Yes' : 'No');
+    
+    if (tempStudent) {
+      console.log('🔍 Backend: Generated password:', tempStudent.generatedPassword);
+    }
+    
+    if (tempStudent && tempStudent.generatedPassword) {
+      return res.json({
+        success: true,
+        data: {
+          password: tempStudent.generatedPassword
+        }
+      });
+    }
+    
+    // If no password found in TempStudent collection
+    console.log('❌ Backend: No TempStudent record found for student ID:', id);
+    return res.status(404).json({
+      success: false,
+      message: 'Student password not found'
+    });
+  } catch (error) {
+    console.error('❌ Backend: Error fetching student temp password:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch student password',
+      error: error.message
+    });
+  }
+};

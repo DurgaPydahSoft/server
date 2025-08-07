@@ -21,7 +21,8 @@ import {
   getStudentsForAdmitCards,
   generateAdmitCard,
   generateBulkAdmitCards,
-  getRoomBedLockerAvailability
+  getRoomBedLockerAvailability,
+  getStudentTempPassword
 } from '../controllers/adminController.js';
 import { initializeHostelCounters, getCounterStatus } from '../utils/initializeCounters.js';
 import { 
@@ -174,6 +175,9 @@ router.delete('/students/temp-clear', clearTempStudents);
 // Admit card routes (must come before dynamic /students/:id routes)
 router.get('/students/admit-cards', getStudentsForAdmitCards);
 router.post('/students/bulk-admit-cards', generateBulkAdmitCards);
+
+// Password fetching routes (must come before dynamic /students/:id routes)
+router.get('/students/:id/temp-password', getStudentTempPassword);
 
 // Dynamic routes for /students/:id
 router.get('/students/:id', getStudentById);
