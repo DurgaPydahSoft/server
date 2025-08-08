@@ -131,9 +131,10 @@ const autoDeleteExpiredLeaves = async () => {
             // Create notification for student
             await Notification.create({
               recipient: leave.student._id,
+              recipientModel: 'User', // Add the required recipientModel field
               title: notificationTitle,
               message: notificationMessage,
-              type: 'leave_deleted',
+              type: 'leave', // Use 'leave' instead of 'leave_deleted' as it's a valid enum value
               relatedId: leave._id
             });
             
