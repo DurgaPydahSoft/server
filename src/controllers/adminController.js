@@ -76,6 +76,8 @@ export const addStudent = async (req, res, next) => {
       year,
       branch,
       category,
+      mealType,
+      parentPermissionForOuting,
       roomNumber,
       bedNumber,
       lockerNumber,
@@ -185,6 +187,8 @@ export const addStudent = async (req, res, next) => {
       year,
       branch,
       category,
+      mealType: mealType || 'non-veg',
+      parentPermissionForOuting: parentPermissionForOuting !== undefined ? parentPermissionForOuting : true,
       roomNumber,
       bedNumber,
       lockerNumber,
@@ -972,6 +976,8 @@ export const bulkAddStudents = async (req, res, next) => {
         year: yearValue,
         branch: branchDoc._id, // Use ObjectId
         category: normalizedCategory,
+        mealType: 'non-veg', // Default to non-veg for bulk upload
+        parentPermissionForOuting: true, // Default to true for bulk upload
         roomNumber: String(RoomNumber).trim(),
         studentPhone: StudentPhone ? String(StudentPhone).trim() : '',
         parentPhone: String(ParentPhone).trim(),
@@ -1145,6 +1151,8 @@ export const updateStudent = async (req, res, next) => {
       branch, 
       gender,
       category,
+      mealType,
+      parentPermissionForOuting,
       roomNumber, 
       bedNumber,
       lockerNumber,
@@ -1315,6 +1323,12 @@ export const updateStudent = async (req, res, next) => {
     if (branch) student.branch = branch;
     if (gender) student.gender = gender;
     if (category) student.category = category;
+    if (mealType) student.mealType = mealType;
+    if (parentPermissionForOuting !== undefined) {
+      console.log('🔧 Updating parentPermissionForOuting:', parentPermissionForOuting, 'type:', typeof parentPermissionForOuting);
+      student.parentPermissionForOuting = Boolean(parentPermissionForOuting);
+      console.log('🔧 Updated student.parentPermissionForOuting to:', student.parentPermissionForOuting);
+    }
     if (roomNumber) student.roomNumber = roomNumber;
     if (bedNumber !== undefined) student.bedNumber = bedNumber;
     if (lockerNumber !== undefined) student.lockerNumber = lockerNumber;
@@ -1366,6 +1380,8 @@ export const updateStudent = async (req, res, next) => {
           year: student.year,
           branch: student.branch,
           category: student.category,
+          mealType: student.mealType,
+          parentPermissionForOuting: student.parentPermissionForOuting,
           roomNumber: student.roomNumber,
           bedNumber: student.bedNumber,
           lockerNumber: student.lockerNumber,

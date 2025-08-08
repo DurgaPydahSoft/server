@@ -207,10 +207,17 @@ export const createLeaveRequest = async (req, res, next) => {
         parentPhone: student.parentPhone
       };
 
-      // Generate OTP for Permission applications
-      const otp = generateOTP();
-      leaveData.otpCode = otp;
-      leaveData.status = 'Pending OTP Verification';
+      // Check if parent permission is enabled for this student
+      if (student.parentPermissionForOuting) {
+        // Generate OTP for Permission applications with parent permission enabled
+        const otp = generateOTP();
+        leaveData.otpCode = otp;
+        leaveData.status = 'Pending OTP Verification';
+      } else {
+        // Skip OTP and send directly to principal for approval
+        leaveData.status = 'Pending Principal Approval';
+        console.log(`🚀 Permission request for student ${student.name} (${student.rollNumber}) - Parent permission disabled, sending directly to principal`);
+      }
 
     } else if (applicationType === 'Stay in Hostel') {
       // Validate stay in hostel-specific fields
@@ -239,8 +246,8 @@ export const createLeaveRequest = async (req, res, next) => {
     const leave = new Leave(leaveData);
     await leave.save();
 
-    // Send SMS only for Leave and Permission applications
-    if (applicationType !== 'Stay in Hostel') {
+    // Send SMS only for Leave and Permission applications with parent permission enabled
+    if (applicationType !== 'Stay in Hostel' && student.parentPermissionForOuting) {
       try {
         // Get gender in Telugu
         const genderInTelugu = student.gender === 'Male' ? 'కొడుకు' : 'కూతురు';
@@ -366,6 +373,11 @@ export const getAllLeaveRequests = async (req, res, next) => {
 
     // Exclude bulk outing leave records (identified by reason starting with "Bulk outing:")
     query.reason = { $not: /^Bulk outing:/ };
+
+    // Exclude 'Pending Principal Approval' status (these go directly to principal)
+    if (!status) {
+      query.status = { $ne: 'Pending Principal Approval' };
+    }
 
     // Filter by admin's course permissions if they have leave_management permission
     if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
@@ -1414,6 +1426,11 @@ export const getWardenLeaveRequests = async (req, res, next) => {
     // Exclude bulk outing leave records
     query.reason = { $not: /^Bulk outing:/ };
 
+    // Exclude 'Pending Principal Approval' status (these go directly to principal)
+    if (!status) {
+      query.status = { $ne: 'Pending Principal Approval' };
+    }
+
     console.log('MongoDB query:', query);
 
     const leaves = await Leave.find(query)
@@ -1629,6 +1646,11 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     // Exclude bulk outing leave records
     query.reason = { $not: /^Bulk outing:/ };
 
+    // Include both 'Warden Verified' and 'Pending Principal Approval' statuses
+    if (!status) {
+      query.status = { $in: ['Warden Verified', 'Pending Principal Approval'] };
+    }
+
     // Debug: Let's also check what leaves exist without any filters
     const allLeavesNoFilter = await Leave.find({}).populate('student', 'name course').limit(3);
     console.log('🔍 Sample leaves without filters:', allLeavesNoFilter.map(l => ({
@@ -1779,9 +1801,9 @@ export const principalApproveLeave = async (req, res, next) => {
       throw createError(400, 'Leave request is already rejected');
     }
 
-    if (leave.status !== 'Warden Verified') {
-      console.log('Status mismatch. Expected: Warden Verified, Actual:', leave.status);
-      throw createError(400, `Leave request must be verified by warden or admin first. Current status: ${leave.status}`);
+    if (leave.status !== 'Warden Verified' && leave.status !== 'Pending Principal Approval') {
+      console.log('Status mismatch. Expected: Warden Verified or Pending Principal Approval, Actual:', leave.status);
+      throw createError(400, `Leave request must be verified by warden/admin or pending principal approval. Current status: ${leave.status}`);
     }
 
     leave.status = 'Approved';
@@ -1882,9 +1904,9 @@ export const principalRejectLeave = async (req, res, next) => {
       throw createError(400, 'Leave request is already rejected');
     }
 
-    if (leave.status !== 'Warden Verified') {
-      console.log('Status mismatch in reject. Expected: Warden Verified, Actual:', leave.status);
-      throw createError(400, `Leave request must be verified by warden or admin first. Current status: ${leave.status}`);
+    if (leave.status !== 'Warden Verified' && leave.status !== 'Pending Principal Approval') {
+      console.log('Status mismatch in reject. Expected: Warden Verified or Pending Principal Approval, Actual:', leave.status);
+      throw createError(400, `Leave request must be verified by warden/admin or pending principal approval. Current status: ${leave.status}`);
     }
 
     leave.status = 'Rejected';

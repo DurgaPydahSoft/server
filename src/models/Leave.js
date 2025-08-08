@@ -56,7 +56,7 @@ const leaveSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Pending', 'Pending OTP Verification', 'Warden Verified', 'Approved', 'Rejected', 'Warden Recommended', 'Principal Approved', 'Principal Rejected'],
+    enum: ['Pending', 'Pending OTP Verification', 'Warden Verified', 'Approved', 'Rejected', 'Warden Recommended', 'Principal Approved', 'Principal Rejected', 'Pending Principal Approval'],
     default: 'Pending'
   },
   otpCode: {

@@ -127,6 +127,17 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid category for the selected gender!`
     }
   },
+  mealType: {
+    type: String,
+    enum: ['veg', 'non-veg'],
+    default: 'non-veg',
+    required: function() { return this.role === 'student'; }
+  },
+  parentPermissionForOuting: {
+    type: Boolean,
+    default: true,
+    required: function() { return this.role === 'student'; }
+  },
   roomNumber: {
     type: String,
     required: function() { return this.role === 'student'; },
