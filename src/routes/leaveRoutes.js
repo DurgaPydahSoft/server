@@ -24,7 +24,8 @@ import {
   principalRejectLeave,
   getStudentLeaveHistory,
   deleteLeaveRequest,
-  resendOTP
+  resendOTP,
+  cleanupExpiredLeaves
 } from '../controllers/leaveController.js';
 import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
@@ -105,5 +106,8 @@ router.post('/:id/record-incoming-visit', recordIncomingVisit);
 
 // Public route for QR scanning (must be last to avoid conflicts)
 router.get('/:id', getLeaveById);
+
+// Cleanup expired leaves route (for cron jobs)
+router.post('/cleanup-expired', adminAuth, cleanupExpiredLeaves);
 
 export default router; 

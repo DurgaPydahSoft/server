@@ -60,6 +60,126 @@ const getISTDateRange = () => {
   return { today, tomorrow };
 };
 
+// Helper function to check if a leave request has expired
+const isLeaveExpired = (leave) => {
+  const now = new Date();
+  let startDate;
+  
+  if (leave.applicationType === 'Leave') {
+    startDate = new Date(leave.startDate);
+  } else if (leave.applicationType === 'Permission') {
+    startDate = new Date(leave.permissionDate);
+  } else if (leave.applicationType === 'Stay in Hostel') {
+    startDate = new Date(leave.stayDate);
+  } else {
+    return false; // Unknown application type
+  }
+  
+  // Add 1 hour grace period
+  const gracePeriod = new Date(startDate);
+  gracePeriod.setHours(gracePeriod.getHours() + 1);
+  
+  return now > gracePeriod;
+};
+
+// Function to automatically delete expired leave requests
+const autoDeleteExpiredLeaves = async () => {
+  try {
+    const now = new Date();
+    console.log(`🔍 Auto-deletion check at: ${now.toISOString()}`);
+    
+    // Find expired requests that should be deleted
+    const expiredLeaves = await Leave.find({
+      status: { $in: ['Pending', 'Pending OTP Verification', 'Warden Verified'] },
+      $or: [
+        // Leave requests
+        {
+          applicationType: 'Leave',
+          startDate: { $lt: new Date(now.getTime() - 60 * 60 * 1000) } // 1 hour ago
+        },
+        // Permission requests
+        {
+          applicationType: 'Permission',
+          permissionDate: { $lt: new Date(now.getTime() - 60 * 60 * 1000) } // 1 hour ago
+        },
+        // Stay in Hostel requests
+        {
+          applicationType: 'Stay in Hostel',
+          stayDate: { $lt: new Date(now.getTime() - 60 * 60 * 1000) } // 1 hour ago
+        }
+      ]
+    }).populate('student');
+    
+    console.log(`🔍 Found ${expiredLeaves.length} expired leave requests to delete`);
+    
+    if (expiredLeaves.length > 0) {
+      console.log(`🗑️ Auto-deleting ${expiredLeaves.length} expired leave requests`);
+      
+      for (const leave of expiredLeaves) {
+        try {
+          // Notify student about deletion
+          if (leave.student) {
+            const notificationTitle = 'Leave Request Auto-Deleted';
+            let notificationMessage;
+            
+            if (leave.status === 'Warden Verified') {
+              notificationMessage = `Your ${leave.applicationType} request for ${leave.applicationType === 'Leave' ? `${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()}` : new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the start date has passed without principal approval.`;
+            } else {
+              notificationMessage = `Your ${leave.applicationType} request for ${leave.applicationType === 'Leave' ? `${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()}` : new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the start date has passed without OTP verification.`;
+            }
+            
+            // Create notification for student
+            await Notification.create({
+              recipient: leave.student._id,
+              title: notificationTitle,
+              message: notificationMessage,
+              type: 'leave_deleted',
+              relatedId: leave._id
+            });
+            
+            // Send OneSignal notification to student
+            if (leave.student.oneSignalId) {
+              await sendOneSignalNotification({
+                playerIds: [leave.student.oneSignalId],
+                title: notificationTitle,
+                message: notificationMessage,
+                data: { type: 'leave_deleted', leaveId: leave._id.toString() }
+              });
+            }
+          }
+          
+          // Delete the leave request
+          await Leave.findByIdAndDelete(leave._id);
+          console.log(`🗑️ Deleted expired leave request: ${leave._id} for student: ${leave.student?.name || 'Unknown'}`);
+          
+        } catch (error) {
+          console.error(`Error deleting expired leave ${leave._id}:`, error);
+        }
+      }
+    }
+    
+    return expiredLeaves.length;
+  } catch (error) {
+    console.error('Error in autoDeleteExpiredLeaves:', error);
+    return 0;
+  }
+};
+
+// Cron job function for periodic cleanup (can be called by external scheduler)
+export const cleanupExpiredLeaves = async (req, res, next) => {
+  try {
+    const deletedCount = await autoDeleteExpiredLeaves();
+    
+    res.json({
+      success: true,
+      message: `Cleanup completed. Deleted ${deletedCount} expired leave requests.`,
+      deletedCount
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Create new leave or permission request
 export const createLeaveRequest = async (req, res, next) => {
   try {
@@ -335,6 +455,10 @@ export const createLeaveRequest = async (req, res, next) => {
 export const getStudentLeaveRequests = async (req, res, next) => {
   try {
     const studentId = req.user.id;
+    
+    // Auto-delete expired leaves before fetching
+    await autoDeleteExpiredLeaves();
+    
     const leaves = await Leave.find({ student: studentId })
       .populate({
         path: 'student',
@@ -360,6 +484,10 @@ export const getStudentLeaveRequests = async (req, res, next) => {
 export const getAllLeaveRequests = async (req, res, next) => {
   try {
     console.log('Getting all leave requests with query:', req.query);
+    
+    // Auto-delete expired leaves before fetching
+    await autoDeleteExpiredLeaves();
+    
     const { status, applicationType, page = 1, limit = 10 } = req.query;
     const query = {};
 
@@ -1226,6 +1354,9 @@ export const updateVerificationStatus = async (req, res, next) => {
 // Get Stay in Hostel requests for Warden
 export const getStayInHostelRequestsForWarden = async (req, res, next) => {
   try {
+    // Auto-delete expired leaves before fetching
+    await autoDeleteExpiredLeaves();
+    
     const { status, wardenRecommendation, page = 1, limit = 10, fromDate, toDate } = req.query;
     const query = { applicationType: 'Stay in Hostel' };
 
@@ -1277,6 +1408,9 @@ export const getStayInHostelRequestsForWarden = async (req, res, next) => {
 // Get Stay in Hostel requests for Principal
 export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
   try {
+    // Auto-delete expired leaves before fetching
+    await autoDeleteExpiredLeaves();
+    
     const { status, principalDecision, wardenRecommendation, page = 1, limit = 10, fromDate, toDate } = req.query;
     const query = { applicationType: 'Stay in Hostel' };
 
@@ -1409,6 +1543,10 @@ export const wardenRecommendation = async (req, res, next) => {
 export const getWardenLeaveRequests = async (req, res, next) => {
   try {
     console.log('Getting warden leave requests with query:', req.query);
+    
+    // Auto-delete expired leaves before fetching
+    await autoDeleteExpiredLeaves();
+    
     const { status, applicationType, page = 1, limit = 10 } = req.query;
     const query = {};
 
@@ -1605,6 +1743,10 @@ export const wardenRejectLeave = async (req, res, next) => {
 export const getPrincipalLeaveRequests = async (req, res, next) => {
   try {
     console.log('Getting principal leave requests with query:', req.query);
+    
+    // Auto-delete expired leaves before fetching
+    await autoDeleteExpiredLeaves();
+    
     const { status, applicationType, page = 1, limit = 10 } = req.query;
     const principalId = req.principal._id;
     
