@@ -76,23 +76,15 @@ const isDateBeforeToday = (dateToCheck) => {
 
 // Helper function to check if a leave request has expired
 const isLeaveExpired = (leave) => {
-  const now = new Date();
-  let startDate;
-  
   if (leave.applicationType === 'Leave') {
-    startDate = new Date(leave.startDate);
-    // For Leave requests, add 1 hour grace period
-    const gracePeriod = new Date(startDate);
-    gracePeriod.setHours(gracePeriod.getHours() + 1);
-    return now > gracePeriod;
+    // For Leave requests, expire at end of day
+    return isDateBeforeToday(leave.startDate);
   } else if (leave.applicationType === 'Permission') {
-    startDate = new Date(leave.permissionDate);
     // For Permission requests, expire at end of day
-    return isDateBeforeToday(startDate);
+    return isDateBeforeToday(leave.permissionDate);
   } else if (leave.applicationType === 'Stay in Hostel') {
-    startDate = new Date(leave.stayDate);
     // For Stay in Hostel requests, expire at end of day
-    return isDateBeforeToday(startDate);
+    return isDateBeforeToday(leave.stayDate);
   } else {
     return false; // Unknown application type
   }
@@ -108,10 +100,10 @@ const autoDeleteExpiredLeaves = async () => {
     const { today, tomorrow } = getISTDateRange();
     
     // Find expired requests that should be deleted
-    // Different expiration rules:
-    // - Leave requests: Delete 1 hour after start date (for multi-day leaves)
-    // - Permission requests: Delete at end of day (for same-day permissions)
-    // - Stay in Hostel requests: Delete at end of day (for same-day stays)
+    // All requests now expire at end of day (IST):
+    // - Leave requests: Delete if start date is before today
+    // - Permission requests: Delete if permission date is before today
+    // - Stay in Hostel requests: Delete if stay date is before today
     
     // Get all pending requests first
     const allPendingLeaves = await Leave.find({
@@ -121,11 +113,9 @@ const autoDeleteExpiredLeaves = async () => {
     // Filter expired leaves using JavaScript logic for better date handling
     const expiredLeaves = allPendingLeaves.filter(leave => {
       if (leave.applicationType === 'Leave') {
-        // For Leave requests, check if start date has passed (with 1 hour grace period)
-        const startDate = new Date(leave.startDate);
-        const gracePeriod = new Date(startDate.getTime() + 60 * 60 * 1000); // 1 hour after start
-        const isExpired = now > gracePeriod;
-        console.log(`🔍 Leave ${leave._id}: startDate=${startDate.toISOString()}, gracePeriod=${gracePeriod.toISOString()}, now=${now.toISOString()}, expired=${isExpired}`);
+        // For Leave requests, check if start date is before today (end of day)
+        const isExpired = isDateBeforeToday(leave.startDate);
+        console.log(`🔍 Leave ${leave._id}: startDate=${leave.startDate}, isExpired=${isExpired}`);
         return isExpired;
       } else if (leave.applicationType === 'Permission') {
         // For Permission requests, check if permission date is before today
@@ -163,13 +153,13 @@ const autoDeleteExpiredLeaves = async () => {
             
             if (leave.status === 'Warden Verified') {
               if (leave.applicationType === 'Leave') {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the start date has passed without principal approval.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the date has passed without principal approval.`;
               } else {
                 notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the date has passed without principal approval.`;
               }
             } else {
               if (leave.applicationType === 'Leave') {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the start date has passed without OTP verification.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the date has passed without OTP verification.`;
               } else {
                 notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the date has passed without OTP verification.`;
               }
