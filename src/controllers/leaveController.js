@@ -60,10 +60,23 @@ const getISTDateRange = () => {
   return { today, tomorrow };
 };
 
+// Helper function to check if a date is before today (IST)
+const isDateBeforeToday = (dateToCheck) => {
+  const { today } = getISTDateRange();
+  const checkDate = new Date(dateToCheck);
+  
+  // Set the check date to start of day for comparison
+  checkDate.setUTCHours(5, 30, 0, 0); // 12:00 AM IST
+  
+  const result = checkDate < today;
+  console.log(`🔍 isDateBeforeToday: dateToCheck=${dateToCheck}, checkDate=${checkDate.toISOString()}, today=${today.toISOString()}, result=${result}`);
+  
+  return result;
+};
+
 // Helper function to check if a leave request has expired
 const isLeaveExpired = (leave) => {
   const now = new Date();
-  const { today } = getISTDateRange();
   let startDate;
   
   if (leave.applicationType === 'Leave') {
@@ -75,11 +88,11 @@ const isLeaveExpired = (leave) => {
   } else if (leave.applicationType === 'Permission') {
     startDate = new Date(leave.permissionDate);
     // For Permission requests, expire at end of day
-    return startDate < today;
+    return isDateBeforeToday(startDate);
   } else if (leave.applicationType === 'Stay in Hostel') {
     startDate = new Date(leave.stayDate);
     // For Stay in Hostel requests, expire at end of day
-    return startDate < today;
+    return isDateBeforeToday(startDate);
   } else {
     return false; // Unknown application type
   }
@@ -99,26 +112,34 @@ const autoDeleteExpiredLeaves = async () => {
     // - Leave requests: Delete 1 hour after start date (for multi-day leaves)
     // - Permission requests: Delete at end of day (for same-day permissions)
     // - Stay in Hostel requests: Delete at end of day (for same-day stays)
-    const expiredLeaves = await Leave.find({
-      status: { $in: ['Pending', 'Pending OTP Verification', 'Warden Verified'] },
-      $or: [
-        // Leave requests - delete if start date has passed (with 1 hour grace period)
-        {
-          applicationType: 'Leave',
-          startDate: { $lt: new Date(now.getTime() - 60 * 60 * 1000) } // 1 hour ago
-        },
-        // Permission requests - delete if permission date has passed (end of day)
-        {
-          applicationType: 'Permission',
-          permissionDate: { $lt: today } // Delete if permission date is before today
-        },
-        // Stay in Hostel requests - delete if stay date has passed (end of day)
-        {
-          applicationType: 'Stay in Hostel',
-          stayDate: { $lt: today } // Delete if stay date is before today
-        }
-      ]
+    
+    // Get all pending requests first
+    const allPendingLeaves = await Leave.find({
+      status: { $in: ['Pending', 'Pending OTP Verification', 'Warden Verified'] }
     }).populate('student');
+    
+    // Filter expired leaves using JavaScript logic for better date handling
+    const expiredLeaves = allPendingLeaves.filter(leave => {
+      if (leave.applicationType === 'Leave') {
+        // For Leave requests, check if start date has passed (with 1 hour grace period)
+        const startDate = new Date(leave.startDate);
+        const gracePeriod = new Date(startDate.getTime() + 60 * 60 * 1000); // 1 hour after start
+        const isExpired = now > gracePeriod;
+        console.log(`🔍 Leave ${leave._id}: startDate=${startDate.toISOString()}, gracePeriod=${gracePeriod.toISOString()}, now=${now.toISOString()}, expired=${isExpired}`);
+        return isExpired;
+      } else if (leave.applicationType === 'Permission') {
+        // For Permission requests, check if permission date is before today
+        const isExpired = isDateBeforeToday(leave.permissionDate);
+        console.log(`🔍 Permission ${leave._id}: permissionDate=${leave.permissionDate}, isExpired=${isExpired}`);
+        return isExpired;
+      } else if (leave.applicationType === 'Stay in Hostel') {
+        // For Stay in Hostel requests, check if stay date is before today
+        const isExpired = isDateBeforeToday(leave.stayDate);
+        console.log(`🔍 Stay in Hostel ${leave._id}: stayDate=${leave.stayDate}, isExpired=${isExpired}`);
+        return isExpired;
+      }
+      return false;
+    });
     
     console.log(`🔍 Found ${expiredLeaves.length} expired leave requests to delete`);
     
