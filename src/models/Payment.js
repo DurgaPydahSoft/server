@@ -1,17 +1,7 @@
 import mongoose from 'mongoose';
 
 const paymentSchema = new mongoose.Schema({
-  billId: {
-    type: mongoose.Schema.Types.ObjectId,
-    required: true,
-    index: true
-  },
-  roomId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Room',
-    required: true,
-    index: true
-  },
+  // Common fields for both electricity and hostel fee payments
   studentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -28,6 +18,55 @@ const paymentSchema = new mongoose.Schema({
     default: 'INR',
     enum: ['INR']
   },
+  status: {
+    type: String,
+    enum: ['pending', 'success', 'failed', 'cancelled'],
+    default: 'success', // Hostel fees are usually collected in cash/online immediately
+    index: true
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['Cash', 'Online', 'card', 'upi', 'netbanking', 'wallet', 'other'],
+    required: true
+  },
+  paymentDate: {
+    type: Date,
+    default: Date.now
+  },
+  notes: {
+    type: String,
+    default: ''
+  },
+  collectedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  collectedByName: {
+    type: String,
+    required: true
+  },
+  
+  // Payment type to distinguish between electricity and hostel fees
+  paymentType: {
+    type: String,
+    enum: ['electricity', 'hostel_fee'],
+    required: true,
+    index: true
+  },
+  
+  // Fields for electricity payments (optional for hostel fees)
+  billId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: function() { return this.paymentType === 'electricity'; },
+    index: true
+  },
+  roomId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room',
+    required: function() { return this.paymentType === 'electricity'; },
+    index: true
+  },
   cashfreeOrderId: {
     type: String,
     unique: true,
@@ -38,19 +77,6 @@ const paymentSchema = new mongoose.Schema({
     unique: true,
     sparse: true
   },
-  status: {
-    type: String,
-    enum: ['pending', 'success', 'failed', 'cancelled'],
-    default: 'pending',
-    index: true
-  },
-  paymentMethod: {
-    type: String,
-    enum: ['card', 'upi', 'netbanking', 'wallet', 'other']
-  },
-  paymentDate: {
-    type: Date
-  },
   receiptUrl: {
     type: String
   },
@@ -59,7 +85,7 @@ const paymentSchema = new mongoose.Schema({
   },
   billMonth: {
     type: String,
-    required: true,
+    required: function() { return this.paymentType === 'electricity'; },
     match: [/^\d{4}-\d{2}$/, 'Bill month must be in YYYY-MM format']
   },
   billDetails: {
@@ -68,6 +94,31 @@ const paymentSchema = new mongoose.Schema({
     consumption: Number,
     rate: Number,
     total: Number
+  },
+  
+  // Fields for hostel fee payments (optional for electricity)
+  term: {
+    type: String,
+    required: function() { return this.paymentType === 'hostel_fee'; },
+    enum: ['term1', 'term2', 'term3'],
+    index: true
+  },
+  academicYear: {
+    type: String,
+    required: function() { return this.paymentType === 'hostel_fee'; },
+    match: [/^\d{4}-\d{4}$/, 'Academic year must be in YYYY-YYYY format']
+  },
+  receiptNumber: {
+    type: String,
+    required: function() { return this.paymentType === 'hostel_fee'; },
+    unique: true,
+    sparse: true
+  },
+  transactionId: {
+    type: String,
+    required: function() { return this.paymentType === 'hostel_fee'; },
+    unique: true,
+    sparse: true
   }
 }, {
   timestamps: true,
@@ -93,10 +144,14 @@ const paymentSchema = new mongoose.Schema({
 
 // Indexes for efficient querying
 paymentSchema.index({ studentId: 1, status: 1 });
-paymentSchema.index({ roomId: 1, billMonth: 1 });
+paymentSchema.index({ studentId: 1, paymentType: 1 }); // For hostel fee queries
+paymentSchema.index({ roomId: 1, billMonth: 1 }); // For electricity queries
 paymentSchema.index({ createdAt: -1 });
 paymentSchema.index({ cashfreeOrderId: 1 });
 paymentSchema.index({ cashfreePaymentId: 1 });
+paymentSchema.index({ term: 1, academicYear: 1 }); // For hostel fee queries
+paymentSchema.index({ receiptNumber: 1 }); // For hostel fee queries
+paymentSchema.index({ transactionId: 1 }); // For hostel fee queries
 
 // Virtual for payment age
 paymentSchema.virtual('age').get(function() {

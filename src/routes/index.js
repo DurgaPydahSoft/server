@@ -18,6 +18,7 @@ import feeStructureRoutes from './feeStructureRoutes.js';
 import featureToggleRoutes from './featureToggleRoutes.js';
 import foundLostRoutes from './foundLostRoutes.js';
 import principalRoutes from './principalRoutes.js';
+import paymentRoutes from './paymentRoutes.js';
 
 const router = express.Router();
 
@@ -41,5 +42,6 @@ router.use('/fee-structure', feeStructureRoutes);
 router.use('/feature-toggles', featureToggleRoutes);
 router.use('/foundlost', foundLostRoutes);
 router.use('/principal', principalRoutes);
+router.use('/payments', paymentRoutes);
 
 export default router; 

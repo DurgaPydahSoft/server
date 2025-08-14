@@ -85,7 +85,8 @@ export const addStudent = async (req, res, next) => {
       parentPhone,
       batch,
       academicYear,
-      email
+      email,
+      concession = 0
     } = req.body;
 
     // Check if student already exists
@@ -152,6 +153,52 @@ export const addStudent = async (req, res, next) => {
     const hostelId = await generateHostelId(gender || 'Male');
     console.log('Generated hostel ID:', hostelId);
 
+    // Calculate fees with concession
+    let calculatedTerm1Fee = 0;
+    let calculatedTerm2Fee = 0;
+    let calculatedTerm3Fee = 0;
+    let totalCalculatedFee = 0;
+
+    try {
+      // Fetch fee structure for the category and academic year
+      const FeeStructure = (await import('../models/FeeStructure.js')).default;
+      const feeStructure = await FeeStructure.getFeeStructure(academicYear, category);
+      
+      if (feeStructure) {
+        console.log('📊 Fee structure found:', feeStructure);
+        
+        // Calculate fees with concession (fixed amount deduction)
+        const concessionAmount = Number(concession) || 0;
+        const totalOriginalFee = feeStructure.totalFee;
+        
+        // Apply concession to total fee
+        const totalAfterConcession = Math.max(0, totalOriginalFee - concessionAmount);
+        
+        // Calculate proportional concession for each term
+        const concessionRatio = totalAfterConcession / totalOriginalFee;
+        
+        calculatedTerm1Fee = Math.round(feeStructure.term1Fee * concessionRatio);
+        calculatedTerm2Fee = Math.round(feeStructure.term2Fee * concessionRatio);
+        calculatedTerm3Fee = Math.round(feeStructure.term3Fee * concessionRatio);
+        totalCalculatedFee = calculatedTerm1Fee + calculatedTerm2Fee + calculatedTerm3Fee;
+        
+        console.log('💰 Fee calculation:', {
+          original: totalOriginalFee,
+          concession: concessionAmount,
+          afterConcession: totalAfterConcession,
+          term1: calculatedTerm1Fee,
+          term2: calculatedTerm2Fee,
+          term3: calculatedTerm3Fee,
+          total: totalCalculatedFee
+        });
+      } else {
+        console.log('⚠️ No fee structure found for category:', category, 'academic year:', academicYear);
+      }
+    } catch (feeError) {
+      console.error('❌ Error calculating fees:', feeError);
+      // Don't fail the registration if fee calculation fails
+    }
+
     // Generate random password
     const generatedPassword = User.generateRandomPassword();
 
@@ -201,7 +248,12 @@ export const addStudent = async (req, res, next) => {
       isPasswordChanged: false,
       studentPhoto: studentPhotoUrl,
       guardianPhoto1: guardianPhoto1Url,
-      guardianPhoto2: guardianPhoto2Url
+      guardianPhoto2: guardianPhoto2Url,
+      concession: Number(concession) || 0,
+      calculatedTerm1Fee,
+      calculatedTerm2Fee,
+      calculatedTerm3Fee,
+      totalCalculatedFee
     });
 
     const savedStudent = await student.save();
@@ -2208,7 +2260,7 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address');
+      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
     
     const total = await User.countDocuments(query);
     
@@ -2283,7 +2335,12 @@ export const generateAdmitCard = async (req, res, next) => {
           hostelId: student.hostelId,
           hostelStatus: student.hostelStatus,
           studentPhoto: photoBase64, // Return base64 image instead of URL
-          address: student.address
+          address: student.address,
+          concession: student.concession || 0,
+          calculatedTerm1Fee: student.calculatedTerm1Fee || 0,
+          calculatedTerm2Fee: student.calculatedTerm2Fee || 0,
+          calculatedTerm3Fee: student.calculatedTerm3Fee || 0,
+          totalCalculatedFee: student.totalCalculatedFee || 0
         }
       }
     });

@@ -262,6 +262,38 @@ const userSchema = new mongoose.Schema({
   guardianPhoto2: {
     type: String,
     required: false
+  },
+  // Fee concession and calculated amounts
+  concession: {
+    type: Number,
+    default: 0,
+    min: 0,
+    validate: {
+      validator: function(v) {
+        return v >= 0;
+      },
+      message: 'Concession must be a positive number'
+    }
+  },
+  calculatedTerm1Fee: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  calculatedTerm2Fee: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  calculatedTerm3Fee: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  totalCalculatedFee: {
+    type: Number,
+    default: 0,
+    min: 0
   }
 }, {
   timestamps: true

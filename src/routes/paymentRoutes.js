@@ -7,7 +7,12 @@ import {
   getPaymentHistory,
   getPaymentStats,
   cancelPayment,
-  verifyPayment
+  verifyPayment,
+  // Hostel fee payment functions
+  recordHostelFeePayment,
+  getHostelFeePayments,
+  getHostelFeePaymentHistory,
+  getHostelFeePaymentStats
 } from '../controllers/paymentController.js';
 
 const router = express.Router();
@@ -21,6 +26,12 @@ router.delete('/cancel/:paymentId', authenticateStudent, cancelPayment);
 
 // Admin payment routes
 router.get('/stats', adminAuth, getPaymentStats);
+
+// Hostel fee payment routes
+router.post('/hostel-fee', adminAuth, recordHostelFeePayment); // Admin records payment
+router.get('/hostel-fee/:studentId', adminAuth, getHostelFeePayments); // Admin gets student payments
+router.get('/hostel-fee/history/:studentId', authenticateStudent, getHostelFeePaymentHistory); // Student gets own history
+router.get('/hostel-fee/stats', adminAuth, getHostelFeePaymentStats); // Admin gets hostel fee stats
 
 // Webhook route (no authentication required)
 router.post('/webhook', processPayment);

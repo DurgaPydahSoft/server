@@ -125,7 +125,7 @@ export const getFeeStructures = async (req, res) => {
   try {
     console.log('🔍 Backend: getFeeStructures called');
     console.log('🔍 Backend: Query params:', req.query);
-    console.log('🔍 Backend: Headers:', req.headers);
+    
     
     const { academicYear } = req.query;
     

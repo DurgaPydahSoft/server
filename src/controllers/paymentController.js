@@ -628,4 +628,299 @@ export const cancelPayment = async (req, res) => {
       error: error.message
     });
   }
+};
+
+// ==================== HOSTEL FEE PAYMENT FUNCTIONS ====================
+
+// Record hostel fee payment (Admin function)
+export const recordHostelFeePayment = async (req, res) => {
+  try {
+    const {
+      studentId,
+      amount,
+      term,
+      paymentMethod,
+      notes,
+      academicYear
+    } = req.body;
+    
+    const adminId = req.user._id;
+    const adminName = req.user.username || req.user.name;
+
+    console.log('💰 Recording hostel fee payment:', {
+      studentId,
+      amount,
+      term,
+      paymentMethod,
+      academicYear,
+      adminId
+    });
+
+    // Validate required fields
+    if (!studentId || !amount || !term || !paymentMethod || !academicYear) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID, amount, term, payment method, and academic year are required'
+      });
+    }
+
+    // Validate term
+    if (!['term1', 'term2', 'term3'].includes(term)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid term. Must be term1, term2, or term3'
+      });
+    }
+
+    // Validate amount
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0'
+      });
+    }
+
+    // Check if student exists
+    const student = await User.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Generate unique receipt and transaction IDs
+    const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+    const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+
+    // Create payment record
+    const payment = new Payment({
+      studentId: studentId,
+      amount: amount,
+      paymentMethod: paymentMethod,
+      notes: notes || '',
+      collectedBy: adminId,
+      collectedByName: adminName,
+      paymentType: 'hostel_fee',
+      term: term,
+      academicYear: academicYear,
+      receiptNumber: receiptNumber,
+      transactionId: transactionId,
+      status: 'success', // Hostel fees are collected immediately
+      paymentDate: new Date()
+    });
+
+    await payment.save();
+
+    console.log('✅ Hostel fee payment recorded successfully:', {
+      paymentId: payment._id,
+      receiptNumber,
+      transactionId
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Hostel fee payment recorded successfully',
+      data: {
+        paymentId: payment._id,
+        receiptNumber,
+        transactionId,
+        amount,
+        term,
+        studentName: student.name,
+        studentRollNumber: student.rollNumber
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error recording hostel fee payment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to record hostel fee payment',
+      error: error.message
+    });
+  }
+};
+
+// Get hostel fee payments for a specific student (Admin function)
+export const getHostelFeePayments = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const { academicYear } = req.query;
+
+    console.log('🔍 Getting hostel fee payments for student:', studentId, 'academic year:', academicYear);
+
+    // Check if student exists
+    const student = await User.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Build query
+    const query = {
+      studentId: studentId,
+      paymentType: 'hostel_fee'
+    };
+
+    if (academicYear) {
+      query.academicYear = academicYear;
+    }
+
+    // Get payments
+    const payments = await Payment.find(query)
+      .sort({ paymentDate: -1 })
+      .lean();
+
+    console.log('📋 Found hostel fee payments:', payments.length);
+
+    res.json({
+      success: true,
+      data: {
+        student: {
+          name: student.name,
+          rollNumber: student.rollNumber,
+          category: student.category,
+          academicYear: student.academicYear
+        },
+        payments: payments
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting hostel fee payments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get hostel fee payments',
+      error: error.message
+    });
+  }
+};
+
+// Get hostel fee payment history for student (Student function)
+export const getHostelFeePaymentHistory = async (req, res) => {
+  try {
+    const { studentId } = req.params;
+    const requestingStudentId = req.user._id;
+
+    console.log('🔍 Getting hostel fee payment history for student:', studentId);
+
+    // Students can only see their own payment history
+    if (studentId !== requestingStudentId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only view your own payment history'
+      });
+    }
+
+    // Get payments
+    const payments = await Payment.find({
+      studentId: studentId,
+      paymentType: 'hostel_fee'
+    })
+      .sort({ paymentDate: -1 })
+      .lean();
+
+    console.log('📋 Found payment history:', payments.length);
+
+    res.json({
+      success: true,
+      data: payments
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting hostel fee payment history:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get payment history',
+      error: error.message
+    });
+  }
+};
+
+// Get hostel fee payment statistics for admin
+export const getHostelFeePaymentStats = async (req, res) => {
+  try {
+    const { academicYear, term } = req.query;
+
+    console.log('📊 Getting hostel fee payment stats:', { academicYear, term });
+
+    // Build aggregation pipeline
+    const pipeline = [
+      {
+        $match: {
+          paymentType: 'hostel_fee',
+          status: 'success'
+        }
+      }
+    ];
+
+    if (academicYear) {
+      pipeline[0].$match.academicYear = academicYear;
+    }
+
+    if (term) {
+      pipeline[0].$match.term = term;
+    }
+
+    // Add grouping
+    pipeline.push({
+      $group: {
+        _id: {
+          academicYear: '$academicYear',
+          term: '$term'
+        },
+        totalPayments: { $sum: 1 },
+        totalAmount: { $sum: '$amount' },
+        averageAmount: { $avg: '$amount' }
+      }
+    });
+
+    // Add sorting
+    pipeline.push({
+      $sort: {
+        '_id.academicYear': -1,
+        '_id.term': 1
+      }
+    });
+
+    const stats = await Payment.aggregate(pipeline);
+
+    // Get total summary
+    const totalSummary = await Payment.aggregate([
+      {
+        $match: {
+          paymentType: 'hostel_fee',
+          status: 'success'
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalPayments: { $sum: 1 },
+          totalAmount: { $sum: '$amount' }
+        }
+      }
+    ]);
+
+    console.log('📊 Hostel fee payment stats calculated');
+
+    res.json({
+      success: true,
+      data: {
+        summary: totalSummary[0] || { totalPayments: 0, totalAmount: 0 },
+        breakdown: stats
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting hostel fee payment stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get payment statistics',
+      error: error.message
+    });
+  }
 }; 
