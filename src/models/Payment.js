@@ -37,6 +37,11 @@ const paymentSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  utrNumber: {
+    type: String,
+    required: function() { return this.paymentMethod === 'Online'; },
+    trim: true
+  },
   collectedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

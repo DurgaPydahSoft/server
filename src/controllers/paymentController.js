@@ -56,9 +56,10 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Check if there's already a pending payment for this bill
+    // Check if this specific student has already paid for this bill
     const existingPayment = await Payment.findOne({
       billId: billId,
+      studentId: studentId,
       status: { $in: ['pending', 'success'] }
     });
 
@@ -66,7 +67,7 @@ export const initiatePayment = async (req, res) => {
       if (existingPayment.status === 'success') {
         return res.status(400).json({
           success: false,
-          message: 'This bill has already been paid'
+          message: 'You have already paid for this bill'
         });
       } else {
         return res.status(400).json({
@@ -85,6 +86,33 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
+    // Calculate student's share
+    let studentAmount = 0;
+    const studentBill = bill.studentBills?.find(sb => sb.studentId.toString() === studentId.toString());
+    
+    if (studentBill) {
+      // New format - has studentBills array
+      studentAmount = studentBill.amount;
+    } else {
+      // Old format - calculate equal share
+      const studentsInRoom = await User.countDocuments({
+        roomNumber: room.roomNumber,
+        gender: room.gender,
+        category: room.category,
+        role: 'student',
+        hostelStatus: 'Active'
+      });
+      
+      if (studentsInRoom === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No students found in room'
+        });
+      }
+      
+      studentAmount = Math.round(bill.total / studentsInRoom);
+    }
+
     // Generate unique order ID
     const orderId = `ELEC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -93,7 +121,7 @@ export const initiatePayment = async (req, res) => {
       billId: billId,
       roomId: roomId,
       studentId: studentId,
-      amount: bill.total,
+      amount: studentAmount,
       billMonth: bill.month,
       billDetails: {
         startUnits: bill.startUnits,
@@ -109,7 +137,7 @@ export const initiatePayment = async (req, res) => {
     // Generate order data for Cashfree
     const orderData = cashfreeService.generateOrderData({
       orderId: orderId,
-      amount: bill.total,
+      amount: studentAmount,
       studentName: student.name,
       studentEmail: student.email,
       studentPhone: student.studentPhone || '9999999999',
@@ -153,7 +181,7 @@ export const initiatePayment = async (req, res) => {
       data: {
         paymentId: payment._id,
         orderId: orderId,
-        amount: bill.total,
+        amount: studentAmount,
         paymentSessionId: cashfreeResult.data.payment_session_id,
         paymentUrl: cashfreeResult.data.payment_link,
         orderStatus: cashfreeResult.data.order_status
@@ -634,42 +662,124 @@ export const cancelPayment = async (req, res) => {
 // ==================== HOSTEL FEE PAYMENT FUNCTIONS ====================
 
 // Record hostel fee payment (Admin function)
-export const recordHostelFeePayment = async (req, res) => {
+// Record electricity bill payment (Admin function)
+// Get all payments for admin (both hostel fee and electricity)
+export const getAllPayments = async (req, res) => {
+  try {
+    const { page = 1, limit = 50, paymentType, studentId } = req.query;
+    const skip = (page - 1) * limit;
+
+    console.log('🔍 Getting all payments with filters:', { page, limit, paymentType, studentId });
+
+    // Build query
+    const query = {};
+    if (paymentType) {
+      query.paymentType = paymentType;
+    }
+    if (studentId) {
+      query.studentId = studentId;
+    }
+
+    // Get payments with pagination
+    const payments = await Payment.find(query)
+      .populate('studentId', 'name rollNumber category academicYear roomNumber')
+      .populate('roomId', 'roomNumber')
+      .sort({ paymentDate: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    // Get total count
+    const totalCount = await Payment.countDocuments(query);
+
+    // Transform payments to include student details
+    const transformedPayments = payments.map(payment => ({
+      _id: payment._id,
+      studentId: payment.studentId._id,
+      studentName: payment.studentId.name,
+      studentRollNumber: payment.studentId.rollNumber,
+      category: payment.studentId.category,
+      academicYear: payment.studentId.academicYear,
+      roomNumber: payment.studentId.roomNumber || payment.roomId?.roomNumber,
+      amount: payment.amount,
+      paymentType: payment.paymentType,
+      paymentMethod: payment.paymentMethod,
+      paymentDate: payment.paymentDate,
+      status: payment.status,
+      notes: payment.notes,
+      collectedByName: payment.collectedByName,
+      // Payment type specific fields
+      term: payment.term,
+      billMonth: payment.billMonth,
+      billDetails: payment.billDetails,
+      receiptNumber: payment.receiptNumber,
+      transactionId: payment.transactionId,
+      cashfreeOrderId: payment.cashfreeOrderId
+    }));
+
+    console.log('📋 Found payments:', transformedPayments.length);
+
+    res.json({
+      success: true,
+      data: {
+        payments: transformedPayments,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: Math.ceil(totalCount / limit),
+          totalCount,
+          hasNext: skip + payments.length < totalCount,
+          hasPrev: page > 1
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting all payments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get payments',
+      error: error.message
+    });
+  }
+};
+
+export const recordElectricityPayment = async (req, res) => {
   try {
     const {
       studentId,
+      billId,
+      roomId,
       amount,
-      term,
       paymentMethod,
       notes,
-      academicYear
+      utrNumber
     } = req.body;
     
     const adminId = req.user._id;
     const adminName = req.user.username || req.user.name;
 
-    console.log('💰 Recording hostel fee payment:', {
+    console.log('⚡ Recording electricity payment:', {
       studentId,
+      billId,
+      roomId,
       amount,
-      term,
       paymentMethod,
-      academicYear,
       adminId
     });
 
     // Validate required fields
-    if (!studentId || !amount || !term || !paymentMethod || !academicYear) {
+    if (!studentId || !billId || !roomId || !amount || !paymentMethod) {
       return res.status(400).json({
         success: false,
-        message: 'Student ID, amount, term, payment method, and academic year are required'
+        message: 'Student ID, bill ID, room ID, amount, and payment method are required'
       });
     }
 
-    // Validate term
-    if (!['term1', 'term2', 'term3'].includes(term)) {
+    // Validate UTR for online payments
+    if (paymentMethod === 'Online' && !utrNumber) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid term. Must be term1, term2, or term3'
+        message: 'UTR number is required for online payments'
       });
     }
 
@@ -681,13 +791,207 @@ export const recordHostelFeePayment = async (req, res) => {
       });
     }
 
-    // Validate minimum payment amount
-    if (amount < 100) {
-      return res.status(400).json({
+    // Check if student exists
+    const student = await User.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
         success: false,
-        message: 'Minimum payment amount is ₹100'
+        message: 'Student not found'
       });
     }
+
+    // Find room and bill
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({
+        success: false,
+        message: 'Room not found'
+      });
+    }
+
+    const bill = room.electricityBills.find(b => b._id.toString() === billId);
+    if (!bill) {
+      return res.status(404).json({
+        success: false,
+        message: 'Electricity bill not found'
+      });
+    }
+
+    // Find student's share in the bill
+    let studentBill = null;
+    let studentAmount = 0;
+    
+    if (bill.studentBills && bill.studentBills.length > 0) {
+      // New format - has studentBills array
+      studentBill = bill.studentBills.find(sb => sb.studentId.toString() === studentId);
+      if (!studentBill) {
+        return res.status(404).json({
+          success: false,
+          message: 'Student bill not found'
+        });
+      }
+      
+      // Check if already paid
+      if (studentBill.paymentStatus === 'paid') {
+        return res.status(400).json({
+          success: false,
+          message: 'This bill has already been paid'
+        });
+      }
+      studentAmount = studentBill.amount;
+    } else {
+      // Old format - no studentBills array
+      if (bill.paymentStatus === 'paid') {
+        return res.status(400).json({
+          success: false,
+          message: 'This bill has already been paid'
+        });
+      }
+      
+      // Get current student count in room
+      const studentsInRoom = await User.countDocuments({
+        roomNumber: room.roomNumber,
+        gender: room.gender,
+        category: room.category,
+        role: 'student',
+        hostelStatus: 'Active'
+      });
+      
+      if (studentsInRoom === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No students found in room'
+        });
+      }
+      
+      studentAmount = Math.round(bill.total / studentsInRoom);
+    }
+
+    // Create payment record
+    const payment = new Payment({
+      studentId: studentId,
+      amount: amount,
+      paymentMethod: paymentMethod,
+      notes: notes || '',
+      collectedBy: adminId,
+      collectedByName: adminName,
+      paymentType: 'electricity',
+      billId: billId,
+      roomId: roomId,
+      billMonth: bill.month,
+      utrNumber: utrNumber,
+      billDetails: {
+        startUnits: bill.startUnits,
+        endUnits: bill.endUnits,
+        consumption: bill.consumption,
+        rate: bill.rate,
+        total: bill.total
+      },
+      status: 'success'
+    });
+
+    await payment.save();
+
+    // Update bill status
+    if (studentBill) {
+      // New format - update student bill
+      studentBill.paymentStatus = 'paid';
+      studentBill.paymentId = payment._id;
+      studentBill.paidAt = new Date();
+
+      // Check if all students in room have paid
+      const allPaid = bill.studentBills.every(sb => sb.paymentStatus === 'paid');
+      if (allPaid) {
+        bill.paymentStatus = 'paid';
+        bill.paymentId = payment._id;
+        bill.paidAt = new Date();
+      }
+    } else {
+      // Old format - mark entire room bill as paid
+      bill.paymentStatus = 'paid';
+      bill.paymentId = payment._id;
+      bill.paidAt = new Date();
+    }
+
+    await room.save();
+
+    console.log('✅ Electricity payment recorded successfully:', {
+      paymentId: payment._id,
+      amount,
+      billMonth: bill.month,
+      studentName: student.name,
+      studentRollNumber: student.rollNumber
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Electricity bill payment recorded successfully',
+      data: {
+        paymentId: payment._id,
+        amount,
+        billMonth: bill.month,
+        studentName: student.name,
+        studentRollNumber: student.rollNumber,
+        paymentType: 'electricity'
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error recording electricity payment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to record electricity payment',
+      error: error.message
+    });
+  }
+};
+
+export const recordHostelFeePayment = async (req, res) => {
+  try {
+    const {
+      studentId,
+      amount,
+      paymentMethod,
+      notes,
+      academicYear,
+      utrNumber
+    } = req.body;
+    
+    const adminId = req.user._id;
+    const adminName = req.user.username || req.user.name;
+
+    console.log('💰 Recording hostel fee payment:', {
+      studentId,
+      amount,
+      paymentMethod,
+      academicYear,
+      adminId
+    });
+
+    // Validate required fields
+    if (!studentId || !amount || !paymentMethod || !academicYear) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID, amount, payment method, and academic year are required'
+      });
+    }
+
+    // Validate UTR for online payments
+    if (paymentMethod === 'Online' && !utrNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'UTR number is required for online payments'
+      });
+    }
+
+    // Validate amount
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0'
+      });
+    }
+
 
     // Validate decimal precision
     if (amount % 1 !== 0 && amount.toString().split('.')[1]?.length > 2) {
@@ -717,8 +1021,8 @@ export const recordHostelFeePayment = async (req, res) => {
     // Check for duplicate payments (within last 5 minutes)
     const recentPayment = await Payment.findOne({
       studentId: studentId,
-      term: term,
       academicYear: academicYear,
+      paymentType: 'hostel_fee',
       status: 'success',
       createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
     });
@@ -726,7 +1030,7 @@ export const recordHostelFeePayment = async (req, res) => {
     if (recentPayment) {
       return res.status(400).json({
         success: false,
-        message: 'Duplicate payment detected. Please wait before making another payment for the same term.'
+        message: 'Duplicate payment detected. Please wait before making another payment.'
       });
     }
 
@@ -739,72 +1043,140 @@ export const recordHostelFeePayment = async (req, res) => {
       });
     }
 
-    // Validate payment amount against term balance
+    // Get all existing payments for this student and academic year
     const existingPayments = await Payment.find({
       studentId: studentId,
-      term: term,
       academicYear: academicYear,
+      paymentType: 'hostel_fee',
       status: 'success'
     });
 
-    const totalPaid = existingPayments.reduce((sum, p) => sum + p.amount, 0);
-    const termFee = feeStructure[`${term}Fee`];
-    const remainingBalance = termFee - totalPaid;
+    // Calculate current balances for each term
+    const termBalances = {
+      term1: feeStructure.term1Fee - existingPayments.filter(p => p.term === 'term1').reduce((sum, p) => sum + p.amount, 0),
+      term2: feeStructure.term2Fee - existingPayments.filter(p => p.term === 'term2').reduce((sum, p) => sum + p.amount, 0),
+      term3: feeStructure.term3Fee - existingPayments.filter(p => p.term === 'term3').reduce((sum, p) => sum + p.amount, 0)
+    };
 
-    if (amount > remainingBalance) {
+    // Calculate total remaining balance
+    const totalRemainingBalance = Object.values(termBalances).reduce((sum, balance) => sum + Math.max(0, balance), 0);
+
+    if (totalRemainingBalance <= 0) {
       return res.status(400).json({
         success: false,
-        message: `Payment amount (₹${amount}) exceeds remaining balance (₹${remainingBalance})`
+        message: 'All terms are already fully paid'
       });
     }
 
-    if (remainingBalance <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: `Term ${term.replace('term', 'Term ')} is already fully paid`
+    // Auto-deduction logic: Apply payment to terms in order (term1, term2, term3)
+    let remainingAmount = amount;
+    const paymentRecords = [];
+    
+    // Process term1 first
+    if (remainingAmount > 0 && termBalances.term1 > 0) {
+      const term1Payment = Math.min(remainingAmount, termBalances.term1);
+      const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+      const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+      
+      const term1PaymentRecord = new Payment({
+        studentId: studentId,
+        amount: term1Payment,
+        paymentMethod: paymentMethod,
+        notes: notes || '',
+        collectedBy: adminId,
+        collectedByName: adminName,
+        paymentType: 'hostel_fee',
+        term: 'term1',
+        academicYear: academicYear,
+        receiptNumber: receiptNumber,
+        transactionId: transactionId,
+        utrNumber: utrNumber,
+        status: 'success',
+        paymentDate: new Date()
       });
+      
+      await term1PaymentRecord.save();
+      paymentRecords.push(term1PaymentRecord);
+      remainingAmount -= term1Payment;
     }
-
-    // Generate unique receipt and transaction IDs
-    const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
-    const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
-
-    // Create payment record
-    const payment = new Payment({
-      studentId: studentId,
-      amount: amount,
-      paymentMethod: paymentMethod,
-      notes: notes || '',
-      collectedBy: adminId,
-      collectedByName: adminName,
-      paymentType: 'hostel_fee',
-      term: term,
-      academicYear: academicYear,
-      receiptNumber: receiptNumber,
-      transactionId: transactionId,
-      status: 'success', // Hostel fees are collected immediately
-      paymentDate: new Date()
-    });
-
-    await payment.save();
+    
+    // Process term2 if there's remaining amount
+    if (remainingAmount > 0 && termBalances.term2 > 0) {
+      const term2Payment = Math.min(remainingAmount, termBalances.term2);
+      const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+      const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+      
+      const term2PaymentRecord = new Payment({
+        studentId: studentId,
+        amount: term2Payment,
+        paymentMethod: paymentMethod,
+        notes: notes || '',
+        collectedBy: adminId,
+        collectedByName: adminName,
+        paymentType: 'hostel_fee',
+        term: 'term2',
+        academicYear: academicYear,
+        receiptNumber: receiptNumber,
+        transactionId: transactionId,
+        utrNumber: utrNumber,
+        status: 'success',
+        paymentDate: new Date()
+      });
+      
+      await term2PaymentRecord.save();
+      paymentRecords.push(term2PaymentRecord);
+      remainingAmount -= term2Payment;
+    }
+    
+    // Process term3 if there's remaining amount
+    if (remainingAmount > 0 && termBalances.term3 > 0) {
+      const term3Payment = Math.min(remainingAmount, termBalances.term3);
+      const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+      const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+      
+      const term3PaymentRecord = new Payment({
+        studentId: studentId,
+        amount: term3Payment,
+        paymentMethod: paymentMethod,
+        notes: notes || '',
+        collectedBy: adminId,
+        collectedByName: adminName,
+        paymentType: 'hostel_fee',
+        term: 'term3',
+        academicYear: academicYear,
+        receiptNumber: receiptNumber,
+        transactionId: transactionId,
+        utrNumber: utrNumber,
+        status: 'success',
+        paymentDate: new Date()
+      });
+      
+      await term3PaymentRecord.save();
+      paymentRecords.push(term3PaymentRecord);
+      remainingAmount -= term3Payment;
+    }
+    
+    // If there's still remaining amount, it means overpayment
+    if (remainingAmount > 0) {
+      console.log(`⚠️ Overpayment detected: ₹${remainingAmount} will be applied as excess payment`);
+    }
 
     console.log('✅ Hostel fee payment recorded successfully:', {
-      paymentId: payment._id,
-      receiptNumber,
-      transactionId
+      paymentRecords: paymentRecords.length,
+      totalAmount: amount,
+      remainingAmount
     });
 
     res.status(201).json({
       success: true,
       message: 'Hostel fee payment recorded successfully',
       data: {
-        paymentId: payment._id,
-        receiptNumber,
-        transactionId,
-        amount,
-        term,
+        paymentRecords: paymentRecords,
+        totalAmount: amount,
+        remainingAmount: remainingAmount,
         studentName: student.name,
-        studentRollNumber: student.rollNumber
+        studentRollNumber: student.rollNumber,
+        paymentType: 'hostel_fee'
       }
     });
 

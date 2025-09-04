@@ -1,5 +1,6 @@
 import Room from '../models/Room.js';
 import User from '../models/User.js';
+import Payment from '../models/Payment.js';
 import { createError } from '../utils/error.js';
 
 // Get all rooms with optional filtering
@@ -507,23 +508,48 @@ export const getStudentRoomBills = async (req, res, next) => {
       hostelStatus: 'Active'
     });
 
-    // For each bill, find the student's share
-    const studentBills = sortedBills.map(bill => {
+    // For each bill, find the student's share and check payment status
+    const studentBills = await Promise.all(sortedBills.map(async (bill) => {
       const studentBill = bill.studentBills?.find(sb => sb.studentId.toString() === _id.toString());
       
       // If no studentBills array exists (old bills), calculate equal share
       let studentShare = null;
+      let paymentStatus = 'unpaid';
+      let paymentId = null;
+      let paidAt = null;
+      
       if (studentBill) {
+        // New format - has studentBills array
         studentShare = studentBill.amount;
+        paymentStatus = studentBill.paymentStatus;
+        paymentId = studentBill.paymentId;
+        paidAt = studentBill.paidAt;
       } else if (bill.studentBills && bill.studentBills.length > 0) {
         // Bill has studentBills but this student is not in it
         studentShare = null;
+        paymentStatus = 'unpaid';
       } else {
-        // Old bill without studentBills - calculate equal share
+        // Old bill without studentBills - calculate equal share and check payment status
         studentShare = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : null;
+        
+        // Check if student has paid for this bill by looking at Payment records
+        const payment = await Payment.findOne({
+          studentId: _id,
+          paymentType: 'electricity',
+          billId: bill._id,
+          roomId: room._id,
+          status: 'success'
+        });
+        
+        if (payment) {
+          paymentStatus = 'paid';
+          paymentId = payment._id;
+          paidAt = payment.paymentDate;
+        }
       }
       
       return {
+        _id: bill._id,
         month: bill.month,
         startUnits: bill.startUnits,
         endUnits: bill.endUnits,
@@ -531,11 +557,11 @@ export const getStudentRoomBills = async (req, res, next) => {
         rate: bill.rate,
         total: bill.total,
         studentShare: studentShare,
-        paymentStatus: studentBill ? studentBill.paymentStatus : 'unpaid',
-        paymentId: studentBill ? studentBill.paymentId : null,
-        paidAt: studentBill ? studentBill.paidAt : null
+        paymentStatus: paymentStatus,
+        paymentId: paymentId,
+        paidAt: paidAt
       };
-    });
+    }));
 
     res.json({ 
       success: true, 
