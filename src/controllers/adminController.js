@@ -83,6 +83,10 @@ export const addStudent = async (req, res, next) => {
       lockerNumber,
       studentPhone,
       parentPhone,
+      motherName,
+      motherPhone,
+      localGuardianName,
+      localGuardianPhone,
       batch,
       academicYear,
       email,
@@ -167,29 +171,31 @@ export const addStudent = async (req, res, next) => {
       if (feeStructure) {
         console.log('📊 Fee structure found:', feeStructure);
         
-        // Calculate fees with concession (fixed amount deduction)
+        // Calculate fees with concession (applied to Term 1 only, excess to Term 2)
         const concessionAmount = Number(concession) || 0;
         const totalOriginalFee = feeStructure.totalFee;
         
-        // Apply concession to total fee
-        const totalAfterConcession = Math.max(0, totalOriginalFee - concessionAmount);
+        // Apply concession to Term 1 first
+        calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
         
-        // Calculate proportional concession for each term
-        const concessionRatio = totalAfterConcession / totalOriginalFee;
+        // If concession exceeds Term 1 fee, apply excess to Term 2
+        let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
+        calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
         
-        calculatedTerm1Fee = Math.round(feeStructure.term1Fee * concessionRatio);
-        calculatedTerm2Fee = Math.round(feeStructure.term2Fee * concessionRatio);
-        calculatedTerm3Fee = Math.round(feeStructure.term3Fee * concessionRatio);
+        // If concession still exceeds Term 1 + Term 2, apply to Term 3
+        remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
+        calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
+        
         totalCalculatedFee = calculatedTerm1Fee + calculatedTerm2Fee + calculatedTerm3Fee;
         
         console.log('💰 Fee calculation:', {
           original: totalOriginalFee,
           concession: concessionAmount,
-          afterConcession: totalAfterConcession,
           term1: calculatedTerm1Fee,
           term2: calculatedTerm2Fee,
           term3: calculatedTerm3Fee,
-          total: totalCalculatedFee
+          total: totalCalculatedFee,
+          remainingConcession: remainingConcession
         });
       } else {
         console.log('⚠️ No fee structure found for category:', category, 'academic year:', academicYear);
@@ -241,6 +247,10 @@ export const addStudent = async (req, res, next) => {
       lockerNumber,
       studentPhone,
       parentPhone,
+      motherName,
+      motherPhone,
+      localGuardianName,
+      localGuardianPhone,
       batch,
       academicYear,
       email: finalEmail,

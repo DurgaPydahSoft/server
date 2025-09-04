@@ -195,6 +195,38 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid phone number!`
     }
   },
+  motherName: {
+    type: String,
+    required: false, // Make optional
+    trim: true
+  },
+  motherPhone: {
+    type: String,
+    required: false, // Make optional
+    validate: {
+      validator: function(v) {
+        if (!v) return true; // Allow empty/null values since it's optional
+        return /^[0-9]{10}$/.test(v);
+      },
+      message: props => `${props.value} is not a valid phone number!`
+    }
+  },
+  localGuardianName: {
+    type: String,
+    required: false, // Optional field
+    trim: true
+  },
+  localGuardianPhone: {
+    type: String,
+    required: false, // Optional field
+    validate: {
+      validator: function(v) {
+        if (!v) return true; // Allow empty/null values since it's optional
+        return /^[0-9]{10}$/.test(v);
+      },
+      message: props => `${props.value} is not a valid phone number!`
+    }
+  },
   email: {
     type: String,
     required: false, // Make email optional
@@ -253,7 +285,7 @@ const userSchema = new mongoose.Schema({
   // Photo fields for students
   studentPhoto: {
     type: String,
-    required: false
+    required: function() { return this.role === 'student'; }
   },
   guardianPhoto1: {
     type: String,

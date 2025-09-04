@@ -1,6 +1,7 @@
 import Payment from '../models/Payment.js';
 import Room from '../models/Room.js';
 import User from '../models/User.js';
+import FeeStructure from '../models/FeeStructure.js';
 import cashfreeService from '../utils/cashfreeService.js';
 import notificationService from '../utils/notificationService.js';
 import { createError } from '../utils/error.js';
@@ -680,12 +681,87 @@ export const recordHostelFeePayment = async (req, res) => {
       });
     }
 
+    // Validate minimum payment amount
+    if (amount < 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Minimum payment amount is ₹100'
+      });
+    }
+
+    // Validate decimal precision
+    if (amount % 1 !== 0 && amount.toString().split('.')[1]?.length > 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment amount cannot have more than 2 decimal places'
+      });
+    }
+
     // Check if student exists
     const student = await User.findById(studentId);
     if (!student) {
       return res.status(404).json({
         success: false,
         message: 'Student not found'
+      });
+    }
+
+    // Validate student status
+    if (student.hostelStatus !== 'Active') {
+      return res.status(400).json({
+        success: false,
+        message: 'Student is not active in hostel'
+      });
+    }
+
+    // Check for duplicate payments (within last 5 minutes)
+    const recentPayment = await Payment.findOne({
+      studentId: studentId,
+      term: term,
+      academicYear: academicYear,
+      status: 'success',
+      createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+    });
+
+    if (recentPayment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Duplicate payment detected. Please wait before making another payment for the same term.'
+      });
+    }
+
+    // Check if student has fee structure
+    const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.category);
+    if (!feeStructure) {
+      return res.status(400).json({
+        success: false,
+        message: 'No fee structure found for student'
+      });
+    }
+
+    // Validate payment amount against term balance
+    const existingPayments = await Payment.find({
+      studentId: studentId,
+      term: term,
+      academicYear: academicYear,
+      status: 'success'
+    });
+
+    const totalPaid = existingPayments.reduce((sum, p) => sum + p.amount, 0);
+    const termFee = feeStructure[`${term}Fee`];
+    const remainingBalance = termFee - totalPaid;
+
+    if (amount > remainingBalance) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment amount (₹${amount}) exceeds remaining balance (₹${remainingBalance})`
+      });
+    }
+
+    if (remainingBalance <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Term ${term.replace('term', 'Term ')} is already fully paid`
       });
     }
 

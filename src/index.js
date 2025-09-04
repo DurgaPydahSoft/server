@@ -3,11 +3,8 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import dotenv from 'dotenv';
 import path from 'path';
 
-// Load environment variables
-const dotenvResult = dotenv.config();
 
 // Import routes
 import authRoutes from './routes/authRoutes.js';
@@ -31,20 +28,12 @@ import feeStructureRoutes from './routes/feeStructureRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import apiRouter from './routes/index.js';
 import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
-// Import Notification model
 import Notification from './models/Notification.js';
-// Import error handler
 import { errorHandler } from './utils/error.js';
-
-
-
 
 
 // Create Express app
 const app = express();
-
-
-
 const httpServer = createServer(app);
 
 // Socket.io setup
@@ -167,122 +156,6 @@ app.get('/', (req, res) => {
   res.json({ message: 'Welcome to Hostel Management System API' });
 });
 
-// Test route for leave API
-app.get('/test-leave/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log('Testing leave route with ID:', id);
-    res.json({ 
-      message: 'Test route working', 
-      id: id,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Test route for notification system
-app.get('/test-notification', async (req, res) => {
-  try {
-    console.log('🔔 Testing notification system...');
-    
-    // Import the notification service
-    const notificationService = (await import('./utils/notificationService.js')).default;
-    
-    const status = notificationService.getStatus();
-    
-    res.json({ 
-      message: 'Notification system test', 
-      status: status,
-      timestamp: new Date().toISOString(),
-      oneSignalConfigured: !!process.env.ONESIGNAL_APP_ID
-    });
-  } catch (error) {
-    console.error('🔔 Notification test error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-});
-
-// Test OneSignal connection endpoint
-app.get('/test-onesignal', async (req, res) => {
-  try {
-    const { testOneSignalConnection } = await import('./utils/oneSignalService.js');
-    const result = await testOneSignalConnection();
-    
-    res.json({
-      success: true,
-      message: 'OneSignal connection test completed',
-      result
-    });
-  } catch (error) {
-    console.error('Error testing OneSignal connection:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to test OneSignal connection',
-      error: error.message
-    });
-  }
-});
-
-// Test notification endpoint with detailed logging
-app.post('/test-push-notification', async (req, res) => {
-  try {
-    const { userId } = req.body;
-    
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: 'User ID is required'
-      });
-    }
-
-    console.log('🔔 Testing push notification for user:', userId);
-
-    const { sendOneSignalNotification } = await import('./utils/oneSignalService.js');
-    
-    const testNotification = {
-      title: 'Test Push Notification',
-      message: 'This is a test push notification from the server',
-      type: 'system',
-      url: '/',
-      priority: 10,
-      data: {
-        test: true,
-        timestamp: new Date().toISOString()
-      }
-    };
-
-    console.log('🔔 Sending test notification with payload:', testNotification);
-
-    const result = await sendOneSignalNotification(userId, testNotification);
-    
-    if (result) {
-      console.log('🔔 Test push notification sent successfully');
-      res.json({
-        success: true,
-        message: 'Test push notification sent successfully',
-        notification: testNotification
-      });
-    } else {
-      console.log('🔔 Test push notification failed');
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send test push notification'
-      });
-    }
-  } catch (error) {
-    console.error('🔔 Error sending test push notification:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to send test push notification',
-      error: error.message
-    });
-  }
-});
 
 // API routes
 app.use('/api', apiRouter);
@@ -300,12 +173,6 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/polls', pollRoutes);
 app.use('/api/cafeteria/menu', menuRoutes);
-
-// Add a test endpoint to verify the route is working
-app.get('/api/cafeteria/menu/test', (req, res) => {
-  console.log('🧪 Menu test endpoint hit');
-  res.json({ message: 'Menu routes are working', timestamp: new Date().toISOString() });
-});
 app.use('/api/bulk-outing', bulkOutingRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/foundlost', foundLostRoutes);
