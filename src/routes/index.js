@@ -19,6 +19,7 @@ import featureToggleRoutes from './featureToggleRoutes.js';
 import foundLostRoutes from './foundLostRoutes.js';
 import principalRoutes from './principalRoutes.js';
 import paymentRoutes from './paymentRoutes.js';
+import studentPreRegistrationRoutes from './studentPreRegistrationRoutes.js';
 
 const router = express.Router();
 
@@ -43,5 +44,6 @@ router.use('/feature-toggles', featureToggleRoutes);
 router.use('/foundlost', foundLostRoutes);
 router.use('/principal', principalRoutes);
 router.use('/payments', paymentRoutes);
+router.use('/student', studentPreRegistrationRoutes);
 
 export default router; 

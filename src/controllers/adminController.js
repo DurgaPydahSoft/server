@@ -225,6 +225,17 @@ export const addStudent = async (req, res, next) => {
       }
     }
 
+    // Handle photo URLs from preregistration (if no file uploads)
+    if (!studentPhotoUrl && req.body.studentPhotoUrl) {
+      studentPhotoUrl = req.body.studentPhotoUrl;
+    }
+    if (!guardianPhoto1Url && req.body.guardianPhoto1Url) {
+      guardianPhoto1Url = req.body.guardianPhoto1Url;
+    }
+    if (!guardianPhoto2Url && req.body.guardianPhoto2Url) {
+      guardianPhoto2Url = req.body.guardianPhoto2Url;
+    }
+
     // Handle email properly - only set if provided and not empty
     const emailValue = email ? String(email).trim() : '';
     const finalEmail = emailValue === '' ? undefined : emailValue;
