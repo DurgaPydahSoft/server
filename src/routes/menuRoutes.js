@@ -12,7 +12,8 @@ import {
   addMenuItemForDate,
   deleteMenuItemForDate,
   cleanupOldMenuImages,
-  deleteMenuImages
+  deleteMenuImages,
+  getFoodPreparationCount
 } from '../controllers/menuController.js';
 
 const router = express.Router();
@@ -51,6 +52,9 @@ router.post('/cleanup-images', adminAuth, cleanupOldMenuImages);
 
 // Admin: delete multiple menu images from S3
 router.post('/delete-images', adminAuth, deleteMenuImages);
+
+// Admin: get food preparation count based on yesterday's attendance
+router.get('/food-count', adminAuth, getFoodPreparationCount);
 
 
 

@@ -4,6 +4,10 @@ import User from '../models/User.js';
 import notificationService from '../utils/notificationService.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import multer from 'multer';
+// import Student from '../models/Student.js';
+// import StaffGuest from '../models/StaffGuest.js';
+import Attendance from '../models/Attendance.js';
+import StaffAttendance from '../models/StaffAttendance.js';
 
 // Configure multer for memory storage
 const upload = multer({
@@ -625,6 +629,86 @@ export const testS3Access = async (req, res, next) => {
       });
     }
   } catch (error) {
+    next(error);
+  }
+};
+
+// Get food preparation count based on yesterday's night attendance
+export const getFoodPreparationCount = async (req, res, next) => {
+  try {
+    // Get yesterday's date
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayDate = normalizeDate(yesterday);
+
+    // Get students who were present for night session yesterday
+    const studentNightAttendance = await Attendance.find({
+      date: yesterdayDate,
+      night: true
+    }).populate('studentId', '_id name rollNumber');
+
+    // Get staff/guests who were present for night session yesterday
+    const staffNightAttendance = await StaffAttendance.find({
+      date: yesterdayDate,
+      night: true
+    }).populate('staffId', '_id name type');
+
+    // Count unique students (in case of duplicate records)
+    const uniqueStudents = new Set();
+    studentNightAttendance.forEach(att => {
+      if (att.studentId && att.studentId._id) {
+        uniqueStudents.add(att.studentId._id.toString());
+      }
+    });
+
+    // Count unique staff/guests
+    const uniqueStaff = new Set();
+    staffNightAttendance.forEach(att => {
+      if (att.staffId && att.staffId._id) {
+        uniqueStaff.add(att.staffId._id.toString());
+      }
+    });
+
+    const studentCount = uniqueStudents.size;
+    const staffCount = uniqueStaff.size;
+    const totalCount = studentCount + staffCount;
+
+    // Get additional info for breakdown
+    const studentDetails = studentNightAttendance
+      .filter(att => att.studentId && att.studentId._id)
+      .map(att => ({
+        id: att.studentId._id,
+        name: att.studentId.name,
+        rollNumber: att.studentId.rollNumber
+      }));
+
+    const staffDetails = staffNightAttendance
+      .filter(att => att.staffId && att.staffId._id)
+      .map(att => ({
+        id: att.staffId._id,
+        name: att.staffId.name,
+        type: att.staffId.type
+      }));
+
+    res.json({
+      success: true,
+      data: {
+        date: yesterdayDate,
+        counts: {
+          students: studentCount,
+          staff: staffCount,
+          total: totalCount
+        },
+        details: {
+          students: studentDetails,
+          staff: staffDetails
+        },
+        lastUpdated: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Error getting food preparation count:', error);
     next(error);
   }
 }; 
