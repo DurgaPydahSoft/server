@@ -329,12 +329,17 @@ export const approvePreRegistration = async (req, res, next) => {
 
     const savedStudent = await student.save();
 
-    // Update pre-registration status
+    // Update pre-registration status and then delete the record
     preRegistration.status = 'approved';
     preRegistration.processedAt = new Date();
     preRegistration.processedBy = req.user.id;
     preRegistration.mainStudentId = savedStudent._id;
     await preRegistration.save();
+
+    // Delete the pre-registration record since student has been created
+    console.log('🗑️ Deleting approved pre-registration record for student:', savedStudent.rollNumber);
+    await StudentPreRegistration.findByIdAndDelete(preRegistration._id);
+    console.log('✅ Pre-registration record deleted successfully');
 
     // Create TempStudent record for pending password reset
     const TempStudent = (await import('../models/TempStudent.js')).default;

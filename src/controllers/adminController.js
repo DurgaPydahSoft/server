@@ -5,6 +5,7 @@ import Leave from '../models/Leave.js';
 import Room from '../models/Room.js';
 import SecuritySettings from '../models/SecuritySettings.js';
 import FeeReminder from '../models/FeeReminder.js';
+import StudentPreRegistration from '../models/StudentPreRegistration.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
@@ -278,6 +279,23 @@ export const addStudent = async (req, res, next) => {
     });
 
     const savedStudent = await student.save();
+
+    // Check if this student was added from a pre-registration and delete the pre-registration record
+    try {
+      const preRegistration = await StudentPreRegistration.findOne({ 
+        rollNumber: savedStudent.rollNumber,
+        status: 'pending'
+      });
+      
+      if (preRegistration) {
+        console.log('🗑️ Deleting pre-registration record for approved student:', savedStudent.rollNumber);
+        await StudentPreRegistration.findByIdAndDelete(preRegistration._id);
+        console.log('✅ Pre-registration record deleted successfully');
+      }
+    } catch (preregError) {
+      console.error('❌ Error deleting pre-registration record:', preregError);
+      // Don't fail the student creation if pre-registration deletion fails
+    }
 
     // Create TempStudent record for pending password reset
     const tempStudent = new TempStudent({

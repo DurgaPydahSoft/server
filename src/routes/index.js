@@ -20,6 +20,7 @@ import foundLostRoutes from './foundLostRoutes.js';
 import principalRoutes from './principalRoutes.js';
 import paymentRoutes from './paymentRoutes.js';
 import studentPreRegistrationRoutes from './studentPreRegistrationRoutes.js';
+import staffAttendanceRoutes from './staffAttendanceRoutes.js';
 
 const router = express.Router();
 
@@ -45,5 +46,6 @@ router.use('/foundlost', foundLostRoutes);
 router.use('/principal', principalRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/student', studentPreRegistrationRoutes);
+router.use('/staff-attendance', staffAttendanceRoutes);
 
 export default router; 

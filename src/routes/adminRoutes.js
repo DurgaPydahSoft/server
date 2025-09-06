@@ -24,6 +24,15 @@ import {
   getRoomBedLockerAvailability,
   getStudentTempPassword
 } from '../controllers/adminController.js';
+import {
+  addStaffGuest,
+  getStaffGuests,
+  getStaffGuestById,
+  updateStaffGuest,
+  deleteStaffGuest,
+  checkInOutStaffGuest,
+  getStaffGuestStats
+} from '../controllers/staffGuestController.js';
 import { initializeHostelCounters, getCounterStatus } from '../utils/initializeCounters.js';
 import { 
   getAllLeaveRequests,
@@ -220,5 +229,14 @@ router.get('/rooms/:roomId/electricity', getElectricityBills);
 
 // Room bed/locker availability route
 router.get('/rooms/:roomNumber/bed-locker-availability', getRoomBedLockerAvailability);
+
+// Staff/Guests management routes
+router.post('/staff-guests', imageUpload.single('photo'), addStaffGuest);
+router.get('/staff-guests', getStaffGuests);
+router.get('/staff-guests/stats', getStaffGuestStats);
+router.get('/staff-guests/:id', getStaffGuestById);
+router.put('/staff-guests/:id', imageUpload.single('photo'), updateStaffGuest);
+router.delete('/staff-guests/:id', deleteStaffGuest);
+router.post('/staff-guests/:id/checkin-out', checkInOutStaffGuest);
 
 export default router; 
