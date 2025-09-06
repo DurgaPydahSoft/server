@@ -67,6 +67,7 @@ const adminSchema = new mongoose.Schema({
       'fee_management',
       'feature_controls',
       'security_management',
+      'staff_guests_management',
       'warden_student_oversight',
       'warden_complaint_oversight',
       'warden_leave_oversight',
