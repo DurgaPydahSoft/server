@@ -33,6 +33,16 @@ import {
   checkInOutStaffGuest,
   getStaffGuestStats
 } from '../controllers/staffGuestController.js';
+import {
+  getStaffForAttendance,
+  takeStaffAttendance,
+  getStaffAttendanceForDate,
+  getStaffAttendanceForDateRange,
+  getStaffAttendanceStats,
+  updateStaffAttendance,
+  deleteStaffAttendance,
+  getStaffCount
+} from '../controllers/staffAttendanceController.js';
 import { initializeHostelCounters, getCounterStatus } from '../utils/initializeCounters.js';
 import { 
   getAllLeaveRequests,
@@ -238,5 +248,14 @@ router.get('/staff-guests/:id', getStaffGuestById);
 router.put('/staff-guests/:id', imageUpload.single('photo'), updateStaffGuest);
 router.delete('/staff-guests/:id', deleteStaffGuest);
 router.post('/staff-guests/:id/checkin-out', checkInOutStaffGuest);
+
+// Staff Attendance management routes
+router.get('/staff-attendance', getStaffAttendanceForDate);
+router.get('/staff-attendance/stats', getStaffAttendanceStats);
+router.get('/staff-attendance/range', getStaffAttendanceForDateRange);
+router.post('/staff-attendance', takeStaffAttendance);
+router.put('/staff-attendance', updateStaffAttendance);
+router.delete('/staff-attendance/:staffId/:date', deleteStaffAttendance);
+router.get('/staff-attendance/count', getStaffCount);
 
 export default router; 

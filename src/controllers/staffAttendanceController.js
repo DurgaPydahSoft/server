@@ -236,7 +236,7 @@ export const takeStaffAttendance = async (req, res, next) => {
 // Get staff attendance for a specific date
 export const getStaffAttendanceForDate = async (req, res, next) => {
   try {
-    const { date, department, type, gender, staffId, status } = req.query;
+    const { date, department, type, gender, staffId, status, search } = req.query;
     const normalizedDate = normalizeDate(date || new Date());
 
     // Build base query for attendance
@@ -309,10 +309,29 @@ export const getStaffAttendanceForDate = async (req, res, next) => {
       absent
     };
 
+    // Transform data to match frontend expectations
+    const transformedAttendance = attendance.map(att => ({
+      _id: att.staffId._id,
+      name: att.staffId.name,
+      type: att.staffId.type,
+      gender: att.staffId.gender,
+      profession: att.staffId.profession,
+      department: att.staffId.department,
+      phoneNumber: att.staffId.phoneNumber,
+      email: att.staffId.email,
+      photo: att.staffId.photo,
+      attendance: {
+        morning: att.morning,
+        evening: att.evening,
+        night: att.night,
+        notes: att.notes
+      }
+    }));
+
     res.json({
       success: true,
       data: {
-        attendance,
+        attendance: transformedAttendance,
         date: normalizedDate,
         statistics
       }
@@ -471,6 +490,10 @@ export const getStaffAttendanceStats = async (req, res, next) => {
       success: true,
       data: {
         date: normalizedDate,
+        present: fullyPresent,
+        partial: partiallyPresent,
+        absent: absent,
+        total: totalStaff,
         statistics: {
           ...statistics,
           percentages
