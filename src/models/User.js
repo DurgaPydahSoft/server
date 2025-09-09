@@ -351,7 +351,7 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 
 // Method to generate random password using crypto
 userSchema.statics.generateRandomPassword = function() {
-  const length = 10;
+  const length = 6;
   const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   let password = "";
   const randomBytes = crypto.randomBytes(length);
