@@ -2,6 +2,13 @@ import StaffGuest from '../models/StaffGuest.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 
+// Global settings for daily rates (in-memory for now, can be moved to database later)
+let dailyRateSettings = {
+  staffDailyRate: 100, // Default daily rate for staff
+  lastUpdated: new Date(),
+  updatedBy: null
+};
+
 // Add a new staff/guest
 export const addStaffGuest = async (req, res, next) => {
   try {
@@ -12,7 +19,10 @@ export const addStaffGuest = async (req, res, next) => {
       profession,
       phoneNumber,
       email,
-      department
+      department,
+      purpose,
+      checkinDate,
+      checkoutDate
     } = req.body;
 
     // Validate required fields
@@ -45,6 +55,17 @@ export const addStaffGuest = async (req, res, next) => {
       photoUrl = await uploadToS3(req.files.photo[0], 'staff-guest-photos');
     }
 
+    // Calculate charges for staff only
+    let calculatedCharges = 0;
+    if (type === 'staff' && checkinDate) {
+      const tempStaffGuest = new StaffGuest({
+        type,
+        checkinDate: new Date(checkinDate),
+        checkoutDate: checkoutDate ? new Date(checkoutDate) : null
+      });
+      calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
+    }
+
     // Create new staff/guest
     const staffGuest = new StaffGuest({
       name: name.trim(),
@@ -54,6 +75,10 @@ export const addStaffGuest = async (req, res, next) => {
       phoneNumber: phoneNumber.trim(),
       email: email ? email.trim() : undefined,
       department: type === 'staff' ? (department ? department.trim() : undefined) : undefined,
+      purpose: purpose ? purpose.trim() : '',
+      checkinDate: checkinDate ? new Date(checkinDate) : null,
+      checkoutDate: checkoutDate ? new Date(checkoutDate) : null,
+      calculatedCharges,
       photo: photoUrl,
       createdBy: req.admin._id
     });
@@ -168,7 +193,10 @@ export const updateStaffGuest = async (req, res, next) => {
       profession,
       phoneNumber,
       email,
-      department
+      department,
+      purpose,
+      checkinDate,
+      checkoutDate
     } = req.body;
 
     const staffGuest = await StaffGuest.findById(id);
@@ -222,6 +250,16 @@ export const updateStaffGuest = async (req, res, next) => {
     if (department !== undefined) {
       staffGuest.department = (type || staffGuest.type) === 'staff' ? 
         (department ? department.trim() : undefined) : undefined;
+    }
+    if (purpose !== undefined) staffGuest.purpose = purpose ? purpose.trim() : '';
+    if (checkinDate !== undefined) staffGuest.checkinDate = checkinDate ? new Date(checkinDate) : null;
+    if (checkoutDate !== undefined) staffGuest.checkoutDate = checkoutDate ? new Date(checkoutDate) : null;
+    
+    // Recalculate charges for staff
+    if (staffGuest.type === 'staff' && staffGuest.checkinDate) {
+      staffGuest.calculatedCharges = staffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
+    } else if (staffGuest.type === 'guest') {
+      staffGuest.calculatedCharges = 0;
     }
     
     staffGuest.lastModifiedBy = req.admin._id;
@@ -331,6 +369,108 @@ export const getStaffGuestStats = async (req, res, next) => {
         totalActive: totalStaff + totalGuests,
         totalCheckedIn: checkedInStaff + checkedInGuests
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get daily rate settings
+export const getDailyRateSettings = async (req, res, next) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        staffDailyRate: dailyRateSettings.staffDailyRate,
+        lastUpdated: dailyRateSettings.lastUpdated,
+        updatedBy: dailyRateSettings.updatedBy
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update daily rate settings
+export const updateDailyRateSettings = async (req, res, next) => {
+  try {
+    const { staffDailyRate } = req.body;
+
+    if (!staffDailyRate || staffDailyRate < 0) {
+      throw createError(400, 'Valid daily rate is required');
+    }
+
+    dailyRateSettings.staffDailyRate = parseFloat(staffDailyRate);
+    dailyRateSettings.lastUpdated = new Date();
+    dailyRateSettings.updatedBy = req.admin._id;
+
+    // Recalculate charges for all active staff
+    const activeStaff = await StaffGuest.find({ 
+      type: 'staff', 
+      isActive: true,
+      checkinDate: { $exists: true }
+    });
+
+    for (const staff of activeStaff) {
+      staff.calculatedCharges = staff.calculateCharges(dailyRateSettings.staffDailyRate);
+      await staff.save();
+    }
+
+    res.json({
+      success: true,
+      data: {
+        staffDailyRate: dailyRateSettings.staffDailyRate,
+        lastUpdated: dailyRateSettings.lastUpdated,
+        updatedBy: dailyRateSettings.updatedBy
+      },
+      message: 'Daily rate updated successfully. All staff charges have been recalculated.'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Generate admit card for staff/guest
+export const generateAdmitCard = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    const staffGuest = await StaffGuest.findById(id)
+      .populate('createdBy', 'username role')
+      .populate('lastModifiedBy', 'username role');
+
+    if (!staffGuest) {
+      throw createError(404, 'Staff/Guest not found');
+    }
+
+    // Generate admit card data
+    const admitCardData = {
+      id: staffGuest._id,
+      name: staffGuest.name,
+      type: staffGuest.type,
+      gender: staffGuest.gender,
+      profession: staffGuest.profession,
+      phoneNumber: staffGuest.phoneNumber,
+      email: staffGuest.email,
+      department: staffGuest.department,
+      purpose: staffGuest.purpose,
+      checkinDate: staffGuest.checkinDate,
+      checkoutDate: staffGuest.checkoutDate,
+      calculatedCharges: staffGuest.calculatedCharges,
+      photo: staffGuest.photo,
+      checkInTime: staffGuest.checkInTime,
+      checkOutTime: staffGuest.checkOutTime,
+      isCheckedIn: staffGuest.isCheckedIn(),
+      stayDuration: staffGuest.getStayDuration(),
+      dayCount: staffGuest.getDayCount(),
+      generatedAt: new Date(),
+      generatedBy: req.admin.username
+    };
+
+    res.json({
+      success: true,
+      data: admitCardData,
+      message: 'Admit card generated successfully'
     });
   } catch (error) {
     next(error);

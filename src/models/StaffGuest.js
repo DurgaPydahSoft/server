@@ -49,6 +49,23 @@ const staffGuestSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  purpose: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  checkinDate: {
+    type: Date,
+    default: null
+  },
+  checkoutDate: {
+    type: Date,
+    default: null
+  },
+  calculatedCharges: {
+    type: Number,
+    default: 0
+  },
   photo: {
     type: String, // URL to the uploaded photo
     default: null
@@ -106,6 +123,31 @@ staffGuestSchema.methods.getStayDuration = function() {
   const minutes = Math.floor((duration % (1000 * 60 * 60)) / (1000 * 60));
   
   return `${hours}h ${minutes}m`;
+};
+
+// Method to calculate day count between checkin and checkout dates
+staffGuestSchema.methods.getDayCount = function() {
+  if (!this.checkinDate) return 0;
+  
+  const startDate = new Date(this.checkinDate);
+  const endDate = this.checkoutDate ? new Date(this.checkoutDate) : new Date();
+  
+  // Set time to start of day for accurate day calculation
+  startDate.setHours(0, 0, 0, 0);
+  endDate.setHours(0, 0, 0, 0);
+  
+  const timeDiff = endDate.getTime() - startDate.getTime();
+  const dayCount = Math.ceil(timeDiff / (1000 * 3600 * 24));
+  
+  return Math.max(0, dayCount);
+};
+
+// Method to calculate charges (for staff only)
+staffGuestSchema.methods.calculateCharges = function(dailyRate = 0) {
+  if (this.type !== 'staff' || !this.checkinDate) return 0;
+  
+  const dayCount = this.getDayCount();
+  return dayCount * dailyRate;
 };
 
 // Ensure virtual fields are serialized

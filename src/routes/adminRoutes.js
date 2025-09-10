@@ -31,7 +31,10 @@ import {
   updateStaffGuest,
   deleteStaffGuest,
   checkInOutStaffGuest,
-  getStaffGuestStats
+  getStaffGuestStats,
+  getDailyRateSettings,
+  updateDailyRateSettings,
+  generateAdmitCard as generateStaffGuestAdmitCard
 } from '../controllers/staffGuestController.js';
 import {
   getStaffForAttendance,
@@ -257,5 +260,10 @@ router.post('/staff-attendance', takeStaffAttendance);
 router.put('/staff-attendance', updateStaffAttendance);
 router.delete('/staff-attendance/:staffId/:date', deleteStaffAttendance);
 router.get('/staff-attendance/count', getStaffCount);
+
+// Staff/Guest Settings and Admit Card routes
+router.get('/staff-guests/settings/daily-rates', getDailyRateSettings);
+router.put('/staff-guests/settings/daily-rates', updateDailyRateSettings);
+router.get('/staff-guests/:id/admit-card', generateStaffGuestAdmitCard);
 
 export default router; 
