@@ -21,6 +21,7 @@ import principalRoutes from './principalRoutes.js';
 import paymentRoutes from './paymentRoutes.js';
 import studentPreRegistrationRoutes from './studentPreRegistrationRoutes.js';
 import staffAttendanceRoutes from './staffAttendanceRoutes.js';
+import globalSettingsRoutes from './globalSettingsRoutes.js';
 
 const router = express.Router();
 
@@ -47,5 +48,6 @@ router.use('/principal', principalRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/student', studentPreRegistrationRoutes);
 router.use('/staff-attendance', staffAttendanceRoutes);
+router.use('/global-settings', globalSettingsRoutes);
 
 export default router; 
