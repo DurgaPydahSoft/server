@@ -14,6 +14,27 @@ const feeStructureSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid academic year format! Use format YYYY-YYYY with a 1-year difference (e.g., 2022-2023)`
     }
   },
+  course: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+    required: true
+  },
+  year: {
+    type: Number,
+    required: true,
+    min: 1,
+    max: 10,
+    validate: {
+      validator: async function(v) {
+        if (!this.course) return true;
+        const Course = mongoose.model('Course');
+        const course = await Course.findById(this.course);
+        if (!course) return false;
+        return v >= 1 && v <= course.duration;
+      },
+      message: 'Year of study must be within the course duration'
+    }
+  },
   category: {
     type: String,
     required: true,
@@ -70,11 +91,13 @@ const feeStructureSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Compound unique index for academic year and category
-feeStructureSchema.index({ academicYear: 1, category: 1 }, { unique: true });
+// Compound unique index for academic year, course, year, and category
+feeStructureSchema.index({ academicYear: 1, course: 1, year: 1, category: 1 }, { unique: true });
 
 // Index for efficient querying
 feeStructureSchema.index({ academicYear: 1, isActive: 1 });
+feeStructureSchema.index({ course: 1, isActive: 1 });
+feeStructureSchema.index({ year: 1, isActive: 1 });
 feeStructureSchema.index({ category: 1, isActive: 1 });
 
 // Virtual for total fee
@@ -96,13 +119,15 @@ feeStructureSchema.methods.getTermFee = function(termNumber) {
   }
 };
 
-// Static method to get fee structure for academic year and category
-feeStructureSchema.statics.getFeeStructure = async function(academicYear, category) {
+// Static method to get fee structure for academic year, course, year, and category
+feeStructureSchema.statics.getFeeStructure = async function(academicYear, course, year, category) {
   return await this.findOne({ 
     academicYear, 
+    course, 
+    year, 
     category, 
     isActive: true 
-  });
+  }).populate('course', 'name duration');
 };
 
 // Static method to get all fee structures for an academic year
@@ -110,16 +135,25 @@ feeStructureSchema.statics.getFeeStructuresByYear = async function(academicYear)
   return await this.find({ 
     academicYear, 
     isActive: true 
-  }).sort({ category: 1 });
+  }).populate('course', 'name duration').sort({ 'course.name': 1, year: 1, category: 1 });
+};
+
+// Static method to get fee structures for a specific course and academic year
+feeStructureSchema.statics.getFeeStructuresByCourse = async function(academicYear, course) {
+  return await this.find({ 
+    academicYear, 
+    course, 
+    isActive: true 
+  }).populate('course', 'name duration').sort({ year: 1, category: 1 });
 };
 
 // Static method to create or update fee structure
 feeStructureSchema.statics.createOrUpdateFeeStructure = async function(data) {
-  const { academicYear, category, term1Fee, term2Fee, term3Fee, createdBy, updatedBy } = data;
+  const { academicYear, course, year, category, term1Fee, term2Fee, term3Fee, createdBy, updatedBy } = data;
   
   console.log('🔍 Model: createOrUpdateFeeStructure called with data:', data);
   
-  const existing = await this.findOne({ academicYear, category });
+  const existing = await this.findOne({ academicYear, course, year, category });
   
   if (existing) {
     console.log('🔍 Model: Updating existing fee structure');
@@ -137,6 +171,8 @@ feeStructureSchema.statics.createOrUpdateFeeStructure = async function(data) {
     // Create new
     const created = await this.create({
       academicYear,
+      course,
+      year,
       category,
       term1Fee,
       term2Fee,

@@ -9,7 +9,9 @@ import {
   testFeeStructure,
   createSampleFeeStructures,
   fixInactiveFeeStructures,
-  getFeeStructureForAdmitCard
+  getFeeStructureForAdmitCard,
+  getCourses,
+  getCourseYears
 } from '../controllers/feeStructureController.js';
 import { adminAuth, restrictTo } from '../middleware/authMiddleware.js';
 
@@ -22,13 +24,15 @@ router.post('/fix-inactive', adminAuth, restrictTo('super_admin', 'admin'), fixI
 
 // Main CRUD routes
 router.get('/', getFeeStructures);
+router.get('/courses', getCourses);
+router.get('/courses/:courseId/years', getCourseYears);
 router.get('/academic-years', getAcademicYears);
 router.get('/stats', getFeeStructureStats);
-router.get('/admit-card/:academicYear/:category', getFeeStructureForAdmitCard);
-router.get('/:academicYear/:category', getFeeStructure);
+router.get('/admit-card/:academicYear/:course/:year/:category', getFeeStructureForAdmitCard);
+router.get('/:academicYear/:course/:year/:category', getFeeStructure);
 
 // Admin only routes
 router.post('/', adminAuth, restrictTo('super_admin', 'admin'), createOrUpdateFeeStructure);
-router.delete('/:academicYear/:category', adminAuth, restrictTo('super_admin', 'admin'), deleteFeeStructure);
+router.delete('/:academicYear/:course/:year/:category', adminAuth, restrictTo('super_admin', 'admin'), deleteFeeStructure);
 
 export default router; 

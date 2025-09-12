@@ -1035,7 +1035,7 @@ export const recordHostelFeePayment = async (req, res) => {
     }
 
     // Check if student has fee structure
-    const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.category);
+    const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.year, student.category);
     if (!feeStructure) {
       return res.status(400).json({
         success: false,

@@ -270,7 +270,7 @@ export const approvePreRegistration = async (req, res, next) => {
 
     try {
       const FeeStructure = (await import('../models/FeeStructure.js')).default;
-      const feeStructure = await FeeStructure.getFeeStructure(preRegistration.academicYear, category);
+      const feeStructure = await FeeStructure.getFeeStructure(preRegistration.academicYear, preRegistration.course, preRegistration.year, category);
       
       if (feeStructure) {
         const concessionAmount = Number(concession) || 0;

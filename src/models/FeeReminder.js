@@ -197,7 +197,7 @@ feeReminderSchema.statics.createForStudent = async function(studentId, registrat
   }
 
   // Get fee structure for the student's category
-  const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.category);
+  const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.year, student.category);
   
   const feeReminder = new this({
     student: studentId,

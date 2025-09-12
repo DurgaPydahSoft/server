@@ -167,7 +167,7 @@ export const addStudent = async (req, res, next) => {
     try {
       // Fetch fee structure for the category and academic year
       const FeeStructure = (await import('../models/FeeStructure.js')).default;
-      const feeStructure = await FeeStructure.getFeeStructure(academicYear, category);
+      const feeStructure = await FeeStructure.getFeeStructure(academicYear, course, year, category);
       
       if (feeStructure) {
         console.log('📊 Fee structure found:', feeStructure);
@@ -577,7 +577,8 @@ function getEndYear(str) {
 }
 
 // Helper to calculate current year based on batch and current date
-function calculateCurrentYear(batch, courseDuration = 4) {
+// Now integrates with academic calendar if available
+async function calculateCurrentYear(batch, courseDuration = 4, courseId = null) {
   if (!batch) return 1;
   
   // Extract start year from batch (e.g., "2022-2026" -> 2022)
@@ -589,6 +590,59 @@ function calculateCurrentYear(batch, courseDuration = 4) {
   const currentDate = new Date();
   const currentYear = currentDate.getFullYear();
   const currentMonth = currentDate.getMonth() + 1; // January is 0
+  
+  // Try to use academic calendar if courseId is provided
+  if (courseId) {
+    try {
+      const AcademicCalendar = (await import('../models/AcademicCalendar.js')).default;
+      
+      // Find the current academic year based on current date
+      const currentAcademicYear = `${currentYear}-${currentYear + 1}`;
+      
+      // Look for academic calendar entries for this course and academic year
+      const academicCalendar = await AcademicCalendar.findOne({
+        course: courseId,
+        academicYear: currentAcademicYear,
+        isActive: true
+      }).sort({ yearOfStudy: 1, semester: 1 });
+      
+      if (academicCalendar) {
+        console.log(`📅 Found academic calendar for course ${courseId}, academic year ${currentAcademicYear}`);
+        
+        // Find the current semester based on current date
+        const currentSemester = await AcademicCalendar.findOne({
+          course: courseId,
+          academicYear: currentAcademicYear,
+          startDate: { $lte: currentDate },
+          endDate: { $gte: currentDate },
+          isActive: true
+        });
+        
+        if (currentSemester) {
+          console.log(`📅 Current semester found: Year ${currentSemester.yearOfStudy}, Semester ${currentSemester.semester}`);
+          return currentSemester.yearOfStudy;
+        } else {
+          // If no current semester found, find the most recent past semester
+          const pastSemester = await AcademicCalendar.findOne({
+            course: courseId,
+            academicYear: currentAcademicYear,
+            endDate: { $lt: currentDate },
+            isActive: true
+          }).sort({ yearOfStudy: -1, semester: -1 });
+          
+          if (pastSemester) {
+            console.log(`📅 Using most recent past semester: Year ${pastSemester.yearOfStudy}, Semester ${pastSemester.semester}`);
+            return pastSemester.yearOfStudy;
+          }
+        }
+      }
+    } catch (error) {
+      console.log(`⚠️ Error accessing academic calendar, falling back to old logic:`, error.message);
+    }
+  }
+  
+  // Fallback to old logic if no academic calendar data
+  console.log(`📅 No academic calendar data found, using old logic for batch ${batch}`);
   
   // Calculate years since batch started
   let yearsSinceStart = currentYear - startYear;
@@ -603,7 +657,7 @@ function calculateCurrentYear(batch, courseDuration = 4) {
   const currentYearOfStudy = Math.min(yearsSinceStart + 1, courseDuration);
   const finalYear = Math.max(1, currentYearOfStudy);
   
-  console.log(`Year calculation for batch ${batch}:`, {
+  console.log(`Year calculation for batch ${batch} (old logic):`, {
     startYear,
     currentYear,
     currentMonth,
@@ -789,7 +843,7 @@ export const previewBulkUpload = async (req, res, next) => {
           
           if (courseDoc) {
             const courseDuration = courseDoc.duration || 4;
-            const calculatedYear = calculateCurrentYear(Batch, courseDuration);
+            const calculatedYear = await calculateCurrentYear(Batch, courseDuration, courseDoc._id);
             row.Year = calculatedYear;
             console.log(`Preview: Calculated year for batch ${Batch}: ${calculatedYear} (course: ${normalizedCourseName}, duration: ${courseDuration})`);
           }
@@ -1011,24 +1065,24 @@ export const bulkAddStudents = async (req, res, next) => {
         continue;
       }
 
-      // Calculate year based on batch and current date, or use provided year if available
-      let yearValue;
-      if (Year) {
-        yearValue = parseInt(Year, 10);
-        if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
-          results.failureCount++;
-          results.errors.push({ 
-            error: `Invalid year "${Year}". Must be a number between 1 and 10.`, 
-            details: studentData 
-          });
-          continue;
+        // Calculate year based on batch and current date, or use provided year if available
+        let yearValue;
+        if (Year) {
+          yearValue = parseInt(Year, 10);
+          if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
+            results.failureCount++;
+            results.errors.push({ 
+              error: `Invalid year "${Year}". Must be a number between 1 and 10.`, 
+              details: studentData 
+            });
+            continue;
+          }
+        } else {
+          // Calculate year based on batch and current date
+          const courseDuration = courseDoc.duration || 4;
+          yearValue = await calculateCurrentYear(finalBatch, courseDuration, courseDoc._id);
+          console.log(`Calculated year for batch ${finalBatch}: ${yearValue} (course duration: ${courseDuration})`);
         }
-      } else {
-        // Calculate year based on batch and current date
-        const courseDuration = courseDoc.duration || 4;
-        yearValue = calculateCurrentYear(finalBatch, courseDuration);
-        console.log(`Calculated year for batch ${finalBatch}: ${yearValue} (course duration: ${courseDuration})`);
-      }
 
       // Handle batch - if only starting year is provided, calculate end year based on course duration
       let finalBatch = String(Batch).trim();
@@ -2141,7 +2195,89 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
   }
 }; 
 
-// Update existing students' years based on their batch
+// Update student years based on academic calendar (if available) or batch
+export const updateStudentYearsFromAcademicCalendar = async (req, res, next) => {
+  try {
+    console.log('📅 Starting student year update based on academic calendar...');
+    
+    // Get all active students
+    const students = await User.find({ 
+      role: 'student',
+      hostelStatus: 'Active'
+    }).populate('course', 'name duration');
+    
+    console.log(`📊 Processing ${students.length} active students...`);
+    
+    let updatedCount = 0;
+    let errors = [];
+    let skippedCount = 0;
+    let academicCalendarUsed = 0;
+    let fallbackUsed = 0;
+
+    for (const student of students) {
+      try {
+        console.log(`🔍 Processing student: ${student.rollNumber}, current year: ${student.year}, batch: ${student.batch}`);
+        
+        if (student.batch && student.course) {
+          // Get course duration
+          const courseDuration = student.course.duration || 4;
+          
+          // Calculate correct year using academic calendar integration
+          const correctYear = await calculateCurrentYear(student.batch, courseDuration, student.course._id);
+          
+          console.log(`🧮 Calculated year for ${student.rollNumber}: ${correctYear} (current: ${student.year})`);
+          
+          // Update if year is different
+          if (student.year !== correctYear) {
+            const updateResult = await User.findByIdAndUpdate(
+              student._id, 
+              { year: correctYear },
+              { new: true }
+            );
+            
+            if (updateResult) {
+              updatedCount++;
+              console.log(`✅ Updated student ${student.rollNumber}: year ${student.year} → ${correctYear} (batch: ${student.batch})`);
+            } else {
+              console.log(`❌ Failed to update student ${student.rollNumber}`);
+              errors.push(`Failed to update student ${student.rollNumber}: Database update failed`);
+            }
+          } else {
+            console.log(`⏭️ Skipped student ${student.rollNumber}: year already correct (${student.year})`);
+            skippedCount++;
+          }
+        } else {
+          console.log(`⚠️ Skipped student ${student.rollNumber}: no batch or course information`);
+          skippedCount++;
+        }
+      } catch (error) {
+        console.error(`❌ Error updating student ${student.rollNumber}:`, error);
+        errors.push(`Error updating student ${student.rollNumber}: ${error.message}`);
+      }
+    }
+
+    console.log(`📊 Academic calendar update process completed:`);
+    console.log(`✅ Updated: ${updatedCount} students`);
+    console.log(`⏭️ Skipped: ${skippedCount} students`);
+    console.log(`❌ Errors: ${errors.length} errors`);
+
+    res.json({ 
+      success: true, 
+      message: `Updated ${updatedCount} students' years based on academic calendar and batch information.`,
+      data: { 
+        updatedCount, 
+        skippedCount,
+        totalStudents: students.length,
+        errors 
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error in updateStudentYearsFromAcademicCalendar:', error);
+    next(error);
+  }
+};
+
+// Update existing students' years based on their batch (legacy method)
 export const updateStudentYears = async (req, res, next) => {
   try {
     console.log('🔄 Starting student year update process...');
@@ -2182,7 +2318,7 @@ export const updateStudentYears = async (req, res, next) => {
           console.log(`📚 Course duration for ${student.rollNumber}: ${courseDuration}`);
           
           // Calculate correct year
-          const correctYear = calculateCurrentYear(student.batch, courseDuration);
+          const correctYear = await calculateCurrentYear(student.batch, courseDuration, student.course);
           
           console.log(`🧮 Calculated year for ${student.rollNumber}: ${correctYear} (current: ${student.year})`);
           

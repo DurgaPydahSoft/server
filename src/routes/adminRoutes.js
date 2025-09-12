@@ -18,6 +18,7 @@ import {
   searchStudentByRollNumber,
   resetStudentPassword,
   updateStudentYears,
+  updateStudentYearsFromAcademicCalendar,
   getStudentsForAdmitCards,
   generateAdmitCard,
   generateBulkAdmitCards,
@@ -182,6 +183,7 @@ router.post('/students/renew-batch', renewBatches);
 
 // New route for updating student years based on batch
 router.post('/students/update-years', updateStudentYears);
+router.post('/students/update-years-academic-calendar', updateStudentYearsFromAcademicCalendar);
 
 // Routes for /students (exact path)
 router.post('/students', imageUpload.fields([

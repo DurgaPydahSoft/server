@@ -1,4 +1,5 @@
 import FeeStructure from '../models/FeeStructure.js';
+import Course from '../models/Course.js';
 import { createError } from '../utils/error.js';
 
 // Test endpoint to verify fee structure routes are working
@@ -126,8 +127,7 @@ export const getFeeStructures = async (req, res) => {
     console.log('🔍 Backend: getFeeStructures called');
     console.log('🔍 Backend: Query params:', req.query);
     
-    
-    const { academicYear } = req.query;
+    const { academicYear, course, year } = req.query;
     
     if (!academicYear) {
       console.log('🔍 Backend: No academic year provided');
@@ -139,24 +139,16 @@ export const getFeeStructures = async (req, res) => {
 
     console.log('🔍 Backend: Searching for academic year:', academicYear);
     
-    // First, let's check what exists in the database without the isActive filter
-    const allStructures = await FeeStructure.find({ academicYear });
-    console.log('🔍 Backend: All structures for academic year (without isActive filter):', allStructures.length);
-    console.log('🔍 Backend: All structures details:', allStructures.map(s => ({ 
-      id: s._id, 
-      category: s.category, 
-      isActive: s.isActive,
-      term1Fee: s.term1Fee,
-      term2Fee: s.term2Fee,
-      term3Fee: s.term3Fee
-    })));
+    // Build query based on provided filters
+    const query = { academicYear, isActive: true };
+    if (course) query.course = course;
+    if (year) query.year = parseInt(year);
     
-    const feeStructures = await FeeStructure.find({ 
-      academicYear, 
-      isActive: true 
-    }).sort({ category: 1 });
+    const feeStructures = await FeeStructure.find(query)
+      .populate('course', 'name duration')
+      .sort({ 'course.name': 1, year: 1, category: 1 });
 
-    console.log('🔍 Backend: Found fee structures (with isActive filter):', feeStructures.length);
+    console.log('🔍 Backend: Found fee structures:', feeStructures.length);
     console.log('🔍 Backend: Fee structures:', feeStructures);
 
     res.json({
@@ -172,16 +164,18 @@ export const getFeeStructures = async (req, res) => {
   }
 };
 
-// Get fee structure for specific academic year and category
+// Get fee structure for specific academic year, course, year, and category
 export const getFeeStructure = async (req, res) => {
   try {
-    const { academicYear, category } = req.params;
+    const { academicYear, course, year, category } = req.params;
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
+      course, 
+      year: parseInt(year), 
       category, 
       isActive: true 
-    });
+    }).populate('course', 'name duration');
 
     if (!feeStructure) {
       return res.status(404).json({
@@ -208,14 +202,30 @@ export const createOrUpdateFeeStructure = async (req, res) => {
   try {
     console.log('🔍 Backend: createOrUpdateFeeStructure called with body:', req.body);
     
-    const { academicYear, category, totalFee, term1Fee, term2Fee, term3Fee } = req.body;
+    const { academicYear, course, year, category, totalFee, term1Fee, term2Fee, term3Fee } = req.body;
     const adminId = req.admin?._id || req.user?._id;
 
     // Validate required fields
-    if (!academicYear || !category) {
+    if (!academicYear || !course || !year || !category) {
       return res.status(400).json({
         success: false,
-        message: 'Academic year and category are required'
+        message: 'Academic year, course, year, and category are required'
+      });
+    }
+
+    // Validate course exists and year is within course duration
+    const courseDoc = await Course.findById(course);
+    if (!courseDoc) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid course selected'
+      });
+    }
+
+    if (year < 1 || year > courseDoc.duration) {
+      return res.status(400).json({
+        success: false,
+        message: `Year must be between 1 and ${courseDoc.duration} for this course`
       });
     }
 
@@ -264,6 +274,8 @@ export const createOrUpdateFeeStructure = async (req, res) => {
 
     const feeStructure = await FeeStructure.createOrUpdateFeeStructure({
       academicYear,
+      course,
+      year: parseInt(year),
       category,
       term1Fee: calculatedTerm1Fee,
       term2Fee: calculatedTerm2Fee,
@@ -285,7 +297,7 @@ export const createOrUpdateFeeStructure = async (req, res) => {
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: 'Fee structure for this academic year and category already exists'
+        message: 'Fee structure for this academic year, course, year, and category already exists'
       });
     }
     
@@ -299,10 +311,12 @@ export const createOrUpdateFeeStructure = async (req, res) => {
 // Delete fee structure
 export const deleteFeeStructure = async (req, res) => {
   try {
-    const { academicYear, category } = req.params;
+    const { academicYear, course, year, category } = req.params;
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
+      course, 
+      year: parseInt(year), 
       category, 
       isActive: true 
     });
@@ -445,28 +459,85 @@ export const fixInactiveFeeStructures = async (req, res) => {
   }
 };
 
-// Get fee structure for admit card generation
+// Get all available courses
+export const getCourses = async (req, res) => {
+  try {
+    const courses = await Course.find({ isActive: true })
+      .select('name code duration durationUnit')
+      .sort({ name: 1 });
+
+    res.json({
+      success: true,
+      data: courses
+    });
+  } catch (error) {
+    console.error('Error fetching courses:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get years for a specific course
+export const getCourseYears = async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    
+    const course = await Course.findById(courseId);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found'
+      });
+    }
+
+    const years = Array.from({ length: course.duration }, (_, i) => i + 1);
+
+    res.json({
+      success: true,
+      data: {
+        course: {
+          _id: course._id,
+          name: course.name,
+          duration: course.duration
+        },
+        years
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching course years:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get fee structure for admit card generation (updated for new schema)
 export const getFeeStructureForAdmitCard = async (req, res) => {
   try {
     console.log('🔍 Backend: getFeeStructureForAdmitCard called');
     console.log('🔍 Backend: Params:', req.params);
     
-    const { academicYear, category } = req.params;
+    const { academicYear, course, year, category } = req.params;
     
-    if (!academicYear || !category) {
+    if (!academicYear || !course || !year || !category) {
       return res.status(400).json({
         success: false,
-        message: 'Academic year and category are required'
+        message: 'Academic year, course, year, and category are required'
       });
     }
 
-    console.log('🔍 Backend: Searching for fee structure:', { academicYear, category });
+    console.log('🔍 Backend: Searching for fee structure:', { academicYear, course, year, category });
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
+      course, 
+      year: parseInt(year), 
       category, 
       isActive: true 
-    });
+    }).populate('course', 'name duration');
 
     console.log('🔍 Backend: Found fee structure:', feeStructure);
 
@@ -475,6 +546,8 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
         success: true,
         data: {
           academicYear,
+          course,
+          year: parseInt(year),
           category,
           term1Fee: 0,
           term2Fee: 0,
@@ -489,6 +562,8 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
       success: true,
       data: {
         academicYear: feeStructure.academicYear,
+        course: feeStructure.course,
+        year: feeStructure.year,
         category: feeStructure.category,
         term1Fee: feeStructure.term1Fee,
         term2Fee: feeStructure.term2Fee,
