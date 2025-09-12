@@ -51,8 +51,8 @@ export const addStaffGuest = async (req, res, next) => {
 
     // Handle photo upload
     let photoUrl = null;
-    if (req.files && req.files.photo && req.files.photo[0]) {
-      photoUrl = await uploadToS3(req.files.photo[0], 'staff-guest-photos');
+    if (req.file) {
+      photoUrl = await uploadToS3(req.file, 'staff-guest-photos');
     }
 
     // Calculate charges for staff only
@@ -227,7 +227,7 @@ export const updateStaffGuest = async (req, res, next) => {
     }
 
     // Handle photo upload
-    if (req.files && req.files.photo && req.files.photo[0]) {
+    if (req.file) {
       // Delete old photo if exists
       if (staffGuest.photo) {
         try {
@@ -237,7 +237,7 @@ export const updateStaffGuest = async (req, res, next) => {
         }
       }
       // Upload new photo
-      staffGuest.photo = await uploadToS3(req.files.photo[0], 'staff-guest-photos');
+      staffGuest.photo = await uploadToS3(req.file, 'staff-guest-photos');
     }
 
     // Update fields
