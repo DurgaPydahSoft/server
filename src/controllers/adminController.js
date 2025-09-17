@@ -2711,3 +2711,98 @@ export const getStudentTempPassword = async (req, res) => {
     });
   }
 };
+
+// Share student credentials via SMS
+export const shareStudentCredentials = async (req, res) => {
+  try {
+    const { studentId, studentPhone, customMessage } = req.body;
+
+    if (!studentId || !studentPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID and phone number are required'
+      });
+    }
+
+    // Find the student
+    const student = await User.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Verify the phone number matches the student's phone
+    if (student.studentPhone !== studentPhone) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number does not match student record'
+      });
+    }
+
+    // Get the student's credentials
+    const username = student.rollNumber || student.hostelId;
+
+    if (!username) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student username not found'
+      });
+    }
+
+    // Get the original password from TempStudent collection (stored in plain text)
+    const TempStudent = (await import('../models/TempStudent.js')).default;
+    const tempStudent = await TempStudent.findOne({ mainStudentId: studentId });
+    
+    let password = 'changeme'; // Default fallback
+    if (tempStudent && tempStudent.generatedPassword) {
+      password = tempStudent.generatedPassword;
+      console.log('📱 Using original password from TempStudent:', password);
+    } else {
+      console.log('📱 No TempStudent record found for student:', student.name, 'using default password');
+      // For students without TempStudent records, we can't retrieve the original password
+      // The default 'changeme' will be sent, and they'll need to reset their password
+    }
+
+    console.log('📱 Sharing credentials for student:', {
+      name: student.name,
+      rollNumber: student.rollNumber,
+      hostelId: student.hostelId,
+      studentPhone: student.studentPhone,
+      username: username,
+      password: password
+    });
+
+    // Send SMS using the existing template
+    const smsResult = await sendAdminCredentialsSMS(
+      studentPhone,
+      username,
+      password
+    );
+
+    console.log('📱 Credentials shared successfully:', smsResult);
+
+    res.json({
+      success: true,
+      message: 'Credentials sent successfully via SMS',
+      data: {
+        smsResult,
+        student: {
+          name: student.name,
+          rollNumber: student.rollNumber,
+          hostelId: student.hostelId,
+          studentPhone: student.studentPhone
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error sharing student credentials:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to share credentials',
+      error: error.message
+    });
+  }
+};

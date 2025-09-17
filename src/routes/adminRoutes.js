@@ -23,7 +23,8 @@ import {
   generateAdmitCard,
   generateBulkAdmitCards,
   getRoomBedLockerAvailability,
-  getStudentTempPassword
+  getStudentTempPassword,
+  shareStudentCredentials
 } from '../controllers/adminController.js';
 import {
   addStaffGuest,
@@ -215,6 +216,9 @@ router.delete('/students/:id', deleteStudent);
 
 // Admin password reset for students
 router.post('/students/:id/reset-password', resetStudentPassword);
+
+// Share student credentials via SMS
+router.post('/students/share-credentials', shareStudentCredentials);
 
 // Utility routes
 router.get('/branches/:course', getBranchesByCourse);
