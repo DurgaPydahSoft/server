@@ -118,8 +118,62 @@ feeReminderSchema.index({ academicYear: 1 });
 feeReminderSchema.index({ currentReminder: 1 });
 feeReminderSchema.index({ 'feeStatus.term1': 1, 'feeStatus.term2': 1, 'feeStatus.term3': 1 });
 
-// Method to calculate reminder dates
-feeReminderSchema.methods.calculateReminderDates = function() {
+// Method to calculate reminder dates based on academic calendar
+feeReminderSchema.methods.calculateReminderDates = async function() {
+  try {
+    // Try to get academic calendar for semester-1 start date
+    const AcademicCalendar = mongoose.model('AcademicCalendar');
+    const User = mongoose.model('User');
+    
+    // Get student details to find course
+    const student = await User.findById(this.student).populate('course');
+    if (!student || !student.course) {
+      console.log('⚠️ Student or course not found, using registration date fallback');
+      this.calculateReminderDatesFallback();
+      return;
+    }
+    
+    // Find academic calendar for current academic year and semester-1
+    const currentAcademicYear = this.academicYear;
+    const academicCalendar = await AcademicCalendar.findOne({
+      course: student.course._id,
+      academicYear: currentAcademicYear,
+      semester: 'Semester 1',
+      isActive: true
+    });
+    
+    if (academicCalendar && academicCalendar.startDate) {
+      console.log('📅 Using academic calendar for reminder dates');
+      const semesterStartDate = new Date(academicCalendar.startDate);
+      
+      // Calculate reminder dates based on semester-1 start date
+      this.firstReminderDate = new Date(semesterStartDate);
+      this.firstReminderDate.setDate(semesterStartDate.getDate() + 5);
+      
+      this.secondReminderDate = new Date(semesterStartDate);
+      this.secondReminderDate.setDate(semesterStartDate.getDate() + 90);
+      
+      this.thirdReminderDate = new Date(semesterStartDate);
+      this.thirdReminderDate.setDate(semesterStartDate.getDate() + 210);
+      
+      console.log('📅 Reminder dates calculated from academic calendar:', {
+        semesterStart: semesterStartDate,
+        firstReminder: this.firstReminderDate,
+        secondReminder: this.secondReminderDate,
+        thirdReminder: this.thirdReminderDate
+      });
+    } else {
+      console.log('⚠️ Academic calendar not found, using registration date fallback');
+      this.calculateReminderDatesFallback();
+    }
+  } catch (error) {
+    console.error('Error calculating reminder dates from academic calendar:', error);
+    this.calculateReminderDatesFallback();
+  }
+};
+
+// Fallback method using registration date
+feeReminderSchema.methods.calculateReminderDatesFallback = function() {
   const registrationDate = new Date(this.registrationDate);
   
   this.firstReminderDate = new Date(registrationDate);
@@ -130,6 +184,13 @@ feeReminderSchema.methods.calculateReminderDates = function() {
   
   this.thirdReminderDate = new Date(registrationDate);
   this.thirdReminderDate.setDate(registrationDate.getDate() + 210);
+  
+  console.log('📅 Reminder dates calculated from registration date:', {
+    registrationDate: registrationDate,
+    firstReminder: this.firstReminderDate,
+    secondReminder: this.secondReminderDate,
+    thirdReminder: this.thirdReminderDate
+  });
 };
 
 // Method to check if reminder should be visible
@@ -185,6 +246,65 @@ feeReminderSchema.methods.getPendingAmount = function() {
   return this.getTotalFee() - this.getPaidAmount();
 };
 
+// Method to sync fee status with actual payment data
+feeReminderSchema.methods.syncFeeStatusWithPayments = async function() {
+  try {
+    const Payment = mongoose.model('Payment');
+    
+    // Get all successful hostel fee payments for this student and academic year
+    const payments = await Payment.find({
+      studentId: this.student,
+      paymentType: 'hostel_fee',
+      academicYear: this.academicYear,
+      status: 'success'
+    });
+    
+    // Reset all terms to unpaid
+    this.feeStatus.term1 = 'Unpaid';
+    this.feeStatus.term2 = 'Unpaid';
+    this.feeStatus.term3 = 'Unpaid';
+    
+    // Update status based on actual payments
+    payments.forEach(payment => {
+      if (payment.term === 'term1') {
+        this.feeStatus.term1 = 'Paid';
+      } else if (payment.term === 'term2') {
+        this.feeStatus.term2 = 'Paid';
+      } else if (payment.term === 'term3') {
+        this.feeStatus.term3 = 'Paid';
+      }
+    });
+    
+    // Save the updated status
+    await this.save();
+    
+    console.log(`✅ Synced fee status for student ${this.student}:`, this.feeStatus);
+    return this.feeStatus;
+  } catch (error) {
+    console.error('Error syncing fee status with payments:', error);
+    throw error;
+  }
+};
+
+// Static method to sync fee status for all students
+feeReminderSchema.statics.syncAllFeeStatusWithPayments = async function() {
+  try {
+    const feeReminders = await this.find({ isActive: true });
+    let syncedCount = 0;
+    
+    for (const reminder of feeReminders) {
+      await reminder.syncFeeStatusWithPayments();
+      syncedCount++;
+    }
+    
+    console.log(`✅ Synced fee status for ${syncedCount} students`);
+    return { syncedCount, total: feeReminders.length };
+  } catch (error) {
+    console.error('Error syncing all fee status with payments:', error);
+    throw error;
+  }
+};
+
 // Static method to create fee reminder for a student
 feeReminderSchema.statics.createForStudent = async function(studentId, registrationDate, academicYear) {
   // Get student details to determine category
@@ -210,7 +330,8 @@ feeReminderSchema.statics.createForStudent = async function(studentId, registrat
     }
   });
   
-  feeReminder.calculateReminderDates();
+  // Calculate reminder dates based on academic calendar
+  await feeReminder.calculateReminderDates();
   return await feeReminder.save();
 };
 

@@ -113,6 +113,7 @@ const createFeeReminderNotification = async (studentId, reminderNumber, academic
     
     const notification = new Notification({
       recipient: studentId,
+      recipientModel: 'User',
       type: 'fee_reminder',
       title: `Hostel Fee Reminder #${reminderNumber}`,
       message: messages[reminderNumber],

@@ -74,7 +74,7 @@ export const getStudentFeeReminders = async (req, res) => {
 // Get all fee reminders for admin/warden dashboard
 export const getAllFeeReminders = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '', academicYear = '', status = '' } = req.query;
+    const { page = 1, limit = 50, search = '', academicYear = '', status = '' } = req.query;
     
     console.log('🔍 Fee Reminder Query:', { page, limit, search, academicYear, status });
     
@@ -86,7 +86,7 @@ export const getAllFeeReminders = async (req, res) => {
       console.log('🔍 No fee reminders found, creating for all students...');
       
       // Get all students
-      const students = await User.find({ role: 'student' }).limit(parseInt(limit));
+      const students = await User.find({ role: 'student' }).limit(100);
       console.log('🔍 Found students:', students.length);
       
       // Create fee reminders for these students
@@ -147,16 +147,33 @@ export const getAllFeeReminders = async (req, res) => {
     
     // First get fee reminders
     let feeReminders = await FeeReminder.find(query)
-      .populate('student', 'name rollNumber course branch year')
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year',
+        populate: {
+          path: 'course',
+          select: 'name code'
+        }
+      })
       .populate('lastUpdatedBy', 'name')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
     
+    // Sync fee status with actual payment data for each reminder
+    console.log('🔄 Syncing fee status with payment data...');
+    for (const reminder of feeReminders) {
+      try {
+        await reminder.syncFeeStatusWithPayments();
+      } catch (error) {
+        console.error(`Error syncing fee status for reminder ${reminder._id}:`, error);
+      }
+    }
+    
     // Debug: Check if students are populated
     console.log('🔍 Fee Reminders with Student Data:');
     feeReminders.forEach((reminder, index) => {
-      console.log(`  ${index + 1}. ID: ${reminder._id}, Student: ${reminder.student?.name || 'NO STUDENT'}, Roll: ${reminder.student?.rollNumber || 'NO ROLL'}`);
+      console.log(`  ${index + 1}. ID: ${reminder._id}, Student: ${reminder.student?.name || 'NO STUDENT'}, Roll: ${reminder.student?.rollNumber || 'NO ROLL'}, Course: ${reminder.student?.course?.name || 'NO COURSE'}, Year: ${reminder.student?.year || 'NO YEAR'}, Fee Status:`, reminder.feeStatus);
     });
     
     console.log('🔍 Found Fee Reminders:', feeReminders.length);
@@ -237,6 +254,7 @@ export const updateFeePaymentStatus = async (req, res) => {
     if (student) {
       const notification = new Notification({
         recipient: student._id,
+        recipientModel: 'User',
         title: 'Fee Payment Status Updated',
         message: `Your hostel fee payment status has been updated. Please check your dashboard for details.`,
         type: 'fee_update',
@@ -421,6 +439,7 @@ export const processAutomatedReminders = async () => {
         // Create notification
         const notification = new Notification({
           recipient: feeReminder.student._id,
+          recipientModel: 'User',
           title: `Hostel Fee Reminder ${reminderNumber}`,
           message: reminderMessage,
           type: 'fee_reminder',
@@ -508,6 +527,334 @@ export const getFeeReminderStats = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching fee reminder stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Send manual reminder to specific student
+export const sendManualReminder = async (req, res) => {
+  try {
+    const { studentId, reminderType = 'manual', message } = req.body;
+    const adminId = req.admin?._id || req.user?._id;
+    
+    console.log('📤 Sending manual reminder to student:', studentId);
+    
+    // Find the fee reminder for the student, or create one if it doesn't exist
+    let feeReminder = await FeeReminder.findOne({ 
+      student: studentId, 
+      isActive: true 
+    }).populate('student', 'name rollNumber email');
+    
+    if (!feeReminder) {
+      console.log('📝 No fee reminder found, creating one for student:', studentId);
+      
+      // Get student details
+      const student = await User.findById(studentId);
+      if (!student) {
+        return res.status(404).json({
+          success: false,
+          message: 'Student not found'
+        });
+      }
+      
+      // Create fee reminder for the student
+      const currentYear = new Date().getFullYear();
+      const academicYear = `${currentYear}-${currentYear + 1}`;
+      
+      feeReminder = await FeeReminder.createForStudent(
+        studentId, 
+        student.createdAt || new Date(), 
+        academicYear
+      );
+      
+      // Populate the student data
+      await feeReminder.populate('student', 'name rollNumber email');
+    }
+    
+    // Create notification for the student
+    const notification = new Notification({
+      recipient: studentId,
+      recipientModel: 'User',
+      title: 'Hostel Fee Reminder',
+      message: message || 'Please pay your pending hostel fees. Contact the hostel office for more details.',
+      type: 'fee_reminder',
+      data: {
+        feeReminderId: feeReminder._id,
+        reminderType: reminderType,
+        sentBy: adminId
+      }
+    });
+    
+    await notification.save();
+    
+    // Update reminder status
+    feeReminder.currentReminder = Math.max(feeReminder.currentReminder, 1);
+    feeReminder.lastUpdatedBy = adminId;
+    feeReminder.lastUpdatedAt = new Date();
+    await feeReminder.save();
+    
+    console.log('✅ Manual reminder sent successfully');
+    
+    res.json({
+      success: true,
+      message: 'Manual reminder sent successfully',
+      data: {
+        studentName: feeReminder.student.name,
+        studentRollNumber: feeReminder.student.rollNumber,
+        reminderType: reminderType
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error sending manual reminder:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Send bulk reminders to multiple students
+export const sendBulkReminders = async (req, res) => {
+  try {
+    const { studentIds, message } = req.body;
+    const adminId = req.admin?._id || req.user?._id;
+    
+    console.log('📤 Sending bulk reminders to:', studentIds.length, 'students');
+    
+    if (!studentIds || studentIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No students selected for bulk reminder'
+      });
+    }
+    
+    // Find fee reminders for all selected students, create if they don't exist
+    let feeReminders = await FeeReminder.find({ 
+      student: { $in: studentIds }, 
+      isActive: true 
+    }).populate('student', 'name rollNumber email');
+    
+    // If some students don't have fee reminders, create them
+    const existingStudentIds = feeReminders.map(fr => fr.student._id.toString());
+    const missingStudentIds = studentIds.filter(id => !existingStudentIds.includes(id));
+    
+    if (missingStudentIds.length > 0) {
+      console.log('📝 Creating fee reminders for', missingStudentIds.length, 'students');
+      
+      const currentYear = new Date().getFullYear();
+      const academicYear = `${currentYear}-${currentYear + 1}`;
+      
+      for (const studentId of missingStudentIds) {
+        try {
+          const student = await User.findById(studentId);
+          if (student) {
+            const newFeeReminder = await FeeReminder.createForStudent(
+              studentId, 
+              student.createdAt || new Date(), 
+              academicYear
+            );
+            await newFeeReminder.populate('student', 'name rollNumber email');
+            feeReminders.push(newFeeReminder);
+          }
+        } catch (error) {
+          console.error('Error creating fee reminder for student:', studentId, error);
+        }
+      }
+    }
+    
+    if (feeReminders.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No fee reminders found for selected students'
+      });
+    }
+    
+    let successCount = 0;
+    let errorCount = 0;
+    const errors = [];
+    
+    // Send reminders to each student
+    for (const feeReminder of feeReminders) {
+      try {
+        // Create notification for the student
+        const notification = new Notification({
+          recipient: feeReminder.student._id,
+          recipientModel: 'User',
+          title: 'Hostel Fee Reminder',
+          message: message || 'Please pay your pending hostel fees. Contact the hostel office for more details.',
+          type: 'fee_reminder',
+          data: {
+            feeReminderId: feeReminder._id,
+            reminderType: 'bulk',
+            sentBy: adminId
+          }
+        });
+        
+        await notification.save();
+        
+        // Update reminder status
+        feeReminder.currentReminder = Math.max(feeReminder.currentReminder, 1);
+        feeReminder.lastUpdatedBy = adminId;
+        feeReminder.lastUpdatedAt = new Date();
+        await feeReminder.save();
+        
+        successCount++;
+        
+      } catch (error) {
+        console.error(`Error sending reminder to student ${feeReminder.student.rollNumber}:`, error);
+        errorCount++;
+        errors.push({
+          studentId: feeReminder.student._id,
+          studentName: feeReminder.student.name,
+          error: error.message
+        });
+      }
+    }
+    
+    console.log(`✅ Bulk reminders sent: ${successCount} success, ${errorCount} errors`);
+    
+    res.json({
+      success: true,
+      message: `Bulk reminders sent successfully. ${successCount} sent, ${errorCount} failed.`,
+      data: {
+        successCount,
+        errorCount,
+        errors: errors.length > 0 ? errors : undefined
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error sending bulk reminders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Create fee reminders for all students
+export const createAllFeeReminders = async (req, res) => {
+  try {
+    const adminId = req.admin?._id || req.user?._id;
+    
+    console.log('📝 Creating fee reminders for all students...');
+    
+    // Get all students
+    const students = await User.find({ role: 'student' });
+    console.log('📝 Found students:', students.length);
+    
+    if (students.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No students found'
+      });
+    }
+    
+    const currentYear = new Date().getFullYear();
+    const academicYear = `${currentYear}-${currentYear + 1}`;
+    
+    let createdCount = 0;
+    let skippedCount = 0;
+    const errors = [];
+    
+    for (const student of students) {
+      try {
+        // Check if fee reminder already exists
+        const existingReminder = await FeeReminder.findOne({
+          student: student._id,
+          isActive: true
+        });
+        
+        if (existingReminder) {
+          skippedCount++;
+          continue;
+        }
+        
+        // Create fee reminder for the student
+        await FeeReminder.createForStudent(
+          student._id,
+          student.createdAt || new Date(),
+          academicYear
+        );
+        
+        createdCount++;
+      } catch (error) {
+        console.error(`Error creating fee reminder for student ${student._id}:`, error);
+        errors.push({
+          studentId: student._id,
+          studentName: student.name,
+          error: error.message
+        });
+      }
+    }
+    
+    console.log(`📝 Created ${createdCount} fee reminders, skipped ${skippedCount} existing ones`);
+    
+    res.json({
+      success: true,
+      message: `Fee reminders created successfully. ${createdCount} created, ${skippedCount} already existed.`,
+      data: {
+        created: createdCount,
+        skipped: skippedCount,
+        total: students.length,
+        errors: errors.length > 0 ? errors : undefined
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error creating all fee reminders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Sync fee status with actual payment data
+export const syncFeeStatusWithPayments = async (req, res) => {
+  try {
+    const { studentId } = req.query;
+    
+    if (studentId) {
+      // Sync for specific student
+      const feeReminder = await FeeReminder.findOne({ 
+        student: studentId, 
+        isActive: true 
+      });
+      
+      if (!feeReminder) {
+        return res.status(404).json({
+          success: false,
+          message: 'Fee reminder not found for this student'
+        });
+      }
+      
+      const updatedStatus = await feeReminder.syncFeeStatusWithPayments();
+      
+      res.json({
+        success: true,
+        message: 'Fee status synced successfully',
+        data: {
+          studentId,
+          feeStatus: updatedStatus
+        }
+      });
+    } else {
+      // Sync for all students
+      const result = await FeeReminder.syncAllFeeStatusWithPayments();
+      
+      res.json({
+        success: true,
+        message: `Fee status synced for ${result.syncedCount} students`,
+        data: result
+      });
+    }
+  } catch (error) {
+    console.error('Error syncing fee status with payments:', error);
     res.status(500).json({
       success: false,
       message: 'Internal server error'
