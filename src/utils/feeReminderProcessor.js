@@ -1,5 +1,6 @@
 import FeeReminder from '../models/FeeReminder.js';
 import Notification from '../models/Notification.js';
+import { sendFeeReminderEmail } from './emailService.js';
 
 // Process automated fee reminders
 export const processAutomatedReminders = async () => {
@@ -7,7 +8,7 @@ export const processAutomatedReminders = async () => {
     console.log('🔄 Processing automated fee reminders...');
     
     const now = new Date();
-    const feeReminders = await FeeReminder.find({ isActive: true }).populate('student', 'name rollNumber');
+    const feeReminders = await FeeReminder.find({ isActive: true }).populate('student', 'name rollNumber email');
     
     let processedCount = 0;
     
@@ -27,6 +28,31 @@ export const processAutomatedReminders = async () => {
         
         // Create notification
         await createFeeReminderNotification(reminder.student._id, 1, reminder.academicYear);
+        
+        // Send email notification if student has email
+        if (reminder.student.email) {
+          try {
+            const dueDates = {
+              term1: reminder.firstReminderDate,
+              term2: reminder.secondReminderDate,
+              term3: reminder.thirdReminderDate
+            };
+            
+            await sendFeeReminderEmail(
+              1,
+              reminder.student.email,
+              reminder.student.name,
+              reminder.student.rollNumber,
+              reminder.academicYear,
+              reminder.feeAmounts,
+              dueDates
+            );
+            
+            console.log(`📧 Fee reminder 1 email sent to: ${reminder.student.email}`);
+          } catch (emailError) {
+            console.error(`📧 Failed to send fee reminder 1 email to ${reminder.student.email}:`, emailError);
+          }
+        }
       }
       
       // Check second reminder (90 days after registration)
@@ -41,6 +67,31 @@ export const processAutomatedReminders = async () => {
         
         // Create notification
         await createFeeReminderNotification(reminder.student._id, 2, reminder.academicYear);
+        
+        // Send email notification if student has email
+        if (reminder.student.email) {
+          try {
+            const dueDates = {
+              term1: reminder.firstReminderDate,
+              term2: reminder.secondReminderDate,
+              term3: reminder.thirdReminderDate
+            };
+            
+            await sendFeeReminderEmail(
+              2,
+              reminder.student.email,
+              reminder.student.name,
+              reminder.student.rollNumber,
+              reminder.academicYear,
+              reminder.feeAmounts,
+              dueDates
+            );
+            
+            console.log(`📧 Fee reminder 2 email sent to: ${reminder.student.email}`);
+          } catch (emailError) {
+            console.error(`📧 Failed to send fee reminder 2 email to ${reminder.student.email}:`, emailError);
+          }
+        }
       }
       
       // Check third reminder (210 days after registration)
@@ -55,6 +106,31 @@ export const processAutomatedReminders = async () => {
         
         // Create notification
         await createFeeReminderNotification(reminder.student._id, 3, reminder.academicYear);
+        
+        // Send email notification if student has email
+        if (reminder.student.email) {
+          try {
+            const dueDates = {
+              term1: reminder.firstReminderDate,
+              term2: reminder.secondReminderDate,
+              term3: reminder.thirdReminderDate
+            };
+            
+            await sendFeeReminderEmail(
+              3,
+              reminder.student.email,
+              reminder.student.name,
+              reminder.student.rollNumber,
+              reminder.academicYear,
+              reminder.feeAmounts,
+              dueDates
+            );
+            
+            console.log(`📧 Fee reminder 3 email sent to: ${reminder.student.email}`);
+          } catch (emailError) {
+            console.error(`📧 Failed to send fee reminder 3 email to ${reminder.student.email}:`, emailError);
+          }
+        }
       }
       
       // Update reminder visibility after 3 days

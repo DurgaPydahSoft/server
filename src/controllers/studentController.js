@@ -228,6 +228,17 @@ export const deleteStudent = async (req, res) => {
     const { id } = req.params;
     const student = await User.findByIdAndDelete(id);
     if (!student) return res.status(404).json({ message: 'Student not found' });
+    
+    // Clean up related fee reminders
+    try {
+      const FeeReminder = (await import('../models/FeeReminder.js')).default;
+      const deletedReminders = await FeeReminder.deleteMany({ student: id });
+      console.log(`🧹 Cleaned up ${deletedReminders.deletedCount} fee reminders for deleted student: ${student.name}`);
+    } catch (cleanupError) {
+      console.error('Error cleaning up fee reminders:', cleanupError);
+      // Continue with student deletion even if cleanup fails
+    }
+    
     res.json({ message: 'Student deleted' });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting student', error });

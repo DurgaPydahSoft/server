@@ -302,14 +302,6 @@ export const getAdminUnreadCount = async (req, res) => {
     // Debug: Check all notifications for this admin
     const allNotifications = await Notification.find({ recipient: adminId });
     console.log('🔔 All notifications for admin:', allNotifications.length);
-    console.log('🔔 Sample notifications:', allNotifications.slice(0, 3).map(n => ({
-      id: n._id,
-      type: n.type,
-      recipient: n.recipient,
-      recipientModel: n.recipientModel,
-      isRead: n.isRead,
-      createdAt: n.createdAt
-    })));
 
     const count = await Notification.countDocuments({ 
       recipient: adminId,

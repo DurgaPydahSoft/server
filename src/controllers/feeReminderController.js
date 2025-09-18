@@ -2,6 +2,7 @@ import FeeReminder from '../models/FeeReminder.js';
 import User from '../models/User.js';
 import Notification from '../models/Notification.js';
 import FeeStructure from '../models/FeeStructure.js';
+import { sendFeeReminderEmail } from '../utils/emailService.js';
 
 // Get fee reminders for a student
 export const getStudentFeeReminders = async (req, res) => {
@@ -160,29 +161,28 @@ export const getAllFeeReminders = async (req, res) => {
       .skip(skip)
       .limit(parseInt(limit));
     
-    // Sync fee status with actual payment data for each reminder
-    console.log('🔄 Syncing fee status with payment data...');
-    for (const reminder of feeReminders) {
+    // Batch sync fee status with actual payment data
+    if (feeReminders.length > 0) {
       try {
-        await reminder.syncFeeStatusWithPayments();
+        await batchSyncFeeStatusWithPayments(feeReminders);
       } catch (error) {
-        console.error(`Error syncing fee status for reminder ${reminder._id}:`, error);
+        console.error('Error batch syncing fee status:', error);
+        // Continue with individual sync as fallback
+        for (const reminder of feeReminders) {
+          try {
+            await reminder.syncFeeStatusWithPayments();
+          } catch (individualError) {
+            console.error(`Error syncing fee status for reminder ${reminder._id}:`, individualError);
+          }
+        }
       }
     }
     
-    // Debug: Check if students are populated
-    console.log('🔍 Fee Reminders with Student Data:');
-    feeReminders.forEach((reminder, index) => {
-      console.log(`  ${index + 1}. ID: ${reminder._id}, Student: ${reminder.student?.name || 'NO STUDENT'}, Roll: ${reminder.student?.rollNumber || 'NO ROLL'}, Course: ${reminder.student?.course?.name || 'NO COURSE'}, Year: ${reminder.student?.year || 'NO YEAR'}, Fee Status:`, reminder.feeStatus);
-    });
+    console.log(`🔍 Found ${feeReminders.length} fee reminders`);
     
-    console.log('🔍 Found Fee Reminders:', feeReminders.length);
-    console.log('🔍 Sample Reminder:', feeReminders[0] ? {
-      id: feeReminders[0]._id,
-      student: feeReminders[0].student,
-      academicYear: feeReminders[0].academicYear,
-      feeStatus: feeReminders[0].feeStatus
-    } : 'No reminders found');
+    // Filter out reminders with null student references (deleted students)
+    feeReminders = feeReminders.filter(reminder => reminder.student !== null);
+    console.log('🔍 After filtering null students:', feeReminders.length);
     
     // Apply search filter after population
     if (search) {
@@ -205,6 +205,9 @@ export const getAllFeeReminders = async (req, res) => {
     
     console.log('🔍 Total count:', total);
     
+    // Stats are now fetched separately via getAccurateFeeReminderStats endpoint
+    // No need to calculate stats here for better performance
+
     res.json({
       success: true,
       data: {
@@ -408,7 +411,7 @@ export const processAutomatedReminders = async () => {
           'feeStatus.term3': 'Unpaid'
         }
       ]
-    }).populate('student', 'name rollNumber');
+    }).populate('student', 'name rollNumber email');
     
     for (const feeReminder of feeReminders) {
       let reminderNumber = 0;
@@ -453,6 +456,34 @@ export const processAutomatedReminders = async () => {
         });
         
         await notification.save();
+        
+        // Send email notification if student has email
+        if (feeReminder.student.email) {
+          try {
+            const dueDates = {
+              term1: feeReminder.firstReminderDate,
+              term2: feeReminder.secondReminderDate,
+              term3: feeReminder.thirdReminderDate
+            };
+            
+            await sendFeeReminderEmail(
+              reminderNumber,
+              feeReminder.student.email,
+              feeReminder.student.name,
+              feeReminder.student.rollNumber,
+              feeReminder.academicYear,
+              feeReminder.feeAmounts,
+              dueDates
+            );
+            
+            console.log(`📧 Fee reminder ${reminderNumber} email sent to: ${feeReminder.student.email}`);
+          } catch (emailError) {
+            console.error(`📧 Failed to send fee reminder ${reminderNumber} email to ${feeReminder.student.email}:`, emailError);
+            // Continue processing even if email fails
+          }
+        } else {
+          console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
+        }
       }
     }
     
@@ -537,7 +568,7 @@ export const getFeeReminderStats = async (req, res) => {
 // Send manual reminder to specific student
 export const sendManualReminder = async (req, res) => {
   try {
-    const { studentId, reminderType = 'manual', message } = req.body;
+    const { studentId, reminderType = 'manual', message, sendEmail = true, sendPushNotification = true } = req.body;
     const adminId = req.admin?._id || req.user?._id;
     
     console.log('📤 Sending manual reminder to student:', studentId);
@@ -574,21 +605,57 @@ export const sendManualReminder = async (req, res) => {
       await feeReminder.populate('student', 'name rollNumber email');
     }
     
-    // Create notification for the student
-    const notification = new Notification({
-      recipient: studentId,
-      recipientModel: 'User',
-      title: 'Hostel Fee Reminder',
-      message: message || 'Please pay your pending hostel fees. Contact the hostel office for more details.',
-      type: 'fee_reminder',
-      data: {
-        feeReminderId: feeReminder._id,
-        reminderType: reminderType,
-        sentBy: adminId
-      }
-    });
+    // Create notification for the student (only if push notification is enabled)
+    let notification = null;
+    if (sendPushNotification) {
+      notification = new Notification({
+        recipient: studentId,
+        recipientModel: 'User',
+        title: 'Hostel Fee Reminder',
+        message: message || 'Please pay your pending hostel fees. Contact the hostel office for more details.',
+        type: 'fee_reminder',
+        data: {
+          feeReminderId: feeReminder._id,
+          reminderType: reminderType,
+          sentBy: adminId
+        }
+      });
+      
+      await notification.save();
+    }
     
-    await notification.save();
+    // Send email notification if student has email and email is enabled
+    let emailSent = false;
+    if (sendEmail && feeReminder.student.email) {
+      try {
+        const dueDates = {
+          term1: feeReminder.firstReminderDate,
+          term2: feeReminder.secondReminderDate,
+          term3: feeReminder.thirdReminderDate
+        };
+        
+        // Determine reminder number for email (use current reminder or 1 for manual)
+        const reminderNumber = feeReminder.currentReminder > 0 ? feeReminder.currentReminder : 1;
+        
+        await sendFeeReminderEmail(
+          reminderNumber,
+          feeReminder.student.email,
+          feeReminder.student.name,
+          feeReminder.student.rollNumber,
+          feeReminder.academicYear,
+          feeReminder.feeAmounts,
+          dueDates
+        );
+        
+        emailSent = true;
+        console.log(`📧 Manual fee reminder email sent to: ${feeReminder.student.email}`);
+      } catch (emailError) {
+        console.error(`📧 Failed to send manual fee reminder email to ${feeReminder.student.email}:`, emailError);
+        // Continue processing even if email fails
+      }
+    } else if (sendEmail && !feeReminder.student.email) {
+      console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
+    }
     
     // Update reminder status
     feeReminder.currentReminder = Math.max(feeReminder.currentReminder, 1);
@@ -604,7 +671,9 @@ export const sendManualReminder = async (req, res) => {
       data: {
         studentName: feeReminder.student.name,
         studentRollNumber: feeReminder.student.rollNumber,
-        reminderType: reminderType
+        reminderType: reminderType,
+        emailSent: emailSent,
+        pushSent: !!notification
       }
     });
     
@@ -620,7 +689,7 @@ export const sendManualReminder = async (req, res) => {
 // Send bulk reminders to multiple students
 export const sendBulkReminders = async (req, res) => {
   try {
-    const { studentIds, message } = req.body;
+    const { studentIds, message, sendEmail = true, sendPushNotification = true } = req.body;
     const adminId = req.admin?._id || req.user?._id;
     
     console.log('📤 Sending bulk reminders to:', studentIds.length, 'students');
@@ -680,21 +749,53 @@ export const sendBulkReminders = async (req, res) => {
     // Send reminders to each student
     for (const feeReminder of feeReminders) {
       try {
-        // Create notification for the student
-        const notification = new Notification({
-          recipient: feeReminder.student._id,
-          recipientModel: 'User',
-          title: 'Hostel Fee Reminder',
-          message: message || 'Please pay your pending hostel fees. Contact the hostel office for more details.',
-          type: 'fee_reminder',
-          data: {
-            feeReminderId: feeReminder._id,
-            reminderType: 'bulk',
-            sentBy: adminId
-          }
-        });
+        // Create notification for the student (only if push notification is enabled)
+        let notification = null;
+        if (sendPushNotification) {
+          notification = new Notification({
+            recipient: feeReminder.student._id,
+            recipientModel: 'User',
+            title: 'Hostel Fee Reminder',
+            message: message || 'Please pay your pending hostel fees. Contact the hostel office for more details.',
+            type: 'fee_reminder',
+            data: {
+              feeReminderId: feeReminder._id,
+              reminderType: 'bulk',
+              sentBy: adminId
+            }
+          });
+          
+          await notification.save();
+        }
         
-        await notification.save();
+        // Send email notification if student has email and email is enabled
+        if (sendEmail && feeReminder.student.email) {
+          try {
+            const dueDates = {
+              term1: feeReminder.firstReminderDate,
+              term2: feeReminder.secondReminderDate,
+              term3: feeReminder.thirdReminderDate
+            };
+            
+            // Determine reminder number for email (use current reminder or 1 for bulk)
+            const reminderNumber = feeReminder.currentReminder > 0 ? feeReminder.currentReminder : 1;
+            
+            await sendFeeReminderEmail(
+              reminderNumber,
+              feeReminder.student.email,
+              feeReminder.student.name,
+              feeReminder.student.rollNumber,
+              feeReminder.academicYear,
+              feeReminder.feeAmounts,
+              dueDates
+            );
+            
+            console.log(`📧 Bulk fee reminder email sent to: ${feeReminder.student.email}`);
+          } catch (emailError) {
+            console.error(`📧 Failed to send bulk fee reminder email to ${feeReminder.student.email}:`, emailError);
+            // Continue processing even if email fails
+          }
+        }
         
         // Update reminder status
         feeReminder.currentReminder = Math.max(feeReminder.currentReminder, 1);
@@ -948,5 +1049,211 @@ export const updateReminderVisibility = async () => {
     console.log('Updated reminder visibility');
   } catch (error) {
     console.error('Error updating reminder visibility:', error);
+  }
+};
+
+// Clean up orphaned fee reminders (reminders with deleted students)
+export const cleanupOrphanedReminders = async (req, res) => {
+  try {
+    console.log('🧹 Starting cleanup of orphaned fee reminders...');
+    
+    // Find all fee reminders
+    const allReminders = await FeeReminder.find({ isActive: true });
+    console.log(`🔍 Found ${allReminders.length} total fee reminders`);
+    
+    // Find reminders with null student references
+    const orphanedReminders = allReminders.filter(reminder => !reminder.student);
+    console.log(`🔍 Found ${orphanedReminders.length} orphaned reminders`);
+    
+    if (orphanedReminders.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No orphaned fee reminders found',
+        data: {
+          deletedCount: 0,
+          totalChecked: allReminders.length
+        }
+      });
+    }
+    
+    // Delete orphaned reminders
+    const deletedReminders = await FeeReminder.deleteMany({
+      _id: { $in: orphanedReminders.map(r => r._id) }
+    });
+    
+    console.log(`✅ Cleaned up ${deletedReminders.deletedCount} orphaned fee reminders`);
+    
+    res.json({
+      success: true,
+      message: `Successfully cleaned up ${deletedReminders.deletedCount} orphaned fee reminders`,
+      data: {
+        deletedCount: deletedReminders.deletedCount,
+        totalChecked: allReminders.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error cleaning up orphaned reminders:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to clean up orphaned reminders',
+      error: error.message
+    });
+  }
+};
+
+// Batch sync fee status with payments for multiple reminders
+const batchSyncFeeStatusWithPayments = async (feeReminders) => {
+  if (!feeReminders || feeReminders.length === 0) return;
+  
+  try {
+    const Payment = (await import('../models/Payment.js')).default;
+    
+    // Get all student IDs and academic years
+    const studentIds = feeReminders.map(reminder => reminder.student._id || reminder.student);
+    const academicYears = [...new Set(feeReminders.map(reminder => reminder.academicYear))];
+    
+    // Get all payments for these students and academic years in one query
+    const allPayments = await Payment.find({
+      studentId: { $in: studentIds },
+      paymentType: 'hostel_fee',
+      academicYear: { $in: academicYears },
+      status: 'success'
+    });
+    
+    // Group payments by studentId and academicYear
+    const paymentsByStudent = {};
+    allPayments.forEach(payment => {
+      const key = `${payment.studentId}_${payment.academicYear}`;
+      if (!paymentsByStudent[key]) {
+        paymentsByStudent[key] = [];
+      }
+      paymentsByStudent[key].push(payment);
+    });
+    
+    // Update fee status for each reminder
+    for (const reminder of feeReminders) {
+      const studentId = reminder.student._id || reminder.student;
+      const key = `${studentId}_${reminder.academicYear}`;
+      const studentPayments = paymentsByStudent[key] || [];
+      
+      // Reset all terms to unpaid
+      reminder.feeStatus.term1 = 'Unpaid';
+      reminder.feeStatus.term2 = 'Unpaid';
+      reminder.feeStatus.term3 = 'Unpaid';
+      
+      // Update status based on actual payments
+      studentPayments.forEach(payment => {
+        if (payment.term === 'term1') {
+          reminder.feeStatus.term1 = 'Paid';
+        } else if (payment.term === 'term2') {
+          reminder.feeStatus.term2 = 'Paid';
+        } else if (payment.term === 'term3') {
+          reminder.feeStatus.term3 = 'Paid';
+        }
+      });
+    }
+    
+    console.log(`✅ Batch synced fee status for ${feeReminders.length} reminders`);
+  } catch (error) {
+    console.error('Error in batch sync:', error);
+    throw error;
+  }
+};
+
+// Get accurate fee reminder stats (separate endpoint for better performance)
+export const getAccurateFeeReminderStats = async (req, res) => {
+  try {
+    const { academicYear = '' } = req.query;
+    
+    console.log('📊 Getting accurate fee reminder stats for academic year:', academicYear);
+    
+    // Get ALL students first (not just those with fee reminders)
+    const User = (await import('../models/User.js')).default;
+    let studentQuery = { role: 'student' };
+    if (academicYear) {
+      studentQuery.academicYear = academicYear;
+    }
+    
+    const allStudents = await User.find(studentQuery)
+      .populate('course', 'name code')
+      .select('name rollNumber course year category academicYear');
+    
+    console.log('📊 Total students found:', allStudents.length);
+    
+    // Get fee reminders for students who have them
+    let reminderQuery = { isActive: true };
+    if (academicYear) {
+      reminderQuery.academicYear = academicYear;
+    }
+    
+    const allReminders = await FeeReminder.find(reminderQuery)
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year',
+        populate: {
+          path: 'course',
+          select: 'name code'
+        }
+      });
+    
+    // Filter out null students from reminders
+    const validReminders = allReminders.filter(reminder => reminder.student !== null);
+    console.log('📊 Students with fee reminders:', validReminders.length);
+    
+    // Batch sync with latest payment data
+    if (validReminders.length > 0) {
+      try {
+        await batchSyncFeeStatusWithPayments(validReminders);
+      } catch (error) {
+        console.error('Error batch syncing stats reminders:', error);
+      }
+    }
+    
+    // Calculate stats based on ALL students, not just those with reminders
+    const studentsWithReminders = validReminders.length;
+    const studentsWithoutReminders = allStudents.length - studentsWithReminders;
+    
+    const paidStudents = validReminders.filter(reminder => 
+      reminder.feeStatus.term1 === 'Paid' && 
+      reminder.feeStatus.term2 === 'Paid' && 
+      reminder.feeStatus.term3 === 'Paid'
+    ).length;
+    
+    const pendingStudents = validReminders.filter(reminder => 
+      reminder.feeStatus.term1 === 'Unpaid' || 
+      reminder.feeStatus.term2 === 'Unpaid' || 
+      reminder.feeStatus.term3 === 'Unpaid'
+    ).length;
+    
+    const activeReminders = validReminders.filter(reminder => reminder.currentReminder > 0).length;
+    
+    // Calculate payment rate based on students with reminders only
+    const paymentRate = studentsWithReminders > 0 ? Math.round((paidStudents / studentsWithReminders) * 100) : 0;
+    
+    const stats = {
+      totalStudents: allStudents.length, // Total students in system
+      studentsWithReminders: studentsWithReminders, // Students who have fee reminder records
+      studentsWithoutReminders: studentsWithoutReminders, // Students without fee reminder records
+      paidStudents: paidStudents, // Students with all terms paid
+      pendingStudents: pendingStudents + studentsWithoutReminders, // Pending includes students without reminders
+      activeReminders: activeReminders,
+      paymentRate: paymentRate // Rate among students with reminders
+    };
+    
+    console.log('📊 Accurate stats calculated:', stats);
+    
+    res.json({
+      success: true,
+      data: stats
+    });
+    
+  } catch (error) {
+    console.error('Error getting accurate fee reminder stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get accurate stats',
+      error: error.message
+    });
   }
 }; 
