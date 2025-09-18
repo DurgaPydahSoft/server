@@ -1,6 +1,7 @@
 import FeeStructure from '../models/FeeStructure.js';
 import Course from '../models/Course.js';
 import { createError } from '../utils/error.js';
+import mongoose from 'mongoose';
 
 // Test endpoint to verify fee structure routes are working
 export const testFeeStructure = async (req, res) => {
@@ -530,10 +531,14 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
     }
 
     console.log('🔍 Backend: Searching for fee structure:', { academicYear, course, year, category });
+    console.log('🔍 Backend: Course type:', typeof course, 'Course value:', course);
+    
+    // Convert course to ObjectId if it's a string
+    const courseId = typeof course === 'string' ? new mongoose.Types.ObjectId(course) : course;
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
-      course, 
+      course: courseId, 
       year: parseInt(year), 
       category, 
       isActive: true 

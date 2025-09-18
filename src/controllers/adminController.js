@@ -2437,6 +2437,13 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
       .limit(parseInt(limit))
       .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
     
+    // Transform students to include courseId
+    const transformedStudents = students.map(student => ({
+      ...student.toObject(),
+      courseId: student.course._id,
+      course: student.course.name
+    }));
+    
     const total = await User.countDocuments(query);
     
     console.log('Admit cards results:', students.length, 'students found');
@@ -2444,7 +2451,7 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        students,
+        students: transformedStudents,
         pagination: {
           current: parseInt(page),
           total: Math.ceil(total / limit),
@@ -2497,6 +2504,7 @@ export const generateAdmitCard = async (req, res, next) => {
           name: student.name,
           rollNumber: student.rollNumber,
           course: student.course?.name || student.course,
+          courseId: student.course?._id || student.course,
           year: student.year,
           branch: student.branch?.name || student.branch,
           gender: student.gender,
