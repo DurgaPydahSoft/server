@@ -198,15 +198,146 @@ export const getFeeStructure = async (req, res) => {
   }
 };
 
+// Handle bulk fee structure creation
+const handleBulkFeeStructureCreation = async (req, res, academicYear, course, year, categories, adminId) => {
+  try {
+    console.log('🔍 Backend: Bulk creation for:', { academicYear, course, year, categories });
+
+    // Validate required fields
+    if (!academicYear || !course || !year) {
+      return res.status(400).json({
+        success: false,
+        message: 'Academic year, course, and year are required for bulk creation'
+      });
+    }
+
+    // Validate course exists and year is within course duration
+    const courseDoc = await Course.findById(course);
+    if (!courseDoc) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid course selected'
+      });
+    }
+
+    if (year < 1 || year > courseDoc.duration) {
+      return res.status(400).json({
+        success: false,
+        message: `Year must be between 1 and ${courseDoc.duration} for this course`
+      });
+    }
+
+    // Validate categories array
+    if (!Array.isArray(categories) || categories.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Categories array is required and must not be empty'
+      });
+    }
+
+    // Validate all categories have required fields
+    const validCategories = ['A+', 'A', 'B+', 'B', 'C'];
+    for (const categoryData of categories) {
+      if (!categoryData.category || !validCategories.includes(categoryData.category)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid category: ${categoryData.category}. Must be one of: ${validCategories.join(', ')}`
+        });
+      }
+      if (!categoryData.totalFee || categoryData.totalFee <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Total fee for category ${categoryData.category} must be greater than 0`
+        });
+      }
+    }
+
+    // Check if all required categories are present
+    const providedCategories = categories.map(c => c.category).sort();
+    const requiredCategories = validCategories.sort();
+    if (JSON.stringify(providedCategories) !== JSON.stringify(requiredCategories)) {
+      return res.status(400).json({
+        success: false,
+        message: `All categories must be provided: ${requiredCategories.join(', ')}`
+      });
+    }
+
+    // Process each category
+    const results = [];
+    const errors = [];
+
+    for (const categoryData of categories) {
+      try {
+        const { category, totalFee } = categoryData;
+        
+        // Calculate term fees (40%, 30%, 30%)
+        const calculatedTerm1Fee = Math.round(totalFee * 0.4);
+        const calculatedTerm2Fee = Math.round(totalFee * 0.3);
+        const calculatedTerm3Fee = Math.round(totalFee * 0.3);
+
+        const feeStructure = await FeeStructure.createOrUpdateFeeStructure({
+          academicYear,
+          course,
+          year: parseInt(year),
+          category,
+          term1Fee: calculatedTerm1Fee,
+          term2Fee: calculatedTerm2Fee,
+          term3Fee: calculatedTerm3Fee,
+          createdBy: adminId,
+          updatedBy: adminId
+        });
+
+        results.push(feeStructure);
+        console.log(`✅ Created/updated fee structure for ${category}: ₹${totalFee}`);
+      } catch (error) {
+        console.error(`❌ Error creating fee structure for ${categoryData.category}:`, error);
+        errors.push({
+          category: categoryData.category,
+          error: error.message
+        });
+      }
+    }
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some fee structures could not be created',
+        errors: errors,
+        created: results
+      });
+    }
+
+    console.log(`✅ Bulk creation completed: ${results.length} fee structures created/updated`);
+
+    res.json({
+      success: true,
+      message: `Successfully created/updated ${results.length} fee structures`,
+      data: results
+    });
+
+  } catch (error) {
+    console.error('Error in bulk fee structure creation:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error during bulk creation'
+    });
+  }
+};
+
 // Create or update fee structure
 export const createOrUpdateFeeStructure = async (req, res) => {
   try {
     console.log('🔍 Backend: createOrUpdateFeeStructure called with body:', req.body);
     
-    const { academicYear, course, year, category, totalFee, term1Fee, term2Fee, term3Fee } = req.body;
+    const { academicYear, course, year, category, totalFee, term1Fee, term2Fee, term3Fee, categories } = req.body;
     const adminId = req.admin?._id || req.user?._id;
 
-    // Validate required fields
+    // Check if this is a bulk creation request
+    if (categories && Array.isArray(categories)) {
+      return await handleBulkFeeStructureCreation(req, res, academicYear, course, year, categories, adminId);
+    }
+
+    // Validate required fields for single creation
     if (!academicYear || !course || !year || !category) {
       return res.status(400).json({
         success: false,
