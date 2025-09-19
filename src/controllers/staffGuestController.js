@@ -1,12 +1,32 @@
 import StaffGuest from '../models/StaffGuest.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
+import axios from 'axios';
 
 // Global settings for daily rates (in-memory for now, can be moved to database later)
 let dailyRateSettings = {
   staffDailyRate: 100, // Default daily rate for staff
   lastUpdated: new Date(),
   updatedBy: null
+};
+
+// Helper function to fetch image and convert to base64
+const fetchImageAsBase64 = async (imageUrl) => {
+  try {
+    const response = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000
+    });
+    
+    const buffer = Buffer.from(response.data, 'binary');
+    const base64 = buffer.toString('base64');
+    const mimeType = response.headers['content-type'] || 'image/jpeg';
+    
+    return `data:${mimeType};base64,${base64}`;
+  } catch (error) {
+    console.error('Error fetching image as base64:', error);
+    return null;
+  }
 };
 
 // Add a new staff/guest
@@ -22,7 +42,8 @@ export const addStaffGuest = async (req, res, next) => {
       department,
       purpose,
       checkinDate,
-      checkoutDate
+      checkoutDate,
+      dailyRate
     } = req.body;
 
     // Validate required fields
@@ -31,8 +52,8 @@ export const addStaffGuest = async (req, res, next) => {
     }
 
     // Validate type
-    if (!['staff', 'guest'].includes(type)) {
-      throw createError(400, 'Type must be either "staff" or "guest"');
+    if (!['staff', 'guest', 'student'].includes(type)) {
+      throw createError(400, 'Type must be staff, guest, or student');
     }
 
     // Validate gender
@@ -55,13 +76,14 @@ export const addStaffGuest = async (req, res, next) => {
       photoUrl = await uploadToS3(req.file, 'staff-guest-photos');
     }
 
-    // Calculate charges for staff only
+    // Calculate charges for staff and students only
     let calculatedCharges = 0;
-    if (type === 'staff' && checkinDate) {
+    if (['staff', 'student'].includes(type) && checkinDate) {
       const tempStaffGuest = new StaffGuest({
         type,
         checkinDate: new Date(checkinDate),
-        checkoutDate: checkoutDate ? new Date(checkoutDate) : null
+        checkoutDate: checkoutDate ? new Date(checkoutDate) : null,
+        dailyRate: dailyRate ? parseFloat(dailyRate) : null
       });
       calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
     }
@@ -74,10 +96,11 @@ export const addStaffGuest = async (req, res, next) => {
       profession: profession.trim(),
       phoneNumber: phoneNumber.trim(),
       email: email ? email.trim() : undefined,
-      department: type === 'staff' ? (department ? department.trim() : undefined) : undefined,
+      department: ['staff', 'student'].includes(type) ? (department ? department.trim() : undefined) : undefined,
       purpose: purpose ? purpose.trim() : '',
       checkinDate: checkinDate ? new Date(checkinDate) : null,
       checkoutDate: checkoutDate ? new Date(checkoutDate) : null,
+      dailyRate: dailyRate ? parseFloat(dailyRate) : null,
       calculatedCharges,
       photo: photoUrl,
       createdBy: req.admin._id
@@ -196,7 +219,8 @@ export const updateStaffGuest = async (req, res, next) => {
       department,
       purpose,
       checkinDate,
-      checkoutDate
+      checkoutDate,
+      dailyRate
     } = req.body;
 
     const staffGuest = await StaffGuest.findById(id);
@@ -205,8 +229,8 @@ export const updateStaffGuest = async (req, res, next) => {
     }
 
     // Validate type if provided
-    if (type && !['staff', 'guest'].includes(type)) {
-      throw createError(400, 'Type must be either "staff" or "guest"');
+    if (type && !['staff', 'guest', 'student'].includes(type)) {
+      throw createError(400, 'Type must be staff, guest, or student');
     }
 
     // Validate gender if provided
@@ -248,15 +272,16 @@ export const updateStaffGuest = async (req, res, next) => {
     if (phoneNumber) staffGuest.phoneNumber = phoneNumber.trim();
     if (email !== undefined) staffGuest.email = email ? email.trim() : undefined;
     if (department !== undefined) {
-      staffGuest.department = (type || staffGuest.type) === 'staff' ? 
+      staffGuest.department = ['staff', 'student'].includes(type || staffGuest.type) ? 
         (department ? department.trim() : undefined) : undefined;
     }
     if (purpose !== undefined) staffGuest.purpose = purpose ? purpose.trim() : '';
     if (checkinDate !== undefined) staffGuest.checkinDate = checkinDate ? new Date(checkinDate) : null;
     if (checkoutDate !== undefined) staffGuest.checkoutDate = checkoutDate ? new Date(checkoutDate) : null;
+    if (dailyRate !== undefined) staffGuest.dailyRate = dailyRate ? parseFloat(dailyRate) : null;
     
-    // Recalculate charges for staff
-    if (staffGuest.type === 'staff' && staffGuest.checkinDate) {
+    // Recalculate charges for staff and students
+    if (['staff', 'student'].includes(staffGuest.type) && staffGuest.checkinDate) {
       staffGuest.calculatedCharges = staffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
     } else if (staffGuest.type === 'guest') {
       staffGuest.calculatedCharges = 0;
@@ -346,6 +371,7 @@ export const getStaffGuestStats = async (req, res, next) => {
   try {
     const totalStaff = await StaffGuest.countDocuments({ type: 'staff', isActive: true });
     const totalGuests = await StaffGuest.countDocuments({ type: 'guest', isActive: true });
+    const totalStudents = await StaffGuest.countDocuments({ type: 'student', isActive: true });
     const checkedInStaff = await StaffGuest.countDocuments({ 
       type: 'staff', 
       isActive: true,
@@ -358,16 +384,24 @@ export const getStaffGuestStats = async (req, res, next) => {
       checkInTime: { $exists: true },
       checkOutTime: null
     });
+    const checkedInStudents = await StaffGuest.countDocuments({ 
+      type: 'student', 
+      isActive: true,
+      checkInTime: { $exists: true },
+      checkOutTime: null
+    });
 
     res.json({
       success: true,
       data: {
         totalStaff,
         totalGuests,
+        totalStudents,
         checkedInStaff,
         checkedInGuests,
-        totalActive: totalStaff + totalGuests,
-        totalCheckedIn: checkedInStaff + checkedInGuests
+        checkedInStudents,
+        totalActive: totalStaff + totalGuests + totalStudents,
+        totalCheckedIn: checkedInStaff + checkedInGuests + checkedInStudents
       }
     });
   } catch (error) {
@@ -443,6 +477,15 @@ export const generateAdmitCard = async (req, res, next) => {
       throw createError(404, 'Staff/Guest not found');
     }
 
+    // Fetch the photo and convert to base64 for PDF generation
+    let photoBase64 = null;
+    if (staffGuest.photo) {
+      photoBase64 = await fetchImageAsBase64(staffGuest.photo);
+      if (!photoBase64) {
+        console.warn('Failed to fetch staff/guest photo as base64, will use placeholder');
+      }
+    }
+
     // Generate admit card data
     const admitCardData = {
       id: staffGuest._id,
@@ -456,8 +499,9 @@ export const generateAdmitCard = async (req, res, next) => {
       purpose: staffGuest.purpose,
       checkinDate: staffGuest.checkinDate,
       checkoutDate: staffGuest.checkoutDate,
+      dailyRate: staffGuest.dailyRate,
       calculatedCharges: staffGuest.calculatedCharges,
-      photo: staffGuest.photo,
+      photo: photoBase64 || staffGuest.photo, // Use base64 if available, fallback to URL
       checkInTime: staffGuest.checkInTime,
       checkOutTime: staffGuest.checkOutTime,
       isCheckedIn: staffGuest.isCheckedIn(),

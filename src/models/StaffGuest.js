@@ -8,7 +8,7 @@ const staffGuestSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['staff', 'guest'],
+    enum: ['staff', 'guest', 'student'],
     required: true
   },
   gender: {
@@ -61,6 +61,10 @@ const staffGuestSchema = new mongoose.Schema({
   checkoutDate: {
     type: Date,
     default: null
+  },
+  dailyRate: {
+    type: Number,
+    default: null // null means use default from settings
   },
   calculatedCharges: {
     type: Number,
@@ -142,12 +146,13 @@ staffGuestSchema.methods.getDayCount = function() {
   return Math.max(0, dayCount);
 };
 
-// Method to calculate charges (for staff only)
-staffGuestSchema.methods.calculateCharges = function(dailyRate = 0) {
-  if (this.type !== 'staff' || !this.checkinDate) return 0;
+// Method to calculate charges (for staff and students only)
+staffGuestSchema.methods.calculateCharges = function(defaultDailyRate = 0) {
+  if (!['staff', 'student'].includes(this.type) || !this.checkinDate) return 0;
   
   const dayCount = this.getDayCount();
-  return dayCount * dailyRate;
+  const rateToUse = this.dailyRate !== null ? this.dailyRate : defaultDailyRate;
+  return dayCount * rateToUse;
 };
 
 // Ensure virtual fields are serialized
