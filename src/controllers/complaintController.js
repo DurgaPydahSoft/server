@@ -1587,3 +1587,77 @@ export const principalGetComplaintDetails = async (req, res) => {
     });
   }
 };
+
+// Admin: Delete complaint
+export const deleteComplaint = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const adminId = req.admin ? req.admin._id : req.user._id;
+
+    console.log('🗑️ Deleting complaint:', id, 'by admin:', adminId);
+
+    // Validate complaint ID
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid complaint ID format'
+      });
+    }
+
+    // Find the complaint
+    const complaint = await Complaint.findById(id);
+
+    if (!complaint) {
+      return res.status(404).json({
+        success: false,
+        message: 'Complaint not found'
+      });
+    }
+
+    // Only allow deletion of complaints with 'Received' status
+    if (complaint.currentStatus !== 'Received') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only complaints with "Received" status can be deleted'
+      });
+    }
+
+    // Check if complaint is locked for updates
+    if (complaint.isLockedForUpdates) {
+      return res.status(400).json({
+        success: false,
+        message: 'Locked complaints cannot be deleted'
+      });
+    }
+
+    // Delete image from S3 if exists
+    if (complaint.imageUrl) {
+      try {
+        console.log('🗑️ Deleting image from S3:', complaint.imageUrl);
+        await deleteFromS3(complaint.imageUrl);
+        console.log('🗑️ Image deleted successfully from S3');
+      } catch (deleteError) {
+        console.error('🗑️ Error deleting image from S3:', deleteError);
+        // Continue with complaint deletion even if image deletion fails
+      }
+    }
+
+    // Delete the complaint from database
+    await Complaint.findByIdAndDelete(id);
+
+    console.log('🗑️ Complaint deleted successfully:', id);
+
+    res.json({
+      success: true,
+      message: 'Complaint deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('🗑️ Error deleting complaint:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete complaint',
+      error: error.message
+    });
+  }
+};

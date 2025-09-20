@@ -21,7 +21,8 @@ import {
   wardenGetTimeline,
   listPrincipalComplaints,
   principalGetTimeline,
-  principalGetComplaintDetails
+  principalGetComplaintDetails,
+  deleteComplaint
 } from '../controllers/complaintController.js';
 import multer from 'multer';
 
@@ -69,6 +70,7 @@ router.get('/admin/ai/stats', adminAuth, getAIStats);
 router.put('/admin/members/:memberId/efficiency', adminAuth, updateMemberEfficiency);
 router.post('/admin/ai/quick-setup', adminAuth, quickAISetup);
 router.post('/admin/ai/toggle', adminAuth, toggleAI);
+router.delete('/admin/:id', adminAuth, deleteComplaint);
 
 // Parameterized routes (must come last)
 router.get('/:id', authenticateStudent, getComplaintDetails);
