@@ -118,12 +118,13 @@ feeReminderSchema.index({ academicYear: 1 });
 feeReminderSchema.index({ currentReminder: 1 });
 feeReminderSchema.index({ 'feeStatus.term1': 1, 'feeStatus.term2': 1, 'feeStatus.term3': 1 });
 
-// Method to calculate reminder dates based on academic calendar
+// Method to calculate reminder dates based on academic calendar and configurable term due dates
 feeReminderSchema.methods.calculateReminderDates = async function() {
   try {
     // Try to get academic calendar for semester-1 start date
     const AcademicCalendar = mongoose.model('AcademicCalendar');
     const User = mongoose.model('User');
+    const ReminderConfig = mongoose.model('ReminderConfig');
     
     // Get student details to find course
     const student = await User.findById(this.student).populate('course');
@@ -146,18 +147,24 @@ feeReminderSchema.methods.calculateReminderDates = async function() {
       console.log('📅 Using academic calendar for reminder dates');
       const semesterStartDate = new Date(academicCalendar.startDate);
       
-      // Calculate reminder dates based on semester-1 start date
-      this.firstReminderDate = new Date(semesterStartDate);
-      this.firstReminderDate.setDate(semesterStartDate.getDate() + 5);
+      // Try to get configurable term due dates
+      const termDueDates = await ReminderConfig.calculateTermDueDates(
+        student.course._id,
+        currentAcademicYear,
+        student.year,
+        semesterStartDate
+      );
       
-      this.secondReminderDate = new Date(semesterStartDate);
-      this.secondReminderDate.setDate(semesterStartDate.getDate() + 90);
+      // Calculate reminder dates based on configurable term due dates
+      this.firstReminderDate = new Date(termDueDates.term1);
+      this.secondReminderDate = new Date(termDueDates.term2);
+      this.thirdReminderDate = new Date(termDueDates.term3);
       
-      this.thirdReminderDate = new Date(semesterStartDate);
-      this.thirdReminderDate.setDate(semesterStartDate.getDate() + 210);
-      
-      console.log('📅 Reminder dates calculated from academic calendar:', {
+      console.log('📅 Reminder dates calculated from configurable term due dates:', {
         semesterStart: semesterStartDate,
+        term1Due: termDueDates.term1,
+        term2Due: termDueDates.term2,
+        term3Due: termDueDates.term3,
         firstReminder: this.firstReminderDate,
         secondReminder: this.secondReminderDate,
         thirdReminder: this.thirdReminderDate
@@ -330,9 +337,29 @@ feeReminderSchema.statics.createForStudent = async function(studentId, registrat
     }
   });
   
-  // Calculate reminder dates based on academic calendar
+  // Calculate reminder dates based on academic calendar and configurable term due dates
   await feeReminder.calculateReminderDates();
   return await feeReminder.save();
+};
+
+// Static method to recalculate all reminder dates when configurations change
+feeReminderSchema.statics.recalculateAllReminderDates = async function() {
+  try {
+    const feeReminders = await this.find({ isActive: true });
+    let recalculatedCount = 0;
+    
+    for (const reminder of feeReminders) {
+      await reminder.calculateReminderDates();
+      await reminder.save();
+      recalculatedCount++;
+    }
+    
+    console.log(`✅ Recalculated reminder dates for ${recalculatedCount} students`);
+    return { recalculatedCount, total: feeReminders.length };
+  } catch (error) {
+    console.error('Error recalculating reminder dates:', error);
+    throw error;
+  }
 };
 
 const FeeReminder = mongoose.model('FeeReminder', feeReminderSchema);

@@ -3,6 +3,68 @@ import User from '../models/User.js';
 import Notification from '../models/Notification.js';
 import FeeStructure from '../models/FeeStructure.js';
 import { sendFeeReminderEmail } from '../utils/emailService.js';
+import { sendSMS } from '../utils/smsService.js';
+
+// SMS template for fee reminders
+const FEE_REMINDER_SMS_TEMPLATE = "earliest to avoid late fee	Dear {#var#}, your Hostel Term {#var#} Fee of {#var#} is due on {#var#}. Kindly pay at the earliest to avoid late fee. - Pydah Hostel";
+const FEE_REMINDER_SMS_TEMPLATE_ID = "1707175825997463253";
+
+// Helper function to send fee reminder SMS
+const sendFeeReminderSMS = async (studentPhone, studentName, term, amount, dueDate) => {
+  try {
+    if (!studentPhone) {
+      console.log('📱 No phone number for student:', studentName);
+      return { success: false, reason: 'No phone number' };
+    }
+
+    // Format the amount with currency symbol
+    const formattedAmount = `₹${amount}`;
+    
+    // Format the due date
+    const formattedDueDate = new Date(dueDate).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+
+    // Replace template variables
+    const message = FEE_REMINDER_SMS_TEMPLATE
+      .replace('{#var#}', studentName)        // var1 - student name
+      .replace('{#var#}', term)               // var2 - term1 or term2 or term3
+      .replace('{#var#}', formattedAmount)    // var3 - amount pending
+      .replace('{#var#}', formattedDueDate);  // var4 - due date
+
+    const params = {
+      apikey: process.env.BULKSMS_API_KEY || "7c9c967a-4ce9-4748-9dc7-d2aaef847275",
+      sender: process.env.BULKSMS_SENDER_ID || "PYDAHK",
+      number: studentPhone,
+      message: message,
+      templateid: FEE_REMINDER_SMS_TEMPLATE_ID
+    };
+
+    console.log('📱 Fee reminder SMS params:', {
+      message: params.message,
+      templateid: params.templateid,
+      studentName,
+      term,
+      amount: formattedAmount,
+      dueDate: formattedDueDate
+    });
+
+    const result = await sendSMS(studentPhone, message, { templateId: FEE_REMINDER_SMS_TEMPLATE_ID });
+    
+    if (result.success) {
+      console.log(`✅ Fee reminder SMS sent to: ${studentPhone} (${studentName})`);
+      return { success: true, messageId: result.messageId };
+    } else {
+      console.log(`❌ Failed to send fee reminder SMS to: ${studentPhone} (${studentName})`);
+      return { success: false, reason: 'SMS sending failed' };
+    }
+  } catch (error) {
+    console.error(`📱 Error sending fee reminder SMS to ${studentPhone}:`, error);
+    return { success: false, reason: error.message };
+  }
+};
 
 // Get fee reminders for a student
 export const getStudentFeeReminders = async (req, res) => {
@@ -484,6 +546,47 @@ export const processAutomatedReminders = async () => {
         } else {
           console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
         }
+
+        // Send SMS notification if student has phone number
+        if (feeReminder.student.studentPhone) {
+          try {
+            // Determine which term and amount to send SMS for
+            let term, amount, dueDate;
+            
+            if (reminderNumber === 1) {
+              term = 'Term 1';
+              amount = feeReminder.feeAmounts.term1;
+              dueDate = feeReminder.firstReminderDate;
+            } else if (reminderNumber === 2) {
+              term = 'Term 2';
+              amount = feeReminder.feeAmounts.term2;
+              dueDate = feeReminder.secondReminderDate;
+            } else if (reminderNumber === 3) {
+              term = 'Term 3';
+              amount = feeReminder.feeAmounts.term3;
+              dueDate = feeReminder.thirdReminderDate;
+            }
+
+            const smsResult = await sendFeeReminderSMS(
+              feeReminder.student.studentPhone,
+              feeReminder.student.name,
+              term,
+              amount,
+              dueDate
+            );
+
+            if (smsResult.success) {
+              console.log(`📱 Fee reminder ${reminderNumber} SMS sent to: ${feeReminder.student.studentPhone}`);
+            } else {
+              console.log(`📱 Failed to send fee reminder ${reminderNumber} SMS to ${feeReminder.student.studentPhone}: ${smsResult.reason}`);
+            }
+          } catch (smsError) {
+            console.error(`📱 Error sending fee reminder ${reminderNumber} SMS to ${feeReminder.student.studentPhone}:`, smsError);
+            // Continue processing even if SMS fails
+          }
+        } else {
+          console.log(`📱 No phone number for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
+        }
       }
     }
     
@@ -568,7 +671,7 @@ export const getFeeReminderStats = async (req, res) => {
 // Send manual reminder to specific student
 export const sendManualReminder = async (req, res) => {
   try {
-    const { studentId, reminderType = 'manual', message, sendEmail = true, sendPushNotification = true } = req.body;
+    const { studentId, reminderType = 'manual', message, sendEmail = true, sendPushNotification = true, sendSMS = true } = req.body;
     const adminId = req.admin?._id || req.user?._id;
     
     console.log('📤 Sending manual reminder to student:', studentId);
@@ -577,7 +680,7 @@ export const sendManualReminder = async (req, res) => {
     let feeReminder = await FeeReminder.findOne({ 
       student: studentId, 
       isActive: true 
-    }).populate('student', 'name rollNumber email');
+    }).populate('student', 'name rollNumber email studentPhone');
     
     if (!feeReminder) {
       console.log('📝 No fee reminder found, creating one for student:', studentId);
@@ -602,7 +705,7 @@ export const sendManualReminder = async (req, res) => {
       );
       
       // Populate the student data
-      await feeReminder.populate('student', 'name rollNumber email');
+      await feeReminder.populate('student', 'name rollNumber email studentPhone');
     }
     
     // Create notification for the student (only if push notification is enabled)
@@ -656,6 +759,50 @@ export const sendManualReminder = async (req, res) => {
     } else if (sendEmail && !feeReminder.student.email) {
       console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
     }
+
+    // Send SMS notification if student has phone number and SMS is enabled
+    let smsSent = false;
+    if (sendSMS && feeReminder.student.studentPhone) {
+      try {
+        // Determine which term and amount to send SMS for (use current reminder or 1 for manual)
+        const reminderNumber = feeReminder.currentReminder > 0 ? feeReminder.currentReminder : 1;
+        let term, amount, dueDate;
+        
+        if (reminderNumber === 1) {
+          term = 'Term 1';
+          amount = feeReminder.feeAmounts.term1;
+          dueDate = feeReminder.firstReminderDate;
+        } else if (reminderNumber === 2) {
+          term = 'Term 2';
+          amount = feeReminder.feeAmounts.term2;
+          dueDate = feeReminder.secondReminderDate;
+        } else if (reminderNumber === 3) {
+          term = 'Term 3';
+          amount = feeReminder.feeAmounts.term3;
+          dueDate = feeReminder.thirdReminderDate;
+        }
+
+        const smsResult = await sendFeeReminderSMS(
+          feeReminder.student.studentPhone,
+          feeReminder.student.name,
+          term,
+          amount,
+          dueDate
+        );
+
+        if (smsResult.success) {
+          smsSent = true;
+          console.log(`📱 Manual fee reminder SMS sent to: ${feeReminder.student.studentPhone}`);
+        } else {
+          console.log(`📱 Failed to send manual fee reminder SMS to ${feeReminder.student.studentPhone}: ${smsResult.reason}`);
+        }
+      } catch (smsError) {
+        console.error(`📱 Error sending manual fee reminder SMS to ${feeReminder.student.studentPhone}:`, smsError);
+        // Continue processing even if SMS fails
+      }
+    } else if (sendSMS && !feeReminder.student.studentPhone) {
+      console.log(`📱 No phone number for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
+    }
     
     // Update reminder status
     feeReminder.currentReminder = Math.max(feeReminder.currentReminder, 1);
@@ -673,7 +820,8 @@ export const sendManualReminder = async (req, res) => {
         studentRollNumber: feeReminder.student.rollNumber,
         reminderType: reminderType,
         emailSent: emailSent,
-        pushSent: !!notification
+        pushSent: !!notification,
+        smsSent: smsSent
       }
     });
     
@@ -689,7 +837,7 @@ export const sendManualReminder = async (req, res) => {
 // Send bulk reminders to multiple students
 export const sendBulkReminders = async (req, res) => {
   try {
-    const { studentIds, message, sendEmail = true, sendPushNotification = true } = req.body;
+    const { studentIds, message, sendEmail = true, sendPushNotification = true, sendSMS = true } = req.body;
     const adminId = req.admin?._id || req.user?._id;
     
     console.log('📤 Sending bulk reminders to:', studentIds.length, 'students');
@@ -794,6 +942,46 @@ export const sendBulkReminders = async (req, res) => {
           } catch (emailError) {
             console.error(`📧 Failed to send bulk fee reminder email to ${feeReminder.student.email}:`, emailError);
             // Continue processing even if email fails
+          }
+        }
+
+        // Send SMS notification if student has phone number and SMS is enabled
+        if (sendSMS && feeReminder.student.studentPhone) {
+          try {
+            // Determine which term and amount to send SMS for (use current reminder or 1 for bulk)
+            const reminderNumber = feeReminder.currentReminder > 0 ? feeReminder.currentReminder : 1;
+            let term, amount, dueDate;
+            
+            if (reminderNumber === 1) {
+              term = 'Term 1';
+              amount = feeReminder.feeAmounts.term1;
+              dueDate = feeReminder.firstReminderDate;
+            } else if (reminderNumber === 2) {
+              term = 'Term 2';
+              amount = feeReminder.feeAmounts.term2;
+              dueDate = feeReminder.secondReminderDate;
+            } else if (reminderNumber === 3) {
+              term = 'Term 3';
+              amount = feeReminder.feeAmounts.term3;
+              dueDate = feeReminder.thirdReminderDate;
+            }
+
+            const smsResult = await sendFeeReminderSMS(
+              feeReminder.student.studentPhone,
+              feeReminder.student.name,
+              term,
+              amount,
+              dueDate
+            );
+
+            if (smsResult.success) {
+              console.log(`📱 Bulk fee reminder SMS sent to: ${feeReminder.student.studentPhone}`);
+            } else {
+              console.log(`📱 Failed to send bulk fee reminder SMS to ${feeReminder.student.studentPhone}: ${smsResult.reason}`);
+            }
+          } catch (smsError) {
+            console.error(`📱 Error sending bulk fee reminder SMS to ${feeReminder.student.studentPhone}:`, smsError);
+            // Continue processing even if SMS fails
           }
         }
         
@@ -1154,7 +1342,7 @@ const batchSyncFeeStatusWithPayments = async (feeReminders) => {
       });
     }
     
-    console.log(`✅ Batch synced fee status for ${feeReminders.length} reminders`);
+    // console.log(`✅ Batch synced fee status for ${feeReminders.length} reminders`);
   } catch (error) {
     console.error('Error in batch sync:', error);
     throw error;
