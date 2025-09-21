@@ -4,6 +4,11 @@ import mongoose from 'mongoose';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 
 // Import routes
@@ -154,7 +159,7 @@ app.get('/api/health', (req, res) => {
 // Basic route for testing (no authentication required)
 app.get('/', (req, res) => {
   console.log('🌐 Root endpoint accessed');
-  res.json({ message: 'Welcome to Hostel Management System API' });
+  res.sendFile(path.resolve(__dirname, '../src/html-templates/root-endpoint.html'));
 });
 
 
