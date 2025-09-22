@@ -231,8 +231,186 @@ export const processPayment = async (req, res) => {
       }
     }
 
+    // Check if this is a hostel fee payment or electricity bill payment
+    const pendingPayment = await Payment.findOne({ 
+      cashfreeOrderId: order_id,
+      status: 'pending'
+    });
+    
+    if (pendingPayment) {
+      console.log('🔍 Processing hostel fee payment for order:', order_id);
+      
+      // Process hostel fee payment
+      if (paymentStatus === 'success') {
+        // Get student details
+        const student = await User.findById(pendingPayment.studentId);
+        if (!student) {
+          console.error('❌ Student not found for payment:', pendingPayment.studentId);
+          return res.status(404).json({
+            success: false,
+            message: 'Student not found'
+          });
+        }
+
+        // Get fee structure
+        const feeStructure = await FeeStructure.getFeeStructure(
+          pendingPayment.academicYear, 
+          student.course, 
+          student.year, 
+          student.category
+        );
+        
+        if (!feeStructure) {
+          console.error('❌ Fee structure not found for student');
+          return res.status(404).json({
+            success: false,
+            message: 'Fee structure not found'
+          });
+        }
+
+        // Get existing payments for auto-deduction calculation
+        const existingPayments = await Payment.find({
+          studentId: pendingPayment.studentId,
+          academicYear: pendingPayment.academicYear,
+          paymentType: 'hostel_fee',
+          status: 'success'
+        });
+
+        // Calculate current balances for each term
+        const termBalances = {
+          term1: feeStructure.term1Fee - existingPayments.filter(p => p.term === 'term1').reduce((sum, p) => sum + p.amount, 0),
+          term2: feeStructure.term2Fee - existingPayments.filter(p => p.term === 'term2').reduce((sum, p) => sum + p.amount, 0),
+          term3: feeStructure.term3Fee - existingPayments.filter(p => p.term === 'term3').reduce((sum, p) => sum + p.amount, 0)
+        };
+
+        // Apply auto-deduction logic (same as admin payments)
+        let remainingAmount = pendingPayment.amount;
+        const paymentRecords = [];
+        
+        // Process term1 first
+        if (remainingAmount > 0 && termBalances.term1 > 0) {
+          const term1Payment = Math.min(remainingAmount, termBalances.term1);
+          const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+          const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+          
+          const term1PaymentRecord = new Payment({
+            studentId: pendingPayment.studentId,
+            amount: term1Payment,
+            paymentMethod: 'Online',
+            notes: 'Online payment via Cashfree',
+            collectedBy: pendingPayment.studentId,
+            collectedByName: student.name,
+            paymentType: 'hostel_fee',
+            term: 'term1',
+            academicYear: pendingPayment.academicYear,
+            receiptNumber: receiptNumber,
+            transactionId: transactionId,
+            cashfreeOrderId: order_id,
+            cashfreePaymentId: payment_id,
+            utrNumber: payment_id || `CF_${order_id}`,
+            status: 'success',
+            paymentDate: new Date()
+          });
+          
+          await term1PaymentRecord.save();
+          paymentRecords.push(term1PaymentRecord);
+          remainingAmount -= term1Payment;
+        }
+        
+        // Process term2 if there's remaining amount
+        if (remainingAmount > 0 && termBalances.term2 > 0) {
+          const term2Payment = Math.min(remainingAmount, termBalances.term2);
+          const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+          const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+          
+          const term2PaymentRecord = new Payment({
+            studentId: pendingPayment.studentId,
+            amount: term2Payment,
+            paymentMethod: 'Online',
+            notes: 'Online payment via Cashfree',
+            collectedBy: pendingPayment.studentId,
+            collectedByName: student.name,
+            paymentType: 'hostel_fee',
+            term: 'term2',
+            academicYear: pendingPayment.academicYear,
+            receiptNumber: receiptNumber,
+            transactionId: transactionId,
+            cashfreeOrderId: order_id,
+            cashfreePaymentId: payment_id,
+            utrNumber: payment_id || `CF_${order_id}`,
+            status: 'success',
+            paymentDate: new Date()
+          });
+          
+          await term2PaymentRecord.save();
+          paymentRecords.push(term2PaymentRecord);
+          remainingAmount -= term2Payment;
+        }
+        
+        // Process term3 if there's remaining amount
+        if (remainingAmount > 0 && termBalances.term3 > 0) {
+          const term3Payment = Math.min(remainingAmount, termBalances.term3);
+          const receiptNumber = `HFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+          const transactionId = `HFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+          
+          const term3PaymentRecord = new Payment({
+            studentId: pendingPayment.studentId,
+            amount: term3Payment,
+            paymentMethod: 'Online',
+            notes: 'Online payment via Cashfree',
+            collectedBy: pendingPayment.studentId,
+            collectedByName: student.name,
+            paymentType: 'hostel_fee',
+            term: 'term3',
+            academicYear: pendingPayment.academicYear,
+            receiptNumber: receiptNumber,
+            transactionId: transactionId,
+            cashfreeOrderId: order_id,
+            cashfreePaymentId: payment_id,
+            utrNumber: payment_id || `CF_${order_id}`,
+            status: 'success',
+            paymentDate: new Date()
+          });
+          
+          await term3PaymentRecord.save();
+          paymentRecords.push(term3PaymentRecord);
+          remainingAmount -= term3Payment;
+        }
+
+        // Delete the pending payment record
+        await Payment.findByIdAndDelete(pendingPayment._id);
+
+        // Send notification to student
+        try {
+          await notificationService.sendPaymentSuccessNotification(
+            student._id,
+            pendingPayment.amount,
+            `Hostel Fee - ${pendingPayment.academicYear}`
+          );
+        } catch (notificationError) {
+          console.error('Error sending payment success notification:', notificationError);
+        }
+
+        console.log('✅ Hostel fee payment processed successfully:', { order_id, paymentRecords: paymentRecords.length });
+      } else {
+        // Payment failed or cancelled - update status
+        pendingPayment.status = paymentStatus === 'failed' ? 'failed' : 'cancelled';
+        pendingPayment.failureReason = paymentStatus === 'failed' ? 'Payment failed' : 'Payment cancelled';
+        await pendingPayment.save();
+        
+        console.log('❌ Hostel fee payment failed/cancelled:', { order_id, status: paymentStatus });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Hostel fee payment processed successfully'
+      });
+    }
+
+    // If not a hostel fee payment, process as electricity bill payment
+    console.log('🔍 Processing electricity bill payment for order:', order_id);
+    
     // Find the bill by order ID (stored in room.electricityBills)
-    console.log('🔍 Looking for room with cashfreeOrderId:', order_id);
     const room = await Room.findOne({ 
       'electricityBills.cashfreeOrderId': order_id 
     });
@@ -749,6 +927,165 @@ export const cancelPayment = async (req, res) => {
 };
 
 // ==================== HOSTEL FEE PAYMENT FUNCTIONS ====================
+
+// Initiate hostel fee payment (Student function)
+export const initiateHostelFeePayment = async (req, res) => {
+  try {
+    const { amount, academicYear } = req.body;
+    const studentId = req.user._id;
+
+    console.log('💰 Initiating hostel fee payment for student:', studentId, 'amount:', amount, 'academicYear:', academicYear);
+
+    // Validate required fields
+    if (!amount || !academicYear) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount and academic year are required'
+      });
+    }
+
+    // Validate amount
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0'
+      });
+    }
+
+    // Check if Cashfree is configured
+    if (!cashfreeService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Payment service is not configured. Please contact administrator.'
+      });
+    }
+
+    // Get student details
+    const student = await User.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Get fee structure for student
+    const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.year, student.category);
+    if (!feeStructure) {
+      return res.status(404).json({
+        success: false,
+        message: 'Fee structure not found for your course and category'
+      });
+    }
+
+    // Get existing payments for this student and academic year
+    const existingPayments = await Payment.find({
+      studentId: studentId,
+      academicYear: academicYear,
+      paymentType: 'hostel_fee',
+      status: 'success'
+    });
+
+    // Calculate current balances for each term
+    const termBalances = {
+      term1: feeStructure.term1Fee - existingPayments.filter(p => p.term === 'term1').reduce((sum, p) => sum + p.amount, 0),
+      term2: feeStructure.term2Fee - existingPayments.filter(p => p.term === 'term2').reduce((sum, p) => sum + p.amount, 0),
+      term3: feeStructure.term3Fee - existingPayments.filter(p => p.term === 'term3').reduce((sum, p) => sum + p.amount, 0)
+    };
+
+    // Calculate total remaining balance
+    const totalRemainingBalance = Object.values(termBalances).reduce((sum, balance) => sum + Math.max(0, balance), 0);
+
+    // Validate payment amount against remaining balance
+    if (amount > totalRemainingBalance) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment amount (₹${amount}) cannot exceed remaining balance (₹${totalRemainingBalance})`
+      });
+    }
+
+    // Check for duplicate payments (within last 5 minutes)
+    const recentPayment = await Payment.findOne({
+      studentId: studentId,
+      academicYear: academicYear,
+      paymentType: 'hostel_fee',
+      status: 'pending',
+      createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+    });
+
+    if (recentPayment) {
+      return res.status(400).json({
+        success: false,
+        message: 'A payment is already in progress. Please wait before making another payment.'
+      });
+    }
+
+    // Generate unique order ID
+    const orderId = `HOSTEL_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Generate order data for Cashfree
+    const orderData = cashfreeService.generateHostelFeeOrderData({
+      orderId: orderId,
+      amount: amount,
+      studentName: student.name,
+      studentEmail: student.email,
+      studentPhone: student.studentPhone || '9999999999',
+      academicYear: academicYear,
+      studentId: studentId
+    });
+
+    // Create order with Cashfree
+    const cashfreeResult = await cashfreeService.createOrder(orderData, null);
+
+    if (!cashfreeResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to initiate payment',
+        error: cashfreeResult.error
+      });
+    }
+
+    // Create pending payment record for tracking
+    const pendingPayment = new Payment({
+      studentId: studentId,
+      amount: amount,
+      paymentMethod: 'Online',
+      paymentType: 'hostel_fee',
+      academicYear: academicYear,
+      cashfreeOrderId: orderId,
+      status: 'pending',
+      paymentDate: new Date()
+    });
+
+    await pendingPayment.save();
+
+    console.log('✅ Hostel fee payment initiated successfully:', orderId);
+
+    res.status(200).json({
+      success: true,
+      message: 'Payment initiated successfully',
+      data: {
+        paymentId: pendingPayment._id,
+        orderId: orderId,
+        amount: amount,
+        paymentSessionId: cashfreeResult.data.payment_session_id,
+        paymentUrl: cashfreeResult.data.payment_link,
+        orderStatus: cashfreeResult.data.order_status,
+        academicYear: academicYear,
+        termBalances: termBalances,
+        totalRemainingBalance: totalRemainingBalance
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Error initiating hostel fee payment:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to initiate payment',
+      error: error.message
+    });
+  }
+};
 
 // Record hostel fee payment (Admin function)
 // Record electricity bill payment (Admin function)

@@ -234,6 +234,58 @@ class CashfreeService {
     }
   }
 
+  // Generate order data for hostel fee payment
+  generateHostelFeeOrderData(paymentData) {
+    const {
+      orderId,
+      amount,
+      studentName,
+      studentEmail,
+      studentPhone,
+      academicYear,
+      studentId
+    } = paymentData;
+
+    console.log('🔧 generateHostelFeeOrderData called with:', paymentData);
+
+    // Generate a valid customer_id (alphanumeric with underscores/hyphens only, max 50 chars)
+    const emailPrefix = studentEmail.split('@')[0]; // Get part before @
+    const shortTimestamp = Date.now().toString().slice(-6); // Last 6 digits
+    const validCustomerId = `cust_${emailPrefix}_${shortTimestamp}`;
+    
+    // Ensure it's within 50 character limit
+    const finalCustomerId = validCustomerId.length > 50 
+      ? validCustomerId.substring(0, 50) 
+      : validCustomerId;
+
+    // Clean URLs to prevent double slashes
+    const cleanFrontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const cleanBackendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').replace(/\/$/, '');
+
+    return {
+      order_id: orderId,
+      order_amount: amount,
+      order_currency: 'INR',
+      customer_details: {
+        customer_id: finalCustomerId,
+        customer_name: studentName,
+        customer_email: studentEmail,
+        customer_phone: studentPhone
+      },
+      order_meta: {
+        return_url: `${cleanFrontendUrl}/student/hostel-fee?payment_success=true&order_id={order_id}`,
+        notify_url: `${cleanBackendUrl}/api/payments/webhook`,
+        payment_methods: 'cc,dc,upi,nb,app'
+      },
+      order_note: `Hostel fee payment for Academic Year ${academicYear}`,
+      order_tags: {
+        student_id: studentId,
+        academic_year: academicYear,
+        payment_type: 'hostel_fee'
+      }
+    };
+  }
+
   // Generate order data for electricity bill payment
   generateOrderData(paymentData) {
     const {

@@ -9,6 +9,7 @@ import {
   cancelPayment,
   verifyPayment,
   // Hostel fee payment functions
+  initiateHostelFeePayment,
   recordHostelFeePayment,
   getHostelFeePayments,
   getHostelFeePaymentHistory,
@@ -23,6 +24,7 @@ const router = express.Router();
 
 // Student payment routes
 router.post('/initiate', authenticateStudent, initiatePayment);
+router.post('/hostel-fee/initiate', authenticateStudent, initiateHostelFeePayment);
 router.get('/status/:billId', authenticateStudent, getPaymentStatus);
 router.post('/verify/:paymentId', authenticateStudent, verifyPayment);
 router.get('/history', authenticateStudent, getPaymentHistory);
