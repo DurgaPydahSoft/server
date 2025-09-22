@@ -541,6 +541,17 @@ export const getStudentRoomBills = async (req, res, next) => {
           status: 'success'
         });
         
+        console.log('🔍 Checking payment for bill:', bill._id, 'student:', _id);
+        console.log('🔍 Payment found:', !!payment);
+        if (payment) {
+          console.log('🔍 Payment details:', {
+            paymentId: payment._id,
+            amount: payment.amount,
+            status: payment.status,
+            paymentDate: payment.paymentDate
+          });
+        }
+        
         if (payment) {
           paymentStatus = 'paid';
           paymentId = payment._id;
