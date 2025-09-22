@@ -252,6 +252,7 @@ export const processPayment = async (req, res) => {
 
     switch (order_status) {
       case 'PAID':
+      case 'SUCCESS':
         paymentStatus = 'success';
         break;
       case 'EXPIRED':
@@ -333,8 +334,10 @@ export const processPayment = async (req, res) => {
     }
 
     // Update room bill payment status
-    room.electricityBills[billIndex].paymentStatus = paymentStatus === 'success' ? 'paid' : 'unpaid';
+    room.electricityBills[billIndex].paymentStatus = paymentStatus === 'success' ? 'paid' : paymentStatus;
     await room.save();
+    
+    console.log('✅ Bill status updated to:', room.electricityBills[billIndex].paymentStatus);
 
     console.log('✅ Payment processed successfully:', { order_id, status: paymentStatus });
 
@@ -399,16 +402,35 @@ export const getPaymentStatus = async (req, res) => {
       status: 'success'
     });
 
+    // Calculate student's share
+    const studentsInRoom = await User.countDocuments({
+      roomNumber: student.roomNumber,
+      gender: student.gender,
+      category: student.category,
+      role: 'student',
+      hostelStatus: 'Active'
+    });
+
+    const studentAmount = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : bill.total;
+
     res.json({
       success: true,
       data: {
         billId: billId,
         status: payment ? 'success' : (bill.paymentStatus || 'unpaid'),
-        amount: payment?.amount || 0,
+        amount: payment?.amount || studentAmount,
         orderId: bill.cashfreeOrderId,
         paymentId: payment?._id,
         paidAt: payment?.paymentDate || bill.paidAt,
-        createdAt: bill.createdAt
+        createdAt: bill.createdAt,
+        billMonth: bill.month,
+        roomNumber: room.roomNumber,
+        totalBill: bill.total,
+        studentShare: studentAmount,
+        consumption: bill.consumption,
+        rate: bill.rate,
+        startUnits: bill.startUnits,
+        endUnits: bill.endUnits
       }
     });
 
