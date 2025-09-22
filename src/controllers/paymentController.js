@@ -240,6 +240,27 @@ export const processPayment = async (req, res) => {
     if (pendingPayment) {
       console.log('🔍 Processing hostel fee payment for order:', order_id);
       
+      // Determine payment status based on order status
+      let paymentStatus = 'pending';
+      let failureReason = null;
+
+      switch (order_status) {
+        case 'PAID':
+        case 'SUCCESS':
+          paymentStatus = 'success';
+          break;
+        case 'EXPIRED':
+          paymentStatus = 'cancelled';
+          failureReason = 'Payment expired';
+          break;
+        case 'FAILED':
+          paymentStatus = 'failed';
+          failureReason = 'Payment failed';
+          break;
+        default:
+          paymentStatus = 'pending';
+      }
+      
       // Process hostel fee payment
       if (paymentStatus === 'success') {
         // Get student details
@@ -394,11 +415,11 @@ export const processPayment = async (req, res) => {
         console.log('✅ Hostel fee payment processed successfully:', { order_id, paymentRecords: paymentRecords.length });
       } else {
         // Payment failed or cancelled - update status
-        pendingPayment.status = paymentStatus === 'failed' ? 'failed' : 'cancelled';
-        pendingPayment.failureReason = paymentStatus === 'failed' ? 'Payment failed' : 'Payment cancelled';
+        pendingPayment.status = paymentStatus;
+        pendingPayment.failureReason = failureReason;
         await pendingPayment.save();
         
-        console.log('❌ Hostel fee payment failed/cancelled:', { order_id, status: paymentStatus });
+        console.log('❌ Hostel fee payment failed/cancelled:', { order_id, status: paymentStatus, reason: failureReason });
       }
 
       return res.status(200).json({
