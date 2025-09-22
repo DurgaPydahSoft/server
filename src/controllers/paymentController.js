@@ -417,7 +417,7 @@ export const getPaymentStatus = async (req, res) => {
       success: true,
       data: {
         billId: billId,
-        status: payment ? 'success' : (bill.paymentStatus || 'unpaid'),
+        status: payment ? 'success' : (bill.paymentStatus === 'paid' ? 'success' : bill.paymentStatus || 'unpaid'),
         amount: payment?.amount || studentAmount,
         orderId: bill.cashfreeOrderId,
         paymentId: payment?._id,
