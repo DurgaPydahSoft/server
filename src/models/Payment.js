@@ -39,17 +39,17 @@ const paymentSchema = new mongoose.Schema({
   },
   utrNumber: {
     type: String,
-    required: function() { return this.paymentMethod === 'Online'; },
+    required: function() { return this.paymentMethod === 'Online' && this.status === 'success'; },
     trim: true
   },
   collectedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: function() { return this.status === 'success'; }
   },
   collectedByName: {
     type: String,
-    required: true
+    required: function() { return this.status === 'success'; }
   },
   
   // Payment type to distinguish between electricity and hostel fees
@@ -104,7 +104,7 @@ const paymentSchema = new mongoose.Schema({
   // Fields for hostel fee payments (optional for electricity)
   term: {
     type: String,
-    required: function() { return this.paymentType === 'hostel_fee'; },
+    required: function() { return this.paymentType === 'hostel_fee' && this.status === 'success'; },
     enum: ['term1', 'term2', 'term3'],
     index: true
   },
@@ -115,13 +115,13 @@ const paymentSchema = new mongoose.Schema({
   },
   receiptNumber: {
     type: String,
-    required: function() { return this.paymentType === 'hostel_fee'; },
+    required: function() { return this.paymentType === 'hostel_fee' && this.status === 'success'; },
     unique: true,
     sparse: true
   },
   transactionId: {
     type: String,
-    required: function() { return this.paymentType === 'hostel_fee'; },
+    required: function() { return this.paymentType === 'hostel_fee' && this.status === 'success'; },
     unique: true,
     sparse: true
   }

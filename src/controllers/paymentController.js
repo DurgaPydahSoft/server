@@ -1054,7 +1054,8 @@ export const initiateHostelFeePayment = async (req, res) => {
       academicYear: academicYear,
       cashfreeOrderId: orderId,
       status: 'pending',
-      paymentDate: new Date()
+      paymentDate: new Date(),
+      notes: 'Online payment via Cashfree - Pending'
     });
 
     await pendingPayment.save();
