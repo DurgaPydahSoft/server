@@ -49,7 +49,9 @@ export const initiatePayment = async (req, res) => {
     }
 
     // Check if bill is already paid
+    console.log('🔍 Bill payment status:', bill.paymentStatus);
     if (bill.paymentStatus === 'paid') {
+      console.log('❌ Bill already marked as paid in room');
       return res.status(400).json({
         success: false,
         message: 'This bill has already been paid'
@@ -63,11 +65,33 @@ export const initiatePayment = async (req, res) => {
       status: 'success'
     });
 
+    console.log('🔍 Existing payment found:', !!existingPayment);
     if (existingPayment) {
-        return res.status(400).json({
-          success: false,
-          message: 'You have already paid for this bill'
-        });
+      console.log('❌ Payment record already exists for this student');
+      console.log('🔍 Payment details:', {
+        paymentId: existingPayment._id,
+        amount: existingPayment.amount,
+        status: existingPayment.status,
+        paymentDate: existingPayment.paymentDate
+      });
+      
+      // If payment exists but bill status is not updated, fix it
+      if (bill.paymentStatus !== 'paid') {
+        console.log('🔧 Fixing bill status - updating to paid');
+        const billIndex = room.electricityBills.findIndex(b => b._id.toString() === billId);
+        if (billIndex !== -1) {
+          room.electricityBills[billIndex].paymentStatus = 'paid';
+          room.electricityBills[billIndex].paymentId = existingPayment._id;
+          room.electricityBills[billIndex].paidAt = existingPayment.paymentDate;
+          await room.save();
+          console.log('✅ Bill status updated to paid');
+        }
+      }
+      
+      return res.status(400).json({
+        success: false,
+        message: 'You have already paid for this bill'
+      });
     }
 
     // Get student details
