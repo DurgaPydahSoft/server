@@ -19,6 +19,7 @@ import {
   // All payments function
   getAllPayments
 } from '../controllers/paymentController.js';
+import Payment from '../models/Payment.js';
 
 const router = express.Router();
 
@@ -51,6 +52,61 @@ router.post('/webhook-test', (req, res) => {
   console.log('🧪 Test webhook received:', req.body);
   console.log('📋 Headers:', req.headers);
   res.json({ success: true, message: 'Test webhook received' });
+});
+
+// Debug endpoint to manually process a payment (for testing)
+router.post('/debug/process-payment/:orderId', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    console.log('🔧 Debug: Manually processing payment for order:', orderId);
+    
+    // Find the pending payment
+    const pendingPayment = await Payment.findOne({ 
+      cashfreeOrderId: orderId,
+      status: 'pending'
+    });
+    
+    if (!pendingPayment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pending payment not found'
+      });
+    }
+    
+    // Simulate webhook data
+    const mockWebhookData = {
+      data: {
+        order: {
+          order_id: orderId,
+          order_amount: pendingPayment.amount,
+          order_currency: 'INR'
+        },
+        payment: {
+          cf_payment_id: `debug_${Date.now()}`,
+          payment_status: 'SUCCESS',
+          payment_amount: pendingPayment.amount,
+          payment_currency: 'INR'
+        }
+      }
+    };
+    
+    // Create a mock request object
+    const mockReq = {
+      body: mockWebhookData,
+      headers: {}
+    };
+    
+    // Call the webhook processor
+    await processPayment(mockReq, res);
+    
+  } catch (error) {
+    console.error('❌ Debug payment processing error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Debug payment processing failed',
+      error: error.message
+    });
+  }
 });
 
 export default router; 

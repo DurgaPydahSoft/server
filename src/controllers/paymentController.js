@@ -239,6 +239,13 @@ export const processPayment = async (req, res) => {
     
     if (pendingPayment) {
       console.log('🔍 Processing hostel fee payment for order:', order_id);
+      console.log('📊 Pending payment details:', {
+        id: pendingPayment._id,
+        studentId: pendingPayment.studentId,
+        amount: pendingPayment.amount,
+        status: pendingPayment.status,
+        academicYear: pendingPayment.academicYear
+      });
       
       // Determine payment status based on order status
       let paymentStatus = 'pending';
@@ -261,17 +268,24 @@ export const processPayment = async (req, res) => {
           paymentStatus = 'pending';
       }
       
+      console.log('🔄 Payment status determined:', { order_status, paymentStatus, failureReason });
+      
       // Process hostel fee payment
       if (paymentStatus === 'success') {
-        // Get student details
-        const student = await User.findById(pendingPayment.studentId);
-        if (!student) {
-          console.error('❌ Student not found for payment:', pendingPayment.studentId);
-          return res.status(404).json({
-            success: false,
-            message: 'Student not found'
-          });
-        }
+        try {
+          console.log('✅ Processing successful payment...');
+          
+          // Get student details
+          const student = await User.findById(pendingPayment.studentId);
+          if (!student) {
+            console.error('❌ Student not found for payment:', pendingPayment.studentId);
+            return res.status(404).json({
+              success: false,
+              message: 'Student not found'
+            });
+          }
+          
+          console.log('👤 Student found:', { id: student._id, name: student.name, course: student.course, year: student.year, category: student.category });
 
         // Get fee structure
         const feeStructure = await FeeStructure.getFeeStructure(
@@ -412,13 +426,33 @@ export const processPayment = async (req, res) => {
           console.error('Error sending payment success notification:', notificationError);
         }
 
-        console.log('✅ Hostel fee payment processed successfully:', { 
-          order_id, 
-          paymentRecords: paymentRecords.length,
-          totalAmount: pendingPayment.amount,
-          remainingAmount: remainingAmount,
-          termBalances: termBalances
-        });
+          console.log('✅ Hostel fee payment processed successfully:', { 
+            order_id, 
+            paymentRecords: paymentRecords.length,
+            totalAmount: pendingPayment.amount,
+            remainingAmount: remainingAmount,
+            termBalances: termBalances
+          });
+        } catch (error) {
+          console.error('❌ Error processing successful payment:', error);
+          console.error('❌ Error details:', {
+            message: error.message,
+            stack: error.stack,
+            order_id,
+            pendingPaymentId: pendingPayment._id
+          });
+          
+          // Update pending payment with error status
+          pendingPayment.status = 'failed';
+          pendingPayment.failureReason = `Processing error: ${error.message}`;
+          await pendingPayment.save();
+          
+          return res.status(500).json({
+            success: false,
+            message: 'Error processing payment',
+            error: error.message
+          });
+        }
       } else {
         // Payment failed or cancelled - update status
         pendingPayment.status = paymentStatus;
