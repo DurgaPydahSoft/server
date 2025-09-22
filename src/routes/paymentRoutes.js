@@ -23,7 +23,7 @@ const router = express.Router();
 
 // Student payment routes
 router.post('/initiate', authenticateStudent, initiatePayment);
-router.get('/status/:paymentId', authenticateStudent, getPaymentStatus);
+router.get('/status/:billId', authenticateStudent, getPaymentStatus);
 router.post('/verify/:paymentId', authenticateStudent, verifyPayment);
 router.get('/history', authenticateStudent, getPaymentHistory);
 router.delete('/cancel/:paymentId', authenticateStudent, cancelPayment);

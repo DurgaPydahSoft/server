@@ -171,7 +171,12 @@ export const initiatePayment = async (req, res) => {
 // Process payment callback/webhook
 export const processPayment = async (req, res) => {
   try {
-    const { order_id, order_status, payment_id } = req.body;
+    // Extract data from Cashfree webhook structure
+    const { data } = req.body;
+    const order_id = data?.order?.order_id;
+    const order_status = data?.payment?.payment_status;
+    const payment_id = data?.payment?.cf_payment_id;
+    
     const signature = req.headers['x-webhook-signature'];
     const timestamp = req.headers['x-webhook-timestamp'];
 
