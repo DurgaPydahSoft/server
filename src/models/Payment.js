@@ -21,7 +21,7 @@ const paymentSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ['pending', 'success', 'failed', 'cancelled'],
-    default: 'success', // Hostel fees are usually collected in cash/online immediately
+    default: 'pending', // Start as pending, update based on actual payment status
     index: true
   },
   paymentMethod: {

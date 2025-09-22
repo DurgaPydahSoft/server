@@ -5,6 +5,8 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+dotenv.config();
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -52,8 +54,11 @@ const io = new Server(httpServer, {
       "https://hms.pydahsoft.in",
       "http://192.168.3.148:3000",
       "http://192.168.3.186:3000",
-      "https://18ae92c8dcb6.ngrok-free.app",
-      "https://*.ngrok-free.app"
+      "https://c0184a7fac12.ngrok-free.app",
+      "https://53772bc7d616.ngrok-free.app/",
+      "https://*.ngrok-free.app",
+      process.env.BACKEND_URL ,
+      process.env.FRONTEND_URL
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
@@ -78,8 +83,11 @@ app.use(cors({
     "http://192.168.232.93:3000",
     "http://192.168.3.186:3000",
     "http://192.168.3.148:3000",
-    "https://18ae92c8dcb6.ngrok-free.app",
-    "https://*.ngrok-free.app"
+    "https://53772bc7d616.ngrok-free.app",
+    "https://c0184a7fac12.ngrok-free.app",
+    "https://*.ngrok-free.app",
+    process.env.BACKEND_URL ,
+    process.env.FRONTEND_URL
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -149,8 +157,12 @@ app.get('/api/health', (req, res) => {
       "http://192.168.232.93:3000",
       "http://192.168.3.186:3000",
       "http://192.168.3.148:3000",
-      "https://18ae92c8dcb6.ngrok-free.app",
-      "https://*.ngrok-free.app"
+      "https://c0184a7fac12.ngrok-free.app",
+      "https://53772bc7d616.ngrok-free.app",
+      "https://*.ngrok-free.app",
+      process.env.BACKEND_URL ,
+      process.env.FRONTEND_URL
+
     ],
     timestamp: new Date().toISOString()
   });

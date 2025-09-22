@@ -15,4 +15,7 @@ router.post('/webhook', paymentController.processWebhook);
 // Admin routes for statistics
 router.get('/statistics', authenticateToken, paymentController.getPaymentStatistics);
 
+// Cleanup route for expired payments
+router.post('/cleanup-expired', authenticateToken, paymentController.cleanupExpiredPayments);
+
 module.exports = router; 

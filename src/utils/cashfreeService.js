@@ -78,15 +78,15 @@ class CashfreeService {
 
       // Update order data to match reference structure
       // Clean URLs to prevent double slashes
-      const cleanFrontendUrl = (process.env.FRONTEND_URL || 'https://your-frontend-ngrok-url.ngrok.io').replace(/\/$/, '');
-      const cleanBackendUrl = (process.env.BACKEND_URL || 'https://your-backend-ngrok-url.ngrok.io').replace(/\/$/, '');
+      const cleanFrontendUrl = (process.env.FRONTEND_URL).replace(/\/$/, '');
+      const cleanBackendUrl = (process.env.BACKEND_URL ).replace(/\/$/, '');
 
       const enhancedOrderData = {
         ...orderData,
         order_meta: {
-          return_url: `${cleanFrontendUrl}/student/payment-status/${paymentId}?order_id={order_id}`,
+          ...orderData.order_meta, // Use the order_meta from orderData (which has the correct return_url)
           notify_url: `${cleanBackendUrl}/api/payments/webhook`,
-          payment_methods: 'card,upi,netbanking,wallet'
+          payment_methods: 'cc,dc,upi,nb,app'
         }
       };
 
@@ -243,8 +243,14 @@ class CashfreeService {
       studentEmail,
       studentPhone,
       roomNumber,
-      billMonth
+      billMonth,
+      billId
     } = paymentData;
+
+    console.log('🔧 generateOrderData called with billId:', billId);
+    console.log('🔧 Full paymentData:', paymentData);
+    console.log('🔧 billId type:', typeof billId);
+    console.log('🔧 billId value:', billId);
 
     // Generate a valid customer_id (alphanumeric with underscores/hyphens only, max 50 chars)
     const emailPrefix = studentEmail.split('@')[0]; // Get part before @
@@ -271,9 +277,14 @@ class CashfreeService {
         customer_phone: studentPhone
       },
       order_meta: {
-        return_url: `${cleanFrontendUrl}/student/payment-status/${orderId}?order_id={order_id}`,
+        return_url: (() => {
+          const returnUrl = `${cleanFrontendUrl}/student/payment-status/${billId}?order_id={order_id}`;
+          console.log('🔧 Generating return URL with billId:', billId);
+          console.log('🔧 Return URL:', returnUrl);
+          return returnUrl;
+        })(),
         notify_url: `${cleanBackendUrl}/api/payments/webhook`,
-        payment_methods: 'card,upi,netbanking,wallet'
+        payment_methods: 'cc,dc,upi,nb,app'
       },
       order_note: `Electricity bill payment for Room ${roomNumber} - ${billMonth}`,
       order_tags: {

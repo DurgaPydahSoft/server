@@ -545,6 +545,20 @@ export const getStudentRoomBills = async (req, res, next) => {
           paymentStatus = 'paid';
           paymentId = payment._id;
           paidAt = payment.paymentDate;
+        } else {
+          // Check if there's a pending payment that failed
+          const failedPayment = await Payment.findOne({
+            studentId: _id,
+            paymentType: 'electricity',
+            billId: bill._id,
+            roomId: room._id,
+            status: 'failed'
+          });
+          
+          if (failedPayment) {
+            // If there's a failed payment, show as unpaid
+            paymentStatus = 'unpaid';
+          }
         }
       }
       
