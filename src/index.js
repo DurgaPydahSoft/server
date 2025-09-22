@@ -55,6 +55,7 @@ const io = new Server(httpServer, {
       "http://192.168.3.148:3000",
       "http://192.168.3.186:3000",
       "https://c0184a7fac12.ngrok-free.app",
+      "https://c96b621851ab.ngrok-free.app",
       "https://53772bc7d616.ngrok-free.app/",
       "https://*.ngrok-free.app",
       process.env.BACKEND_URL ,
@@ -85,6 +86,7 @@ app.use(cors({
     "http://192.168.3.148:3000",
     "https://53772bc7d616.ngrok-free.app",
     "https://c0184a7fac12.ngrok-free.app",
+    "https://c96b621851ab.ngrok-free.app",
     "https://*.ngrok-free.app",
     process.env.BACKEND_URL ,
     process.env.FRONTEND_URL
