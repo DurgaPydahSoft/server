@@ -94,6 +94,10 @@ const roomSchema = new mongoose.Schema({
       paidAt: {
         type: Date
       },
+      cashfreeOrderId: {
+        type: String,
+        default: null
+      },
       // Student-specific bill breakdown
       studentBills: [
         {
