@@ -141,6 +141,15 @@ export const initiatePayment = async (req, res) => {
       room.electricityBills[billIndex].paymentStatus = 'pending';
       room.electricityBills[billIndex].cashfreeOrderId = orderId; // Store order ID for webhook processing
       await room.save();
+      
+      console.log('✅ Bill updated with cashfreeOrderId:', orderId);
+      console.log('✅ Bill details:', {
+        billId: room.electricityBills[billIndex]._id,
+        cashfreeOrderId: room.electricityBills[billIndex].cashfreeOrderId,
+        paymentStatus: room.electricityBills[billIndex].paymentStatus
+      });
+    } else {
+      console.error('❌ Bill not found in room for billId:', billId);
     }
 
     console.log('✅ Payment initiated successfully:', orderId);
@@ -198,12 +207,27 @@ export const processPayment = async (req, res) => {
     }
 
     // Find the bill by order ID (stored in room.electricityBills)
+    console.log('🔍 Looking for room with cashfreeOrderId:', order_id);
     const room = await Room.findOne({ 
       'electricityBills.cashfreeOrderId': order_id 
     });
     
     if (!room) {
       console.error('❌ Bill not found for order:', order_id);
+      console.log('🔍 Searching all rooms with electricity bills...');
+      
+      // Debug: Check all rooms with electricity bills
+      const allRooms = await Room.find({ 'electricityBills.0': { $exists: true } });
+      console.log('🔍 Found rooms with electricity bills:', allRooms.length);
+      
+      for (const r of allRooms) {
+        console.log('🔍 Room:', r.roomNumber, 'Bills:', r.electricityBills.map(b => ({
+          id: b._id,
+          cashfreeOrderId: b.cashfreeOrderId,
+          paymentStatus: b.paymentStatus
+        })));
+      }
+      
       return res.status(404).json({
         success: false,
         message: 'Bill not found'
