@@ -98,6 +98,11 @@ const roomSchema = new mongoose.Schema({
         type: String,
         default: null
       },
+      payingStudentId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null
+      },
       // Student-specific bill breakdown
       studentBills: [
         {

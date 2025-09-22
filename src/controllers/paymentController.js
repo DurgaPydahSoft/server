@@ -164,6 +164,7 @@ export const initiatePayment = async (req, res) => {
     if (billIndex !== -1) {
       room.electricityBills[billIndex].paymentStatus = 'pending';
       room.electricityBills[billIndex].cashfreeOrderId = orderId; // Store order ID for webhook processing
+      room.electricityBills[billIndex].payingStudentId = studentId; // Store student ID for webhook processing
       await room.save();
       
       console.log('✅ Bill updated with cashfreeOrderId:', orderId);
@@ -293,13 +294,8 @@ export const processPayment = async (req, res) => {
 
     // Only create Payment record if payment is successful
     if (paymentStatus === 'success') {
-      // Get student details
-      const student = await User.findOne({
-        roomNumber: room.roomNumber,
-        gender: room.gender,
-        category: room.category,
-        role: 'student'
-      });
+      // Get the specific student who made the payment
+      const student = await User.findById(bill.payingStudentId);
 
       if (student) {
         // Calculate student's share
