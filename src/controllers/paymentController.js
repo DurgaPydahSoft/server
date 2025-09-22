@@ -326,7 +326,7 @@ export const processPayment = async (req, res) => {
             academicYear: pendingPayment.academicYear,
             receiptNumber: receiptNumber,
             transactionId: transactionId,
-            cashfreeOrderId: order_id,
+            cashfreeOrderId: `${order_id}_term1`, // Make unique by adding term suffix
             cashfreePaymentId: payment_id,
             utrNumber: payment_id || `CF_${order_id}`,
             status: 'success',
@@ -356,7 +356,7 @@ export const processPayment = async (req, res) => {
             academicYear: pendingPayment.academicYear,
             receiptNumber: receiptNumber,
             transactionId: transactionId,
-            cashfreeOrderId: order_id,
+            cashfreeOrderId: `${order_id}_term2`, // Make unique by adding term suffix
             cashfreePaymentId: payment_id,
             utrNumber: payment_id || `CF_${order_id}`,
             status: 'success',
@@ -386,7 +386,7 @@ export const processPayment = async (req, res) => {
             academicYear: pendingPayment.academicYear,
             receiptNumber: receiptNumber,
             transactionId: transactionId,
-            cashfreeOrderId: order_id,
+            cashfreeOrderId: `${order_id}_term3`, // Make unique by adding term suffix
             cashfreePaymentId: payment_id,
             utrNumber: payment_id || `CF_${order_id}`,
             status: 'success',
@@ -412,7 +412,13 @@ export const processPayment = async (req, res) => {
           console.error('Error sending payment success notification:', notificationError);
         }
 
-        console.log('✅ Hostel fee payment processed successfully:', { order_id, paymentRecords: paymentRecords.length });
+        console.log('✅ Hostel fee payment processed successfully:', { 
+          order_id, 
+          paymentRecords: paymentRecords.length,
+          totalAmount: pendingPayment.amount,
+          remainingAmount: remainingAmount,
+          termBalances: termBalances
+        });
       } else {
         // Payment failed or cancelled - update status
         pendingPayment.status = paymentStatus;
