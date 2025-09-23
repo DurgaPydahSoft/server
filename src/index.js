@@ -47,20 +47,20 @@ const httpServer = createServer(app);
 // Socket.io setup
 const io = new Server(httpServer, {
   cors: {
-    origin: [
-      process.env.CLIENT_URL || "http://localhost:3000",
-      "https://hostel-complaint-frontend.vercel.app",
-      "http://localhost:5173",
-      "https://hms.pydahsoft.in",
-      "http://192.168.3.148:3000",
-      "http://192.168.3.186:3000",
-      "https://c0184a7fac12.ngrok-free.app",
-      "https://c96b621851ab.ngrok-free.app",
-      "https://a516003c21f5.ngrok-free.app/",
-      "https://*.ngrok-free.app",
-      process.env.BACKEND_URL ,
-      process.env.FRONTEND_URL
-    ],
+  origin: [
+    process.env.CLIENT_URL || "http://localhost:3000",
+    "https://hostel-complaint-frontend.vercel.app",
+    "http://localhost:5173",
+    "https://hms.pydahsoft.in",
+    "http://192.168.3.148:3000",
+    "http://192.168.3.186:3000",
+    "https://c0184a7fac12.ngrok-free.app",
+    "https://c96b621851ab.ngrok-free.app",
+    "https://a516003c21f5.ngrok-free.app",
+    "https://*.ngrok-free.app",
+    process.env.BACKEND_URL,
+    process.env.FRONTEND_URL
+  ],
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     credentials: true,
     allowedHeaders: [
@@ -84,11 +84,11 @@ app.use(cors({
     "http://192.168.232.93:3000",
     "http://192.168.3.186:3000",
     "http://192.168.3.148:3000",
-    "https://a516003c21f5.ngrok-free.app/",
+    "https://a516003c21f5.ngrok-free.app",
     "https://c0184a7fac12.ngrok-free.app",
     "https://c96b621851ab.ngrok-free.app",
     "https://*.ngrok-free.app",
-    process.env.BACKEND_URL ,
+    process.env.BACKEND_URL,
     process.env.FRONTEND_URL
   ],
   credentials: true,
@@ -160,7 +160,7 @@ app.get('/api/health', (req, res) => {
       "http://192.168.3.186:3000",
       "http://192.168.3.148:3000",
       "https://c0184a7fac12.ngrok-free.app",
-      "https://a516003c21f5.ngrok-free.app/",
+      "https://a516003c21f5.ngrok-free.app",
       "https://*.ngrok-free.app",
       process.env.BACKEND_URL ,
       process.env.FRONTEND_URL
