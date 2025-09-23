@@ -210,11 +210,12 @@ export const processPayment = async (req, res) => {
     const order_id = data?.order?.order_id;
     const order_status = data?.payment?.payment_status;
     const payment_id = data?.payment?.cf_payment_id;
+    const utr_number = data?.payment?.utr || data?.payment?.utr_number || data?.utr;
     
     const signature = req.headers['x-webhook-signature'];
     const timestamp = req.headers['x-webhook-timestamp'];
 
-    console.log('🔄 Processing payment webhook:', { order_id, order_status, payment_id });
+    console.log('🔄 Processing payment webhook:', { order_id, order_status, payment_id, utr_number });
     console.log('📦 Full webhook body:', req.body);
     console.log('🔑 Headers:', { signature, timestamp });
 
@@ -308,7 +309,7 @@ export const processPayment = async (req, res) => {
           paymentStatus = 'pending';
       }
       
-      console.log('🔄 Payment status determined:', { order_status, paymentStatus, failureReason });
+      console.log('🔄 Payment status determined:', { order_status, paymentStatus, failureReason, utr_number, payment_id });
       
       // Process hostel fee payment
       if (paymentStatus === 'success') {
@@ -382,9 +383,16 @@ export const processPayment = async (req, res) => {
             transactionId: transactionId,
             cashfreeOrderId: `${order_id}_term1`, // Make unique by adding term suffix
             cashfreePaymentId: payment_id,
-            utrNumber: payment_id || `CF_${order_id}`,
+            utrNumber: utr_number || payment_id || `CF_${order_id}`,
             status: 'success',
             paymentDate: new Date()
+          });
+          
+          console.log('💾 Creating Term 1 payment record with UTR:', {
+            utr_number,
+            payment_id,
+            fallback_utr: `CF_${order_id}`,
+            final_utr: utr_number || payment_id || `CF_${order_id}`
           });
           
           await term1PaymentRecord.save();
@@ -412,9 +420,16 @@ export const processPayment = async (req, res) => {
             transactionId: transactionId,
             cashfreeOrderId: `${order_id}_term2`, // Make unique by adding term suffix
             cashfreePaymentId: payment_id,
-            utrNumber: payment_id || `CF_${order_id}`,
+            utrNumber: utr_number || payment_id || `CF_${order_id}`,
             status: 'success',
             paymentDate: new Date()
+          });
+          
+          console.log('💾 Creating Term 2 payment record with UTR:', {
+            utr_number,
+            payment_id,
+            fallback_utr: `CF_${order_id}`,
+            final_utr: utr_number || payment_id || `CF_${order_id}`
           });
           
           await term2PaymentRecord.save();
@@ -442,9 +457,16 @@ export const processPayment = async (req, res) => {
             transactionId: transactionId,
             cashfreeOrderId: `${order_id}_term3`, // Make unique by adding term suffix
             cashfreePaymentId: payment_id,
-            utrNumber: payment_id || `CF_${order_id}`,
+            utrNumber: utr_number || payment_id || `CF_${order_id}`,
             status: 'success',
             paymentDate: new Date()
+          });
+          
+          console.log('💾 Creating Term 3 payment record with UTR:', {
+            utr_number,
+            payment_id,
+            fallback_utr: `CF_${order_id}`,
+            final_utr: utr_number || payment_id || `CF_${order_id}`
           });
           
           await term3PaymentRecord.save();
@@ -604,7 +626,7 @@ export const processPayment = async (req, res) => {
           collectedByName: student.name,
           cashfreeOrderId: order_id,
           cashfreePaymentId: payment_id,
-          utrNumber: payment_id || `CF_${order_id}`,
+          utrNumber: utr_number || payment_id || `CF_${order_id}`,
           paymentDate: new Date(),
           billDetails: {
             startUnits: bill.startUnits,
@@ -613,6 +635,13 @@ export const processPayment = async (req, res) => {
             rate: bill.rate,
             total: bill.total
           }
+        });
+        
+        console.log('💾 Creating electricity bill payment record with UTR:', {
+          utr_number,
+          payment_id,
+          fallback_utr: `CF_${order_id}`,
+          final_utr: utr_number || payment_id || `CF_${order_id}`
         });
 
         await payment.save();
