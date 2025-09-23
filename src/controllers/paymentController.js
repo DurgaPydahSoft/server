@@ -239,10 +239,28 @@ export const processPayment = async (req, res) => {
     }
 
     // Check if this is a hostel fee payment or electricity bill payment
-    const pendingPayment = await Payment.findOne({ 
-      cashfreeOrderId: order_id,
-      status: 'pending'
+    // First check for pending hostel fee payment in student records
+    const studentWithPendingPayment = await User.findOne({ 
+      'pendingHostelPayment.cashfreeOrderId': order_id
     });
+    
+    let pendingPayment = null;
+    if (studentWithPendingPayment) {
+      pendingPayment = {
+        _id: studentWithPendingPayment._id,
+        studentId: studentWithPendingPayment._id,
+        amount: studentWithPendingPayment.pendingHostelPayment.amount,
+        academicYear: studentWithPendingPayment.pendingHostelPayment.academicYear,
+        paymentType: studentWithPendingPayment.pendingHostelPayment.paymentType,
+        status: studentWithPendingPayment.pendingHostelPayment.status
+      };
+    } else {
+      // Check for electricity bill payment
+      pendingPayment = await Payment.findOne({ 
+        cashfreeOrderId: order_id,
+        status: 'pending'
+      });
+    }
     
     if (pendingPayment) {
       console.log('🔍 Processing hostel fee payment for order:', order_id);
@@ -434,8 +452,10 @@ export const processPayment = async (req, res) => {
           remainingAmount -= term3Payment;
         }
 
-        // Delete the pending payment record
-        await Payment.findByIdAndDelete(pendingPayment._id);
+        // Clear the pending payment from student record
+        await User.findByIdAndUpdate(pendingPayment.studentId, {
+          $unset: { pendingHostelPayment: 1 }
+        });
 
         // Send notification to student
         try {
@@ -464,10 +484,10 @@ export const processPayment = async (req, res) => {
             pendingPaymentId: pendingPayment._id
           });
           
-          // Update pending payment with error status
-          pendingPayment.status = 'failed';
-          pendingPayment.failureReason = `Processing error: ${error.message}`;
-          await pendingPayment.save();
+          // Clear pending payment from student record on error
+          await User.findByIdAndUpdate(pendingPayment.studentId, {
+            $unset: { pendingHostelPayment: 1 }
+          });
           
           return res.status(500).json({
             success: false,
@@ -476,10 +496,10 @@ export const processPayment = async (req, res) => {
           });
         }
       } else {
-        // Payment failed or cancelled - update status
-        pendingPayment.status = paymentStatus;
-        pendingPayment.failureReason = failureReason;
-        await pendingPayment.save();
+        // Payment failed or cancelled - clear pending payment from student record
+        await User.findByIdAndUpdate(pendingPayment.studentId, {
+          $unset: { pendingHostelPayment: 1 }
+        });
         
         console.log('❌ Hostel fee payment failed/cancelled:', { order_id, status: paymentStatus, reason: failureReason });
       }
@@ -1128,20 +1148,21 @@ export const initiateHostelFeePayment = async (req, res) => {
       });
     }
 
-    // Create pending payment record for tracking
-    const pendingPayment = new Payment({
-      studentId: studentId,
-      amount: amount,
-      paymentMethod: 'Online',
-      paymentType: 'hostel_fee',
-      academicYear: academicYear,
+    // Store payment details in student record for webhook processing (no Payment record created yet)
+    // This will be used by the webhook to create Payment records only on success
+    const paymentData = {
       cashfreeOrderId: orderId,
+      amount: amount,
+      academicYear: academicYear,
+      paymentType: 'hostel_fee',
       status: 'pending',
-      paymentDate: new Date(),
-      notes: 'Online payment via Cashfree - Pending'
-    });
+      initiatedAt: new Date()
+    };
 
-    await pendingPayment.save();
+    // Store in student record for webhook processing
+    await User.findByIdAndUpdate(studentId, {
+      $set: { pendingHostelPayment: paymentData }
+    });
 
     console.log('✅ Hostel fee payment initiated successfully:', orderId);
 
@@ -1149,7 +1170,6 @@ export const initiateHostelFeePayment = async (req, res) => {
       success: true,
       message: 'Payment initiated successfully',
       data: {
-        paymentId: pendingPayment._id,
         orderId: orderId,
         amount: amount,
         paymentSessionId: cashfreeResult.data.payment_session_id,

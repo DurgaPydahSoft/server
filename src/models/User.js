@@ -326,6 +326,15 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0,
     min: 0
+  },
+  // Temporary field for pending hostel fee payments (not stored in database permanently)
+  pendingHostelPayment: {
+    cashfreeOrderId: String,
+    amount: Number,
+    academicYear: String,
+    paymentType: String,
+    status: String,
+    initiatedAt: Date
   }
 }, {
   timestamps: true
