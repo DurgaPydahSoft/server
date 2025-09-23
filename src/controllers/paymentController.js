@@ -218,17 +218,24 @@ export const processPayment = async (req, res) => {
     console.log('📦 Full webhook body:', req.body);
     console.log('🔑 Headers:', { signature, timestamp });
 
-    // For testing, allow webhook without signature verification
-    let webhookResult = { success: true, data: req.body };
+    // Verify webhook signature for security
+    let webhookResult = { success: false, data: null };
     
-    // Only verify signature if it's provided (production mode)
     if (signature && timestamp) {
       webhookResult = await cashfreeService.processWebhook(req.body, signature, timestamp);
       if (!webhookResult.success) {
-        console.log('⚠️ Webhook signature verification failed, but processing anyway for testing');
-        // For now, continue processing even if signature fails
-        webhookResult = { success: true, data: req.body };
+        console.log('❌ Webhook signature verification failed - rejecting webhook');
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid webhook signature'
+        });
       }
+    } else {
+      console.log('❌ Missing webhook signature or timestamp - rejecting webhook');
+      return res.status(400).json({
+        success: false,
+        message: 'Missing webhook signature or timestamp'
+      });
     }
 
     // Check if this is a hostel fee payment or electricity bill payment
@@ -247,6 +254,16 @@ export const processPayment = async (req, res) => {
         academicYear: pendingPayment.academicYear
       });
       
+      // Validate order status before processing
+      const validOrderStatuses = ['PAID', 'SUCCESS', 'EXPIRED', 'FAILED', 'PENDING', 'CANCELLED'];
+      if (!validOrderStatuses.includes(order_status)) {
+        console.log('❌ Invalid order status received:', order_status);
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid order status'
+        });
+      }
+
       // Determine payment status based on order status
       let paymentStatus = 'pending';
       let failureReason = null;
@@ -264,6 +281,11 @@ export const processPayment = async (req, res) => {
           paymentStatus = 'failed';
           failureReason = 'Payment failed';
           break;
+        case 'CANCELLED':
+          paymentStatus = 'cancelled';
+          failureReason = 'Payment cancelled';
+          break;
+        case 'PENDING':
         default:
           paymentStatus = 'pending';
       }
