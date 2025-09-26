@@ -1313,12 +1313,15 @@ export const getLeaveById = async (req, res, next) => {
   }
 };
 
-// Get all approved leave requests for security guards
+// Get all approved leave requests for security guards (including warden verified)
 export const getApprovedLeaves = async (req, res, next) => {
   try {
     const { page = 1, limit = 10 } = req.query;
     
-    const leaves = await Leave.find({ status: 'Approved' })
+    // Include both 'Approved' and 'Warden Verified' statuses
+    const leaves = await Leave.find({ 
+      status: { $in: ['Approved', 'Warden Verified'] } 
+    })
       .populate({
         path: 'student',
         select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
@@ -1328,11 +1331,14 @@ export const getApprovedLeaves = async (req, res, next) => {
         ]
       })
       .populate('approvedBy', 'name')
-      .sort({ approvedAt: -1 })
+      .populate('verifiedBy', 'name') // Populate warden who verified
+      .sort({ verifiedAt: -1, approvedAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
-    const count = await Leave.countDocuments({ status: 'Approved' });
+    const count = await Leave.countDocuments({ 
+      status: { $in: ['Approved', 'Warden Verified'] } 
+    });
 
     res.json({
       success: true,
