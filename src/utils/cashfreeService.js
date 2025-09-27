@@ -15,11 +15,12 @@ class CashfreeService {
     console.log('  - Webhook Secret:', this.webhookSecret ? 'Present' : 'Missing');
     
     if (!this.clientId || !this.clientSecret) {
-      console.error('❌ Cashfree credentials not configured!');
-      console.error('Please set CASHFREE_CLIENT_ID and CASHFREE_CLIENT_SECRET in your environment variables.');
-      throw new Error('Cashfree credentials not configured. Please set CASHFREE_CLIENT_ID and CASHFREE_CLIENT_SECRET.');
+      console.warn('⚠️ Cashfree credentials not configured!');
+      console.warn('Please set CASHFREE_CLIENT_ID and CASHFREE_CLIENT_SECRET in your environment variables.');
+      this.configured = false;
     } else {
       console.log('✅ Cashfree credentials found - using real API');
+      this.configured = true;
     }
   }
 
@@ -52,6 +53,14 @@ class CashfreeService {
 
   // Create a new order with Cashfree
   async createOrder(orderData, paymentId = null) {
+    if (!this.configured) {
+      return {
+        success: false,
+        error: 'Cashfree credentials not configured',
+        details: 'CASHFREE_CLIENT_ID and/or CASHFREE_CLIENT_SECRET are missing',
+        suggestion: 'Please set the required environment variables to enable payment functionality.'
+      };
+    }
     try {
       console.log('🔧 createOrder called with:');
       console.log('  - Client ID present:', !!this.clientId);
@@ -135,6 +144,14 @@ class CashfreeService {
 
   // Verify payment with Cashfree
   async verifyPayment(orderId) {
+    if (!this.configured) {
+      return {
+        success: false,
+        error: 'Cashfree credentials not configured',
+        details: 'CASHFREE_CLIENT_ID and/or CASHFREE_CLIENT_SECRET are missing',
+        suggestion: 'Please set the required environment variables to enable payment functionality.'
+      };
+    }
     try {
       console.log('🌐 Verifying payment with Cashfree API');
       
@@ -169,11 +186,15 @@ class CashfreeService {
 
   // Get payment details
   async getPaymentDetails(orderId) {
+    if (!this.configured) {
+      return {
+        success: false,
+        error: 'Cashfree credentials not configured',
+        details: 'CASHFREE_CLIENT_ID and/or CASHFREE_CLIENT_SECRET are missing',
+        suggestion: 'Please set the required environment variables to enable payment functionality.'
+      };
+    }
     try {
-      if (!this.clientId || !this.clientSecret) {
-        throw new Error('Cashfree credentials not configured');
-      }
-
       const timestamp = Math.floor(Date.now() / 1000).toString();
       const signature = this.generateSignature('', timestamp);
 
@@ -349,7 +370,7 @@ class CashfreeService {
 
   // Check if service is properly configured
   isConfigured() {
-    return !!(this.clientId && this.clientSecret);
+    return !!this.configured;
   }
 }
 
