@@ -82,6 +82,7 @@ export const getStudentFeatureToggles = async (req, res, next) => {
       foundLost: toggles.foundLost,
       hostelFee: toggles.hostelFee,
       paymentHistory: toggles.paymentHistory,
+      nocRequests: toggles.nocRequests,
       announcements: toggles.announcements,
       polls: toggles.polls,
       profile: toggles.profile

@@ -34,6 +34,7 @@ import feeReminderRoutes from './routes/feeReminderRoutes.js';
 import feeStructureRoutes from './routes/feeStructureRoutes.js';
 import paymentRoutes from './routes/paymentRoutes.js';
 import reminderConfigRoutes from './routes/reminderConfigRoutes.js';
+import nocRoutes from './routes/nocRoutes.js';
 import apiRouter from './routes/index.js';
 import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
 import Notification from './models/Notification.js';
@@ -200,6 +201,7 @@ app.use('/api/fee-reminders', feeReminderRoutes);
 app.use('/api/fee-structures', feeStructureRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/reminder-config', reminderConfigRoutes);
+app.use('/api/noc', nocRoutes);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {

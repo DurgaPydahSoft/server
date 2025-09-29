@@ -40,6 +40,11 @@ const featureToggleSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  // NOC Requests
+  nocRequests: {
+    type: Boolean,
+    default: true
+  },
   // Announcements
   announcements: {
     type: Boolean,
