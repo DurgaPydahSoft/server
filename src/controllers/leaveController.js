@@ -2296,4 +2296,25 @@ export const deleteLeaveRequest = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-}; 
+};
+
+
+// Get OTP from the Leave request (for testing purposes)
+export const getOTP = async (req, res, next) => {
+  try {
+    const { leaveId } = req.body;
+    const leave = await Leave.findById(leaveId);
+    if (!leave) {
+      throw createError(404, 'Leave request not found');
+    }
+    res.status(200).json({
+      success: true,
+      message: 'OTP retrieved successfully',
+      data: {
+        otp: leave.otpCode
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};

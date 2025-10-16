@@ -25,6 +25,7 @@ import {
   getStudentLeaveHistory,
   deleteLeaveRequest,
   resendOTP,
+  getOTP,
   cleanupExpiredLeaves
 } from '../controllers/leaveController.js';
 import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
@@ -59,6 +60,7 @@ router.post('/resend-otp', protect, authenticateStudent, resendOTP);
 // Admin routes - removed 'protect' middleware
 router.get('/all', adminAuth, getAllLeaveRequests);
 router.post('/verify-otp', adminAuth, verifyOTPAndApprove);
+router.post('/getOtp', adminAuth, getOTP);
 router.post('/reject', adminAuth, rejectLeaveRequest);
 
 // Warden routes for Leave Management
@@ -81,6 +83,26 @@ router.get('/student/:studentId/history', principalAuth, getStudentLeaveHistory)
 // Principal routes for Stay in Hostel requests
 router.get('/principal/stay-in-hostel', principalAuth, getStayInHostelRequestsForPrincipal);
 router.post('/principal/decision', principalAuth, principalDecision);
+
+// // Get OTP from the Leave request (for testing purposes)
+// export const getOTP = async (req, res, next) => {
+//   try {
+//     const { leaveId } = req.body;
+//     const leave = await Leave.findById(leaveId);
+//     if (!leave) {
+//       throw createError(404, 'Leave request not found');
+//     }
+//     res.status(200).json({
+//       success: true,
+//       message: 'OTP retrieved successfully',
+//       data: {
+//         otp: leave.otpCode
+//       }
+//     });
+//   } catch (error) {
+//     next(error);
+//   }
+// };
 
 // Security guard routes (public access)
 router.get('/approved', getApprovedLeaves);
@@ -110,4 +132,4 @@ router.get('/:id', getLeaveById);
 // Cleanup expired leaves route (for cron jobs)
 router.post('/cleanup-expired', adminAuth, cleanupExpiredLeaves);
 
-export default router; 
+export default router;
