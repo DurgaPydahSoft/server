@@ -241,6 +241,29 @@ export const addStudent = async (req, res, next) => {
     const emailValue = email ? String(email).trim() : '';
     const finalEmail = emailValue === '' ? undefined : emailValue;
 
+    // Track concession request if concession is set
+    const concessionAmount = Number(concession) || 0;
+    const concessionData = {
+      concession: concessionAmount,
+      concessionApproved: false,
+      concessionRequestedBy: null,
+      concessionRequestedAt: null
+    };
+    
+    // If concession is set, track who requested it
+    if (concessionAmount > 0 && req.admin) {
+      concessionData.concessionRequestedBy = req.admin._id;
+      concessionData.concessionRequestedAt = new Date();
+      concessionData.concessionHistory = [{
+        action: 'requested',
+        amount: concessionAmount,
+        previousAmount: null,
+        performedBy: req.admin._id,
+        performedAt: new Date(),
+        notes: ''
+      }];
+    }
+
     // Create new student
     const student = new User({
       name,
@@ -271,7 +294,7 @@ export const addStudent = async (req, res, next) => {
       studentPhoto: studentPhotoUrl,
       guardianPhoto1: guardianPhoto1Url,
       guardianPhoto2: guardianPhoto2Url,
-      concession: Number(concession) || 0,
+      ...concessionData,
       calculatedTerm1Fee,
       calculatedTerm2Fee,
       calculatedTerm3Fee,
@@ -1306,7 +1329,8 @@ export const updateStudent = async (req, res, next) => {
       batch,
       academicYear,
       hostelStatus,
-      email
+      email,
+      concession
     } = req.body;
     
     console.log('Update payload (adminController):', req.body); // Debug log
@@ -1483,6 +1507,90 @@ export const updateStudent = async (req, res, next) => {
     if (academicYear) student.academicYear = academicYear;
     if (hostelStatus) student.hostelStatus = hostelStatus;
     if (email) student.email = email;
+
+    // Handle concession update - if concession is changed, reset approval status and track who requested
+    if (concession !== undefined) {
+      const newConcessionAmount = Number(concession) || 0;
+      const oldConcessionAmount = student.concession || 0;
+      
+      // If concession amount changed, reset approval status
+      if (newConcessionAmount !== oldConcessionAmount) {
+        student.concession = newConcessionAmount;
+        
+        if (newConcessionAmount > 0) {
+          // New concession set - requires approval
+          student.concessionApproved = false;
+          student.concessionApprovedBy = null;
+          student.concessionApprovedAt = null;
+          if (req.admin) {
+            student.concessionRequestedBy = req.admin._id;
+            student.concessionRequestedAt = new Date();
+            
+            // Add to history
+            if (!student.concessionHistory) {
+              student.concessionHistory = [];
+            }
+            student.concessionHistory.push({
+              action: 'requested',
+              amount: newConcessionAmount,
+              previousAmount: oldConcessionAmount,
+              performedBy: req.admin._id,
+              performedAt: new Date(),
+              notes: ''
+            });
+          }
+          
+          // Recalculate fees with new concession
+          try {
+            const FeeStructure = (await import('../models/FeeStructure.js')).default;
+            const feeStructure = await FeeStructure.getFeeStructure(
+              student.academicYear,
+              student.course,
+              student.year,
+              student.category
+            );
+            if (feeStructure) {
+              const concessionAmount = newConcessionAmount;
+              student.calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
+              let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
+              student.calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
+              remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
+              student.calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
+              student.totalCalculatedFee = student.calculatedTerm1Fee + student.calculatedTerm2Fee + student.calculatedTerm3Fee;
+            }
+          } catch (error) {
+            console.error('Error recalculating fees:', error);
+          }
+        } else {
+          // Concession removed - reset all concession-related fields
+          student.concession = 0;
+          student.concessionApproved = false;
+          student.concessionApprovedBy = null;
+          student.concessionApprovedAt = null;
+          student.concessionRequestedBy = null;
+          student.concessionRequestedAt = null;
+          
+          // Reset calculated fees to original
+          try {
+            const FeeStructure = (await import('../models/FeeStructure.js')).default;
+            const feeStructure = await FeeStructure.getFeeStructure(
+              student.academicYear,
+              student.course,
+              student.year,
+              student.category
+            );
+            if (feeStructure) {
+              student.calculatedTerm1Fee = feeStructure.term1Fee;
+              student.calculatedTerm2Fee = feeStructure.term2Fee;
+              student.calculatedTerm3Fee = feeStructure.term3Fee;
+              student.totalCalculatedFee = feeStructure.totalFee;
+            }
+          } catch (error) {
+            console.error('Error recalculating fees:', error);
+          }
+        }
+      }
+    }
 
     // Graduation status auto-update on manual edit
     let maxYear = 3; // Default
@@ -2435,7 +2543,7 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
+      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
     
     // Transform students to include courseId
     const transformedStudents = students.map(student => ({
@@ -2485,6 +2593,11 @@ export const generateAdmitCard = async (req, res, next) => {
     // Check if student has photo
     if (!student.studentPhoto) {
       throw createError(400, 'Student photo is required for admit card generation');
+    }
+    
+    // Check if concession is pending approval
+    if (student.concession > 0 && !student.concessionApproved) {
+      throw createError(400, 'Cannot generate admit card. Concession is pending approval. Please approve the concession first.');
     }
     
     // Fetch the image and convert to base64
@@ -2547,13 +2660,20 @@ export const generateBulkAdmitCards = async (req, res, next) => {
     })
     .populate('course', 'name')
     .populate('branch', 'name')
-    .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address');
+      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved');
     
     // Check if all students have photos
     const studentsWithoutPhotos = students.filter(s => !s.studentPhoto);
     if (studentsWithoutPhotos.length > 0) {
       const names = studentsWithoutPhotos.map(s => s.name).join(', ');
       throw createError(400, `Students without photos: ${names}. All students must have photos for admit card generation.`);
+    }
+    
+    // Check if any students have pending concession approvals
+    const studentsWithPendingConcession = students.filter(s => s.concession > 0 && !s.concessionApproved);
+    if (studentsWithPendingConcession.length > 0) {
+      const names = studentsWithPendingConcession.map(s => s.name).join(', ');
+      throw createError(400, `Cannot generate admit cards for students with pending concession approvals: ${names}. Please approve their concessions first.`);
     }
     
     // Fetch images for all students
@@ -2812,5 +2932,374 @@ export const shareStudentCredentials = async (req, res) => {
       message: 'Failed to share credentials',
       error: error.message
     });
+  }
+};
+
+// Get students with pending concession approvals
+export const getConcessionApprovals = async (req, res, next) => {
+  try {
+    // Build query for students with concession > 0 and not approved
+    const query = {
+      role: 'student',
+      concession: { $gt: 0 },
+      concessionApproved: false
+    };
+    
+    // Get all students with pending concessions (no pagination for now, can add later if needed)
+    let students;
+    try {
+      students = await User.find(query)
+        .populate('course', 'name')
+        .populate('branch', 'name')
+        .populate('concessionRequestedBy', 'username name')
+        .populate('concessionHistory.performedBy', 'username name')
+        .sort({ concessionRequestedAt: -1, createdAt: -1 })
+        .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus address concession concessionRequestedBy concessionRequestedAt concessionHistory calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee')
+        .lean();
+    } catch (dbError) {
+      console.error('Database error fetching concession approvals:', dbError);
+      console.error('Error message:', dbError.message);
+      console.error('Error stack:', dbError.stack);
+      return next(createError(500, `Database error: ${dbError.message}`));
+    }
+    
+    // Fetch fee structures for each student to show original vs after concession
+    const FeeStructure = (await import('../models/FeeStructure.js')).default;
+    const studentsWithFeeInfo = await Promise.allSettled(students.map(async (student) => {
+      let originalTotalFee = 0;
+      const courseId = student.course?._id || student.course || null;
+      const courseName = student.course?.name || 'N/A';
+      
+      try {
+        if (student.academicYear && courseId && student.year && student.category) {
+          const feeStructure = await FeeStructure.getFeeStructure(
+            student.academicYear,
+            courseId,
+            student.year,
+            student.category
+          );
+          if (feeStructure) {
+            originalTotalFee = feeStructure.totalFee || 0;
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching fee structure for student ${student.rollNumber || student._id}:`, error);
+      }
+      
+      return {
+        ...student,
+        courseId: courseId,
+        course: courseName,
+        originalTotalFee,
+        afterConcessionFee: student.totalCalculatedFee || (originalTotalFee > 0 ? originalTotalFee - (student.concession || 0) : 0)
+      };
+    }));
+    
+    // Extract successful results from Promise.allSettled
+    const successfulStudents = studentsWithFeeInfo
+      .filter(result => result.status === 'fulfilled')
+      .map(result => result.value);
+    
+    const failedStudents = studentsWithFeeInfo
+      .filter(result => result.status === 'rejected')
+      .map(result => result.reason);
+    
+    if (failedStudents.length > 0) {
+      console.warn(`Failed to process ${failedStudents.length} students:`, failedStudents);
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        students: successfulStudents
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching concession approvals:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      name: error.name,
+      code: error.code
+    });
+    next(error);
+  }
+};
+
+// Approve concession
+export const approveConcession = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { newConcessionAmount, notes } = req.body;
+    
+    if (req.admin.role !== 'super_admin') {
+      throw createError(403, 'Only super admin can approve concessions');
+    }
+    
+    const student = await User.findById(id);
+    if (!student || student.role !== 'student') {
+      throw createError(404, 'Student not found');
+    }
+    
+    if (student.concession <= 0) {
+      throw createError(400, 'Student does not have a concession');
+    }
+    
+    if (student.concessionApproved) {
+      throw createError(400, 'Concession is already approved');
+    }
+    
+    const previousAmount = student.concession;
+    let finalAmount = previousAmount;
+    
+    // If newConcessionAmount is provided, update the concession amount
+    if (newConcessionAmount !== undefined && newConcessionAmount !== null) {
+      const newAmount = Number(newConcessionAmount);
+      
+      if (newAmount < 0) {
+        throw createError(400, 'Concession amount cannot be negative');
+      }
+      
+      if (newAmount === 0) {
+        throw createError(400, 'Cannot approve with zero amount. Use reject instead.');
+      }
+      
+      finalAmount = newAmount;
+      student.concession = newAmount;
+      
+      // Recalculate fees with new concession
+      const FeeStructure = (await import('../models/FeeStructure.js')).default;
+      try {
+        const feeStructure = await FeeStructure.getFeeStructure(
+          student.academicYear,
+          student.course,
+          student.year,
+          student.category
+        );
+        if (feeStructure) {
+          const concessionAmount = newAmount;
+          student.calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
+          let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
+          student.calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
+          remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
+          student.calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
+          student.totalCalculatedFee = student.calculatedTerm1Fee + student.calculatedTerm2Fee + student.calculatedTerm3Fee;
+        }
+      } catch (error) {
+        console.error('Error recalculating fees:', error);
+      }
+    }
+    
+    // Add to history
+    if (!student.concessionHistory) {
+      student.concessionHistory = [];
+    }
+    student.concessionHistory.push({
+      action: previousAmount !== finalAmount ? 'updated' : 'approved',
+      amount: finalAmount,
+      previousAmount: previousAmount !== finalAmount ? previousAmount : null,
+      performedBy: req.admin._id,
+      performedAt: new Date(),
+      notes: notes || ''
+    });
+    
+    student.concessionApproved = true;
+    student.concessionApprovedBy = req.admin._id;
+    student.concessionApprovedAt = new Date();
+    
+    await student.save();
+    
+    res.json({
+      success: true,
+      message: previousAmount !== finalAmount 
+        ? 'Concession approved and amount updated successfully'
+        : 'Concession approved successfully',
+      data: {
+        student: {
+          id: student._id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          concession: student.concession,
+          concessionApproved: student.concessionApproved,
+          concessionApprovedBy: student.concessionApprovedBy,
+          concessionApprovedAt: student.concessionApprovedAt
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Reject concession (can also update amount)
+export const rejectConcession = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { newConcessionAmount, reason } = req.body;
+    
+    if (req.admin.role !== 'super_admin') {
+      throw createError(403, 'Only super admin can reject concessions');
+    }
+    
+    const student = await User.findById(id);
+    if (!student || student.role !== 'student') {
+      throw createError(404, 'Student not found');
+    }
+    
+    if (student.concession <= 0) {
+      throw createError(400, 'Student does not have a concession');
+    }
+    
+    const previousAmount = student.concession;
+    
+    // If newConcessionAmount is provided and different, update it
+    if (newConcessionAmount !== undefined && newConcessionAmount !== null) {
+      const newAmount = Number(newConcessionAmount) || 0;
+      
+      if (newAmount < 0) {
+        throw createError(400, 'Concession amount cannot be negative');
+      }
+      
+      // If new amount is 0, remove concession
+      if (newAmount === 0) {
+        student.concession = 0;
+        student.concessionApproved = false;
+        student.concessionApprovedBy = null;
+        student.concessionApprovedAt = null;
+        student.concessionRequestedBy = null;
+        student.concessionRequestedAt = null;
+        // Reset calculated fees to original
+        const FeeStructure = (await import('../models/FeeStructure.js')).default;
+        try {
+          const feeStructure = await FeeStructure.getFeeStructure(
+            student.academicYear,
+            student.course,
+            student.year,
+            student.category
+          );
+          if (feeStructure) {
+            student.calculatedTerm1Fee = feeStructure.term1Fee;
+            student.calculatedTerm2Fee = feeStructure.term2Fee;
+            student.calculatedTerm3Fee = feeStructure.term3Fee;
+            student.totalCalculatedFee = feeStructure.totalFee;
+          }
+        } catch (error) {
+          console.error('Error recalculating fees:', error);
+        }
+        
+        // Add to history
+        if (!student.concessionHistory) {
+          student.concessionHistory = [];
+        }
+        student.concessionHistory.push({
+          action: 'rejected',
+          amount: 0,
+          previousAmount: previousAmount,
+          performedBy: req.admin._id,
+          performedAt: new Date(),
+          notes: reason || ''
+        });
+      } else {
+        // Update concession amount and recalculate fees
+        student.concession = newAmount;
+        student.concessionApproved = false;
+        student.concessionRequestedBy = req.admin._id;
+        student.concessionRequestedAt = new Date();
+        
+        // Recalculate fees with new concession
+        const FeeStructure = (await import('../models/FeeStructure.js')).default;
+        try {
+          const feeStructure = await FeeStructure.getFeeStructure(
+            student.academicYear,
+            student.course,
+            student.year,
+            student.category
+          );
+          if (feeStructure) {
+            const concessionAmount = newAmount;
+            student.calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
+            let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
+            student.calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
+            remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
+            student.calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
+            student.totalCalculatedFee = student.calculatedTerm1Fee + student.calculatedTerm2Fee + student.calculatedTerm3Fee;
+          }
+        } catch (error) {
+          console.error('Error recalculating fees:', error);
+        }
+        
+        // Add to history
+        if (!student.concessionHistory) {
+          student.concessionHistory = [];
+        }
+        student.concessionHistory.push({
+          action: 'updated',
+          amount: newAmount,
+          previousAmount: previousAmount,
+          performedBy: req.admin._id,
+          performedAt: new Date(),
+          notes: reason || ''
+        });
+      }
+    } else {
+      // Just reject (remove concession)
+      student.concession = 0;
+      student.concessionApproved = false;
+      student.concessionApprovedBy = null;
+      student.concessionApprovedAt = null;
+      student.concessionRequestedBy = null;
+      student.concessionRequestedAt = null;
+      // Reset calculated fees to original
+      const FeeStructure = (await import('../models/FeeStructure.js')).default;
+      try {
+        const feeStructure = await FeeStructure.getFeeStructure(
+          student.academicYear,
+          student.course,
+          student.year,
+          student.category
+        );
+        if (feeStructure) {
+          student.calculatedTerm1Fee = feeStructure.term1Fee;
+          student.calculatedTerm2Fee = feeStructure.term2Fee;
+          student.calculatedTerm3Fee = feeStructure.term3Fee;
+          student.totalCalculatedFee = feeStructure.totalFee;
+        }
+      } catch (error) {
+        console.error('Error recalculating fees:', error);
+      }
+      
+      // Add to history
+      if (!student.concessionHistory) {
+        student.concessionHistory = [];
+      }
+      student.concessionHistory.push({
+        action: 'rejected',
+        amount: 0,
+        previousAmount: previousAmount,
+        performedBy: req.admin._id,
+        performedAt: new Date(),
+        notes: reason || ''
+      });
+    }
+    
+    await student.save();
+    
+    res.json({
+      success: true,
+      message: newConcessionAmount !== undefined && newConcessionAmount !== null && newConcessionAmount !== 0
+        ? 'Concession amount updated successfully'
+        : 'Concession rejected and removed successfully',
+      data: {
+        student: {
+          id: student._id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          concession: student.concession,
+          concessionApproved: student.concessionApproved
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
   }
 };

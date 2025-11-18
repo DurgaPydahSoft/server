@@ -38,7 +38,7 @@ const feeStructureSchema = new mongoose.Schema({
   category: {
     type: String,
     required: true,
-    enum: ['A+', 'A', 'B+', 'B', 'C']
+    enum: ['A+', 'A', 'B+', 'B']
   },
   term1Fee: {
     type: Number,

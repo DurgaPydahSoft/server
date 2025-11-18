@@ -24,7 +24,10 @@ import {
   generateBulkAdmitCards,
   getRoomBedLockerAvailability,
   getStudentTempPassword,
-  shareStudentCredentials
+  shareStudentCredentials,
+  getConcessionApprovals,
+  approveConcession,
+  rejectConcession
 } from '../controllers/adminController.js';
 import {
   addStaffGuest,
@@ -54,7 +57,7 @@ import {
   verifyOTPAndApprove,
   rejectLeaveRequest
 } from '../controllers/leaveController.js';
-import { adminAuth, wardenAuth } from '../middleware/authMiddleware.js';
+import { adminAuth, wardenAuth, superAdminAuth } from '../middleware/authMiddleware.js';
 import { testEmailService, getEmailServiceStatus } from '../utils/emailService.js';
 import multer from 'multer';
 
@@ -201,6 +204,9 @@ router.delete('/students/temp-clear', clearTempStudents);
 router.get('/students/admit-cards', getStudentsForAdmitCards);
 router.post('/students/bulk-admit-cards', generateBulkAdmitCards);
 
+// Concession approval routes (super admin only) - must come before dynamic /students/:id routes
+router.get('/students/concession-approvals', superAdminAuth, getConcessionApprovals);
+
 // Password fetching routes (must come before dynamic /students/:id routes)
 router.get('/students/:id/temp-password', getStudentTempPassword);
 
@@ -219,6 +225,10 @@ router.post('/students/:id/reset-password', resetStudentPassword);
 
 // Share student credentials via SMS
 router.post('/students/share-credentials', shareStudentCredentials);
+
+// Concession approval action routes (super admin only)
+router.post('/students/:id/approve-concession', superAdminAuth, approveConcession);
+router.post('/students/:id/reject-concession', superAdminAuth, rejectConcession);
 
 // Utility routes
 router.get('/branches/:course', getBranchesByCourse);

@@ -307,6 +307,57 @@ const userSchema = new mongoose.Schema({
       message: 'Concession must be a positive number'
     }
   },
+  // Concession approval fields
+  concessionApproved: {
+    type: Boolean,
+    default: false
+  },
+  concessionApprovedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null
+  },
+  concessionApprovedAt: {
+    type: Date,
+    default: null
+  },
+  concessionRequestedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null
+  },
+  concessionRequestedAt: {
+    type: Date,
+    default: null
+  },
+  concessionHistory: [{
+    action: {
+      type: String,
+      enum: ['requested', 'approved', 'rejected', 'updated'],
+      required: true
+    },
+    amount: {
+      type: Number,
+      default: 0
+    },
+    previousAmount: {
+      type: Number,
+      default: null
+    },
+    performedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      required: true
+    },
+    performedAt: {
+      type: Date,
+      default: Date.now
+    },
+    notes: {
+      type: String,
+      default: ''
+    }
+  }],
   calculatedTerm1Fee: {
     type: Number,
     default: 0,
