@@ -2937,13 +2937,14 @@ export const shareStudentCredentials = async (req, res) => {
 };
 
 // Get students with pending concession approvals
-// Get approved concessions (all students with concession > 0)
+// Get approved concessions (students with concession > 0 and concessionApprovedBy set)
 export const getApprovedConcessions = async (req, res, next) => {
   try {
-    // Build query for students with concession > 0 (regardless of approval status)
+    // Build query for students with concession > 0 and approved (concessionApprovedBy exists)
     const query = {
       role: 'student',
-      concession: { $gt: 0 }
+      concession: { $gt: 0 },
+      concessionApprovedBy: { $exists: true, $ne: null }
     };
     
     // Get all students with approved concessions
@@ -2955,7 +2956,7 @@ export const getApprovedConcessions = async (req, res, next) => {
         .populate('concessionApprovedBy', 'username name')
         .populate('concessionRequestedBy', 'username name')
         .populate('concessionHistory.performedBy', 'username name')
-        .sort({ concessionApproved: -1, concessionApprovedAt: -1, createdAt: -1 })
+        .sort({ concessionApprovedAt: -1, createdAt: -1 })
         .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus address concession concessionApproved concessionApprovedBy concessionApprovedAt concessionRequestedBy concessionRequestedAt concessionHistory calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee')
         .lean();
     } catch (dbError) {
