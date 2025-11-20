@@ -26,6 +26,7 @@ import {
   getStudentTempPassword,
   shareStudentCredentials,
   getConcessionApprovals,
+  getApprovedConcessions,
   approveConcession,
   rejectConcession
 } from '../controllers/adminController.js';
@@ -206,6 +207,7 @@ router.post('/students/bulk-admit-cards', generateBulkAdmitCards);
 
 // Concession approval routes (super admin only) - must come before dynamic /students/:id routes
 router.get('/students/concession-approvals', superAdminAuth, getConcessionApprovals);
+router.get('/students/approved-concessions', superAdminAuth, getApprovedConcessions);
 
 // Password fetching routes (must come before dynamic /students/:id routes)
 router.get('/students/:id/temp-password', getStudentTempPassword);

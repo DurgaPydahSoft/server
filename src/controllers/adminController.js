@@ -2937,6 +2937,89 @@ export const shareStudentCredentials = async (req, res) => {
 };
 
 // Get students with pending concession approvals
+// Get approved concessions (all students with concession > 0)
+export const getApprovedConcessions = async (req, res, next) => {
+  try {
+    // Build query for students with concession > 0 (regardless of approval status)
+    const query = {
+      role: 'student',
+      concession: { $gt: 0 }
+    };
+    
+    // Get all students with approved concessions
+    let students;
+    try {
+      students = await User.find(query)
+        .populate('course', 'name')
+        .populate('branch', 'name')
+        .populate('concessionApprovedBy', 'username name')
+        .populate('concessionRequestedBy', 'username name')
+        .populate('concessionHistory.performedBy', 'username name')
+        .sort({ concessionApproved: -1, concessionApprovedAt: -1, createdAt: -1 })
+        .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus address concession concessionApproved concessionApprovedBy concessionApprovedAt concessionRequestedBy concessionRequestedAt concessionHistory calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee')
+        .lean();
+    } catch (dbError) {
+      console.error('Database error fetching approved concessions:', dbError);
+      return next(createError(500, `Database error: ${dbError.message}`));
+    }
+    
+    // Fetch fee structures for each student to show original vs after concession
+    const FeeStructure = (await import('../models/FeeStructure.js')).default;
+    const studentsWithFeeInfo = await Promise.allSettled(students.map(async (student) => {
+      let originalTotalFee = 0;
+      const courseId = student.course?._id || student.course || null;
+      const courseName = student.course?.name || 'N/A';
+      
+      try {
+        if (student.academicYear && courseId && student.year && student.category) {
+          const feeStructure = await FeeStructure.getFeeStructure(
+            student.academicYear,
+            courseId,
+            student.year,
+            student.category
+          );
+          if (feeStructure) {
+            originalTotalFee = feeStructure.totalFee || 0;
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching fee structure for student ${student.rollNumber || student._id}:`, error);
+      }
+      
+      return {
+        ...student,
+        courseId: courseId,
+        course: courseName,
+        originalTotalFee,
+        afterConcessionFee: student.totalCalculatedFee || (originalTotalFee > 0 ? originalTotalFee - (student.concession || 0) : 0)
+      };
+    }));
+    
+    // Extract successful results from Promise.allSettled
+    const successfulStudents = studentsWithFeeInfo
+      .filter(result => result.status === 'fulfilled')
+      .map(result => result.value);
+    
+    const failedStudents = studentsWithFeeInfo
+      .filter(result => result.status === 'rejected')
+      .map(result => result.reason);
+    
+    if (failedStudents.length > 0) {
+      console.warn(`Failed to process ${failedStudents.length} students:`, failedStudents);
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        students: successfulStudents
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching approved concessions:', error);
+    next(error);
+  }
+};
+
 export const getConcessionApprovals = async (req, res, next) => {
   try {
     // Build query for students with concession > 0 and not approved
