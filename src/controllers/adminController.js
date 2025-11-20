@@ -1239,7 +1239,7 @@ export const bulkAddStudents = async (req, res, next) => {
 // Get all students with pagination and filters
 export const getStudents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, search, hostelStatus } = req.query;
+    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus } = req.query;
     const query = { role: 'student' };
 
     // Add filters if provided
@@ -1250,6 +1250,7 @@ export const getStudents = async (req, res, next) => {
     if (roomNumber) query.roomNumber = roomNumber;
     if (batch) query.batch = batch;
     if (academicYear) query.academicYear = academicYear;
+    if (year) query.year = parseInt(year); // Convert to number for proper filtering
     if (hostelStatus) query.hostelStatus = hostelStatus;
 
     // Add search functionality if search term is provided
