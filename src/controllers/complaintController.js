@@ -398,7 +398,50 @@ export const listAllComplaints = async (req, res) => {
     // Build query
     const query = {};
 
-    // Status filter
+    // Build base filter query (without status filter) for stats
+    const baseFilterQuery = {};
+    
+    // Category filter
+    if (category && category !== 'All') {
+      query.category = category;
+      baseFilterQuery.category = category;
+    }
+
+    // Subcategory filter
+    if (subCategory && subCategory !== 'All') {
+      query.subCategory = subCategory;
+      baseFilterQuery.subCategory = subCategory;
+    }
+
+    // Date range filter
+    if (fromDate || toDate) {
+      query.createdAt = {};
+      baseFilterQuery.createdAt = {};
+      if (fromDate) {
+        query.createdAt.$gte = new Date(fromDate);
+        baseFilterQuery.createdAt.$gte = new Date(fromDate);
+      }
+      if (toDate) {
+        query.createdAt.$lte = new Date(toDate);
+        baseFilterQuery.createdAt.$lte = new Date(toDate);
+      }
+    }
+
+    // Search filter
+    if (search) {
+      query.$or = [
+        { description: { $regex: search, $options: 'i' } },
+        { 'student.name': { $regex: search, $options: 'i' } },
+        { 'student.rollNumber': { $regex: search, $options: 'i' } }
+      ];
+      baseFilterQuery.$or = [
+        { description: { $regex: search, $options: 'i' } },
+        { 'student.name': { $regex: search, $options: 'i' } },
+        { 'student.rollNumber': { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Status filter (only for the main query, not for stats)
     if (status && status !== 'All') {
       if (status === 'Active') {
         query.currentStatus = { $in: ['Received', 'In Progress'] };
@@ -411,36 +454,6 @@ export const listAllComplaints = async (req, res) => {
       } else {
         query.currentStatus = status;
       }
-    }
-
-    // Category filter
-    if (category && category !== 'All') {
-      query.category = category;
-    }
-
-    // Subcategory filter
-    if (subCategory && subCategory !== 'All') {
-      query.subCategory = subCategory;
-    }
-
-    // Date range filter
-    if (fromDate || toDate) {
-      query.createdAt = {};
-      if (fromDate) {
-        query.createdAt.$gte = new Date(fromDate);
-      }
-      if (toDate) {
-        query.createdAt.$lte = new Date(toDate);
-      }
-    }
-
-    // Search filter
-    if (search) {
-      query.$or = [
-        { description: { $regex: search, $options: 'i' } },
-        { 'student.name': { $regex: search, $options: 'i' } },
-        { 'student.rollNumber': { $regex: search, $options: 'i' } }
-      ];
     }
 
     // Calculate pagination
@@ -462,31 +475,86 @@ export const listAllComplaints = async (req, res) => {
       Complaint.countDocuments(query)
     ]);
 
-    // Get counts for each status
+    // Build aggregation pipeline for counts with filters
+    // If search filter exists, we need to lookup student data
+    const buildCountPipeline = (statusMatch) => {
+      const pipeline = [];
+      
+      // Start with base match (category, subCategory, dateRange)
+      const matchStage = {};
+      
+      // Category filter
+      if (category && category !== 'All') {
+        matchStage.category = category;
+      }
+      
+      // Subcategory filter
+      if (subCategory && subCategory !== 'All') {
+        matchStage.subCategory = subCategory;
+      }
+      
+      // Date range filter
+      if (fromDate || toDate) {
+        matchStage.createdAt = {};
+        if (fromDate) {
+          matchStage.createdAt.$gte = new Date(fromDate);
+        }
+        if (toDate) {
+          matchStage.createdAt.$lte = new Date(toDate);
+        }
+      }
+      
+      // Add status match if provided
+      if (statusMatch) {
+        Object.assign(matchStage, statusMatch);
+      }
+      
+      // Apply initial match
+      if (Object.keys(matchStage).length > 0) {
+        pipeline.push({ $match: matchStage });
+      }
+      
+      // If search filter exists, lookup student and filter
+      if (search) {
+        pipeline.push({
+          $lookup: {
+            from: 'users',
+            localField: 'student',
+            foreignField: '_id',
+            as: 'studentData'
+          }
+        });
+        pipeline.push({
+          $match: {
+            $or: [
+              { description: { $regex: search, $options: 'i' } },
+              { 'studentData.name': { $regex: search, $options: 'i' } },
+              { 'studentData.rollNumber': { $regex: search, $options: 'i' } }
+            ]
+          }
+        });
+      }
+      
+      pipeline.push({ $count: 'count' });
+      return pipeline;
+    };
+
+    // Get counts for each status (applying base filters but not status filter)
     const statusCounts = await Complaint.aggregate([
       {
         $facet: {
-          active: [
-            { $match: { currentStatus: { $in: ['Received', 'In Progress'] } } },
-            { $count: 'count' }
-          ],
-          resolved: [
-            { $match: { currentStatus: 'Resolved', isLockedForUpdates: false } },
-            { $count: 'count' }
-          ],
-          closed: [
-            { $match: { currentStatus: 'Resolved', isLockedForUpdates: true } },
-            { $count: 'count' }
-          ],
-          total: [
-            { $count: 'count' }
-          ]
+          active: buildCountPipeline({ currentStatus: { $in: ['Received', 'In Progress'] } }),
+          inProgress: buildCountPipeline({ currentStatus: 'In Progress' }),
+          resolved: buildCountPipeline({ currentStatus: 'Resolved', isLockedForUpdates: false }),
+          closed: buildCountPipeline({ currentStatus: 'Resolved', isLockedForUpdates: true }),
+          total: buildCountPipeline(null)
         }
       }
     ]);
 
     const counts = {
       active: statusCounts[0].active[0]?.count || 0,
+      inProgress: statusCounts[0].inProgress[0]?.count || 0,
       resolved: statusCounts[0].resolved[0]?.count || 0,
       closed: statusCounts[0].closed[0]?.count || 0,
       total: statusCounts[0].total[0]?.count || 0
