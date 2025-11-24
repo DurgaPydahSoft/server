@@ -449,8 +449,7 @@ export const listAllComplaints = async (req, res) => {
         query.currentStatus = 'Resolved';
         query.isLockedForUpdates = false;
       } else if (status === 'Closed') {
-        query.currentStatus = 'Resolved';
-        query.isLockedForUpdates = true;
+        query.currentStatus = 'Closed';
       } else {
         query.currentStatus = status;
       }
@@ -546,7 +545,7 @@ export const listAllComplaints = async (req, res) => {
           active: buildCountPipeline({ currentStatus: { $in: ['Received', 'In Progress'] } }),
           inProgress: buildCountPipeline({ currentStatus: 'In Progress' }),
           resolved: buildCountPipeline({ currentStatus: 'Resolved', isLockedForUpdates: false }),
-          closed: buildCountPipeline({ currentStatus: 'Resolved', isLockedForUpdates: true }),
+          closed: buildCountPipeline({ currentStatus: 'Closed' }),
           total: buildCountPipeline(null)
         }
       }
