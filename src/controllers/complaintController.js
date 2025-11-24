@@ -449,7 +449,11 @@ export const listAllComplaints = async (req, res) => {
         query.currentStatus = 'Resolved';
         query.isLockedForUpdates = false;
       } else if (status === 'Closed') {
-        query.currentStatus = 'Closed';
+        // Support both old (Resolved + isLockedForUpdates) and new (Closed) status
+        query.$or = [
+          { currentStatus: 'Closed' },
+          { currentStatus: 'Resolved', isLockedForUpdates: true }
+        ];
       } else {
         query.currentStatus = status;
       }
@@ -542,10 +546,15 @@ export const listAllComplaints = async (req, res) => {
     const statusCounts = await Complaint.aggregate([
       {
         $facet: {
-          active: buildCountPipeline({ currentStatus: { $in: ['Received', 'In Progress'] } }),
+          active: buildCountPipeline({ currentStatus: { $in: ['Received', 'Pending', 'In Progress'] } }),
           inProgress: buildCountPipeline({ currentStatus: 'In Progress' }),
           resolved: buildCountPipeline({ currentStatus: 'Resolved', isLockedForUpdates: false }),
-          closed: buildCountPipeline({ currentStatus: 'Closed' }),
+          closed: buildCountPipeline({ 
+            $or: [
+              { currentStatus: 'Closed' },
+              { currentStatus: 'Resolved', isLockedForUpdates: true }
+            ]
+          }),
           total: buildCountPipeline(null)
         }
       }
