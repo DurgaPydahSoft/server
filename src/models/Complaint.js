@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 const statusSchema = new mongoose.Schema({
   status: {
     type: String,
-    enum: ['Received', 'Pending', 'In Progress', 'Resolved', 'Closed'],
+    enum: ['Received', 'In Progress', 'Resolved', 'Closed'],
     default: 'Received',
     required: true
   },
@@ -120,7 +120,7 @@ const complaintSchema = new mongoose.Schema({
   },
   currentStatus: {
     type: String,
-    enum: ['Received', 'Pending', 'In Progress', 'Resolved', 'Closed'],
+    enum: ['Received', 'In Progress', 'Resolved', 'Closed'],
     default: 'Received',
     index: true
   },
@@ -197,7 +197,7 @@ complaintSchema.virtual('age').get(function() {
 
 // Method to calculate time spent in each active status
 complaintSchema.methods.getActiveStatusDuration = function() {
-  const activeStatuses = ['Received', 'Pending', 'In Progress'];
+  const activeStatuses = ['Received', 'In Progress'];
   const now = new Date();
   let totalDuration = 0;
   
@@ -232,7 +232,7 @@ complaintSchema.methods.getActiveStatusDuration = function() {
 // Static method to find active complaints
 complaintSchema.statics.findActive = function() {
   return this.find({
-    currentStatus: { $in: ['Received', 'Pending', 'In Progress'] }
+    currentStatus: { $in: ['Received', 'In Progress'] }
   });
 };
 
@@ -248,7 +248,7 @@ complaintSchema.methods.updateStatus = async function(newStatus, note = '') {
   if (this.currentStatus === 'Closed' && newStatus !== 'Closed') { // Allow setting to Closed if it is already closed (idempotent)
     throw new Error('Complaint is already Closed and its status cannot be changed.');
   }
-  if (!['Received', 'Pending', 'In Progress', 'Resolved', 'Closed'].includes(newStatus)) {
+  if (!['Received', 'In Progress', 'Resolved', 'Closed'].includes(newStatus)) {
     throw new Error('Invalid status');
   }
 
@@ -290,7 +290,7 @@ complaintSchema.methods.addFeedback = async function(isSatisfied, comment = '') 
   if (!isSatisfied) {
     this.isReopened = true;
     // updateStatus will save the document. We don't need to save again in this block.
-    return this.updateStatus('Pending', comment ? `Reopened due to feedback: ${comment}` : 'Complaint reopened due to unsatisfactory feedback');
+    return this.updateStatus('Received', comment ? `Reopened due to feedback: ${comment}` : 'Complaint reopened due to unsatisfactory feedback');
   } else {
     // If satisfied, lock the complaint.
     this.isReopened = false;

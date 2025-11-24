@@ -401,7 +401,7 @@ export const listAllComplaints = async (req, res) => {
     // Status filter
     if (status && status !== 'All') {
       if (status === 'Active') {
-        query.currentStatus = { $in: ['Received', 'Pending', 'In Progress'] };
+        query.currentStatus = { $in: ['Received', 'In Progress'] };
       } else if (status === 'Resolved') {
         query.currentStatus = 'Resolved';
         query.isLockedForUpdates = false;
@@ -467,7 +467,7 @@ export const listAllComplaints = async (req, res) => {
       {
         $facet: {
           active: [
-            { $match: { currentStatus: { $in: ['Received', 'Pending', 'In Progress'] } } },
+            { $match: { currentStatus: { $in: ['Received', 'In Progress'] } } },
             { $count: 'count' }
           ],
           resolved: [
