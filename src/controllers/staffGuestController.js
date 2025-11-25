@@ -400,7 +400,8 @@ export const getStaffGuestStats = async (req, res, next) => {
         checkedInStaff,
         checkedInGuests,
         checkedInStudents,
-        totalActive: totalStaff + totalGuests + totalStudents,
+        totalRegistered: totalStaff + totalGuests + totalStudents, // All registered (active records)
+        totalActive: checkedInStaff + checkedInGuests + checkedInStudents, // Currently checked in only
         totalCheckedIn: checkedInStaff + checkedInGuests + checkedInStudents
       }
     });
