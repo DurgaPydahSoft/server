@@ -327,6 +327,21 @@ const updateTermDueDateConfig = async (req, res) => {
           message: `Invalid term due dates structure for ${term}`
         });
       }
+      // Validate lateFee if provided (optional field, but must be valid number if present)
+      if (termDueDates[term].lateFee !== undefined && termDueDates[term].lateFee !== null) {
+        const lateFee = parseFloat(termDueDates[term].lateFee);
+        if (isNaN(lateFee) || lateFee < 0) {
+          return res.status(400).json({
+            success: false,
+            message: `Late fee for ${term} must be a valid number >= 0`
+          });
+        }
+        // Ensure lateFee is stored as a number
+        termDueDates[term].lateFee = lateFee;
+      } else {
+        // Default to 0 if not provided
+        termDueDates[term].lateFee = 0;
+      }
     }
 
     // Validate reminder days structure
@@ -491,6 +506,27 @@ const deleteTermDueDateConfig = async (req, res) => {
   }
 };
 
+// Process late fees for all students
+const processLateFees = async (req, res) => {
+  try {
+    const { processLateFees: processLateFeesFn } = await import('../utils/lateFeeProcessor.js');
+    const result = await processLateFeesFn();
+    
+    res.json({
+      success: true,
+      message: `Late fee processing completed. Processed ${result.processedCount} students, Applied ${result.lateFeeAppliedCount} late fees.`,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error processing late fees:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to process late fees',
+      error: error.message
+    });
+  }
+};
+
 export {
   getReminderConfig,
   updateReminderConfig,
@@ -501,5 +537,6 @@ export {
   getTermDueDateConfig,
   calculateTermDueDates,
   recalculateAllReminderDates,
-  deleteTermDueDateConfig
+  deleteTermDueDateConfig,
+  processLateFees
 };

@@ -378,6 +378,28 @@ const userSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  // Late fee per term (applied once after due date passes)
+  term1LateFee: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  term2LateFee: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  term3LateFee: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  // Track when late fees were applied to avoid duplicate application
+  lateFeeApplied: {
+    term1: { type: Boolean, default: false },
+    term2: { type: Boolean, default: false },
+    term3: { type: Boolean, default: false }
+  },
   // Temporary field for pending hostel fee payments (not stored in database permanently)
   pendingHostelPayment: {
     cashfreeOrderId: String,

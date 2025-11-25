@@ -37,6 +37,7 @@ import reminderConfigRoutes from './routes/reminderConfigRoutes.js';
 import nocRoutes from './routes/nocRoutes.js';
 import apiRouter from './routes/index.js';
 import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
+import { scheduleLateFeeProcessing } from './utils/lateFeeProcessor.js';
 import Notification from './models/Notification.js';
 import { errorHandler } from './utils/error.js';
 
@@ -228,6 +229,10 @@ httpServer.listen(PORT, () => {
   // Start fee reminder processing
   scheduleReminderProcessing();
   console.log('💰 Fee reminder processing scheduled');
+  
+  // Start late fee processing (can be called manually or via cron)
+  scheduleLateFeeProcessing();
+  console.log('⏰ Late fee processing scheduled (call /api/reminder-config/process-late-fees manually or via cron)');
   
   // Start menu image cleanup
   setupMenuImageCleanup();

@@ -10,7 +10,8 @@ import {
   getTermDueDateConfig,
   calculateTermDueDates,
   recalculateAllReminderDates,
-  deleteTermDueDateConfig
+  deleteTermDueDateConfig,
+  processLateFees
 } from '../controllers/reminderConfigController.js';
 import { adminAuth } from '../middleware/authMiddleware.js';
 
@@ -127,5 +128,8 @@ router.delete('/term-due-dates/:courseId/:academicYear/:yearOfStudy', adminAuth,
   param('academicYear').matches(/^\d{4}-\d{4}$/).withMessage('Academic year must be in format YYYY-YYYY'),
   param('yearOfStudy').isInt({ min: 1, max: 10 }).withMessage('Year of study must be between 1 and 10')
 ], deleteTermDueDateConfig);
+
+// POST /api/reminder-config/process-late-fees - Process late fees for all students
+router.post('/process-late-fees', adminAuth, processLateFees);
 
 export default router;

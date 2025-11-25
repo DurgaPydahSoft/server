@@ -145,15 +145,18 @@ const reminderConfigSchema = new mongoose.Schema({
     termDueDates: {
       term1: {
         daysFromSemesterStart: { type: Number, required: true, min: 1, max: 365 },
-        description: { type: String, default: 'Term 1 Due Date' }
+        description: { type: String, default: 'Term 1 Due Date' },
+        lateFee: { type: Number, default: 0, min: 0 } // Late fee amount for term1
       },
       term2: {
         daysFromSemesterStart: { type: Number, required: true, min: 1, max: 365 },
-        description: { type: String, default: 'Term 2 Due Date' }
+        description: { type: String, default: 'Term 2 Due Date' },
+        lateFee: { type: Number, default: 0, min: 0 } // Late fee amount for term2
       },
       term3: {
         daysFromSemesterStart: { type: Number, required: true, min: 1, max: 365 },
-        description: { type: String, default: 'Term 3 Due Date' }
+        description: { type: String, default: 'Term 3 Due Date' },
+        lateFee: { type: Number, default: 0, min: 0 } // Late fee amount for term3
       }
     },
     // Reminder days configuration for each term
