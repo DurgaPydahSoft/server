@@ -1969,7 +1969,8 @@ export const getElectricityBills = async (req, res, next) => {
 // Batch Renewal
 export const renewBatches = async (req, res, next) => {
   try {
-    const { fromAcademicYear, toAcademicYear, studentIds } = req.body;
+    const { fromAcademicYear, toAcademicYear, studentIds, displayedStudentIds } = req.body;
+    const adminId = req.admin?._id || null;
 
     if (!fromAcademicYear || !toAcademicYear || !studentIds) {
       throw createError(400, 'Academic years and a list of student IDs are required.');
@@ -1989,22 +1990,28 @@ export const renewBatches = async (req, res, next) => {
       throw createError(400, '"To" academic year must be after "From" academic year.');
     }
 
-    // Find all students in the 'from' academic year to know who to deactivate
-    const allStudentsInYear = await User.find({ 
-      academicYear: fromAcademicYear, 
-      role: 'student',
-      hostelStatus: 'Active' // Only consider active students
-    });
-    const allStudentIdsInYear = allStudentsInYear.map(s => s._id.toString());
+    // Import FeeStructure model
+    const FeeStructure = (await import('../models/FeeStructure.js')).default;
 
-    // Determine who was unchecked
-    const uncheckedStudentIds = allStudentIdsInYear.filter(id => !studentIds.includes(id));
+    // Determine if we should deactivate unchecked students
+    // Only deactivate if displayedStudentIds is explicitly provided (course filter was applied)
+    let uncheckedStudentIds = [];
+    
+    if (displayedStudentIds && Array.isArray(displayedStudentIds) && displayedStudentIds.length > 0) {
+      // Course filter was applied - deactivate unchecked students from that course only
+      uncheckedStudentIds = displayedStudentIds.filter(id => !studentIds.includes(id));
+      console.log(`🔍 Renewal with course filter: ${displayedStudentIds.length} displayed, ${studentIds.length} selected, ${uncheckedStudentIds.length} to deactivate`);
+    } else {
+      // No course filter - only renew selected students, DON'T deactivate anyone
+      console.log(`🔍 Renewal without course filter: ${studentIds.length} students to renew, NO deactivations`);
+    }
 
     let renewedCount = 0;
     let graduatedCount = 0;
     let deactivatedCount = 0;
     const errors = [];
     const graduationDetails = [];
+    const renewalDetails = [];
 
     // Renew selected students
     for (const studentId of studentIds) {
@@ -2057,13 +2064,201 @@ export const renewBatches = async (req, res, next) => {
           continue;
         }
 
-        // Regular renewal for non-final year students
-        student.year += 1;
+        // Store previous fee information for renewal history
+        const previousFees = {
+          term1Fee: student.calculatedTerm1Fee || 0,
+          term2Fee: student.calculatedTerm2Fee || 0,
+          term3Fee: student.calculatedTerm3Fee || 0,
+          totalFee: student.totalCalculatedFee || 0,
+          term1LateFee: student.term1LateFee || 0,
+          term2LateFee: student.term2LateFee || 0,
+          term3LateFee: student.term3LateFee || 0
+        };
+        const previousYear = student.year;
+        const previousAcademicYear = student.academicYear;
+
+        // Calculate new year
+        const newYear = student.year + 1;
+
+        // Fetch new fee structure for the new academic year
+        let newFees = {
+          term1Fee: 0,
+          term2Fee: 0,
+          term3Fee: 0,
+          totalFee: 0
+        };
+        let feeStructureId = null;
+
+        try {
+          const feeStructure = await FeeStructure.getFeeStructure(
+            toAcademicYear,
+            student.course,
+            newYear,
+            student.category
+          );
+
+          if (feeStructure) {
+            feeStructureId = feeStructure._id;
+            
+            // For NEW academic year, calculate fees WITHOUT concession
+            // Concession must be re-requested and re-approved for the new year
+            newFees = {
+              term1Fee: feeStructure.term1Fee,
+              term2Fee: feeStructure.term2Fee,
+              term3Fee: feeStructure.term3Fee,
+              totalFee: feeStructure.totalFee
+            };
+
+            // Update student's calculated fees (without concession for new year)
+            student.calculatedTerm1Fee = feeStructure.term1Fee;
+            student.calculatedTerm2Fee = feeStructure.term2Fee;
+            student.calculatedTerm3Fee = feeStructure.term3Fee;
+            student.totalCalculatedFee = feeStructure.totalFee;
+
+            console.log(`💰 Fee update for ${student.rollNumber}:`, {
+              previous: previousFees,
+              new: newFees,
+              note: 'New year - no concession applied. Concession must be re-requested.'
+            });
+          } else {
+            console.log(`⚠️ No fee structure found for ${student.rollNumber} - ${toAcademicYear}, Year ${newYear}, Category ${student.category}`);
+          }
+        } catch (feeError) {
+          console.error(`Error fetching fee structure for ${student.rollNumber}:`, feeError);
+        }
+
+        // Store previous year's concession in academicYearConcessions (if any)
+        const previousConcession = student.concession || 0;
+        const hadApprovedConcession = previousConcession > 0 && student.concessionApproved;
+        
+        if (previousConcession > 0) {
+          if (!student.academicYearConcessions) {
+            student.academicYearConcessions = [];
+          }
+          
+          // Check if entry already exists for previous year
+          const existingEntry = student.academicYearConcessions.find(
+            c => c.academicYear === previousAcademicYear
+          );
+          
+          if (!existingEntry) {
+            student.academicYearConcessions.push({
+              academicYear: previousAcademicYear,
+              amount: previousConcession,
+              status: student.concessionApproved ? 'approved' : 'pending',
+              requestedBy: student.concessionRequestedBy,
+              requestedAt: student.concessionRequestedAt,
+              approvedBy: student.concessionApprovedBy,
+              approvedAt: student.concessionApprovedAt,
+              notes: `Archived during renewal to ${toAcademicYear}`
+            });
+          }
+          
+          // Add to concession history
+          if (!student.concessionHistory) {
+            student.concessionHistory = [];
+          }
+          student.concessionHistory.push({
+            action: 'renewed',
+            amount: previousConcession, // Keep same amount for new request
+            previousAmount: previousConcession,
+            academicYear: toAcademicYear,
+            performedBy: adminId,
+            performedAt: new Date(),
+            notes: `Auto-requested concession of ₹${previousConcession} for ${toAcademicYear} based on previous year's approved concession.`
+          });
+        }
+
+        // Handle concession for new academic year
+        if (hadApprovedConcession) {
+          // If student had an APPROVED concession, auto-create a new request for the same amount
+          // This request will go to the approval queue for Super Admin to approve
+          student.concession = previousConcession; // Request same amount
+          student.concessionApproved = false; // Needs approval
+          student.concessionApprovedBy = null;
+          student.concessionApprovedAt = null;
+          student.concessionRequestedBy = adminId; // System/admin who did renewal
+          student.concessionRequestedAt = new Date();
+          
+          // Add new year entry to academicYearConcessions as pending
+          student.academicYearConcessions.push({
+            academicYear: toAcademicYear,
+            amount: previousConcession,
+            status: 'pending',
+            requestedBy: adminId,
+            requestedAt: new Date(),
+            notes: `Auto-requested based on ${previousAcademicYear} approved concession of ₹${previousConcession}`
+          });
+          
+          console.log(`📋 Auto-created concession request for ${student.rollNumber}: ₹${previousConcession} (pending approval)`);
+        } else {
+          // No approved concession - reset to 0
+          student.concession = 0;
+          student.concessionApproved = false;
+          student.concessionApprovedBy = null;
+          student.concessionApprovedAt = null;
+          student.concessionRequestedBy = null;
+          student.concessionRequestedAt = null;
+        }
+
+        // Reset late fees for the new academic year
+        student.term1LateFee = 0;
+        student.term2LateFee = 0;
+        student.term3LateFee = 0;
+        student.lateFeeApplied = {
+          term1: false,
+          term2: false,
+          term3: false
+        };
+
+        // Create renewal history entry
+        const renewalEntry = {
+          previousAcademicYear,
+          previousYear,
+          previousFees,
+          newAcademicYear: toAcademicYear,
+          newYear,
+          newFees,
+          feeStructureId,
+          previousConcession: previousConcession,
+          newConcession: 0, // Reset - must be re-requested
+          renewedAt: new Date(),
+          renewedBy: adminId,
+          notes: `Renewed from ${previousAcademicYear} (Year ${previousYear}) to ${toAcademicYear} (Year ${newYear}). Concession reset to ₹0.`
+        };
+
+        // Add to renewal history
+        if (!student.renewalHistory) {
+          student.renewalHistory = [];
+        }
+        student.renewalHistory.push(renewalEntry);
+        student.totalRenewals = (student.totalRenewals || 0) + 1;
+
+        // Update student's year and academic year
+        student.year = newYear;
         student.academicYear = toAcademicYear;
         student.hostelStatus = 'Active'; // Ensure they remain active
         student.graduationStatus = 'Enrolled'; // Ensure they remain enrolled
+
         await student.save();
         renewedCount++;
+
+        // Add to renewal details for response
+        renewalDetails.push({
+          studentId: student._id,
+          name: student.name,
+          rollNumber: student.rollNumber,
+          previousYear,
+          newYear,
+          previousFees,
+          newFees,
+          previousConcession: previousConcession,
+          newConcession: hadApprovedConcession ? previousConcession : 0,
+          concessionAutoRequested: hadApprovedConcession, // Auto-created request for approval
+          concessionPendingApproval: hadApprovedConcession, // Needs Super Admin approval
+          totalRenewals: student.totalRenewals
+        });
+
       } catch (error) {
         errors.push({ id: studentId, error: error.message });
       }
@@ -2092,7 +2287,8 @@ export const renewBatches = async (req, res, next) => {
         graduatedCount,
         deactivatedCount,
         errors,
-        graduationDetails
+        graduationDetails,
+        renewalDetails
       },
     });
   } catch (error) {

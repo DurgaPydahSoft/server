@@ -296,6 +296,7 @@ const userSchema = new mongoose.Schema({
     required: false
   },
   // Fee concession and calculated amounts
+  // Legacy field - kept for backward compatibility, represents CURRENT year's active concession
   concession: {
     type: Number,
     default: 0,
@@ -307,7 +308,7 @@ const userSchema = new mongoose.Schema({
       message: 'Concession must be a positive number'
     }
   },
-  // Concession approval fields
+  // Concession approval fields (for current academic year)
   concessionApproved: {
     type: Boolean,
     default: false
@@ -333,7 +334,7 @@ const userSchema = new mongoose.Schema({
   concessionHistory: [{
     action: {
       type: String,
-      enum: ['requested', 'approved', 'rejected', 'updated'],
+      enum: ['requested', 'approved', 'rejected', 'updated', 'renewed', 'reset'],
       required: true
     },
     amount: {
@@ -344,6 +345,10 @@ const userSchema = new mongoose.Schema({
       type: Number,
       default: null
     },
+    academicYear: {
+      type: String,
+      default: null
+    },
     performedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Admin',
@@ -352,6 +357,58 @@ const userSchema = new mongoose.Schema({
     performedAt: {
       type: Date,
       default: Date.now
+    },
+    notes: {
+      type: String,
+      default: ''
+    }
+  }],
+  // Academic Year specific concessions - tracks concession per year
+  academicYearConcessions: [{
+    academicYear: {
+      type: String,
+      required: true
+    },
+    amount: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    },
+    requestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      default: null
+    },
+    requestedAt: {
+      type: Date,
+      default: null
+    },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      default: null
+    },
+    approvedAt: {
+      type: Date,
+      default: null
+    },
+    rejectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      default: null
+    },
+    rejectedAt: {
+      type: Date,
+      default: null
+    },
+    rejectionReason: {
+      type: String,
+      default: ''
     },
     notes: {
       type: String,
@@ -408,6 +465,72 @@ const userSchema = new mongoose.Schema({
     paymentType: String,
     status: String,
     initiatedAt: Date
+  },
+  // Renewal history to track year-wise fee changes
+  renewalHistory: [{
+    // Previous academic year details
+    previousAcademicYear: {
+      type: String,
+      required: true
+    },
+    previousYear: {
+      type: Number,
+      required: true
+    },
+    previousFees: {
+      term1Fee: { type: Number, default: 0 },
+      term2Fee: { type: Number, default: 0 },
+      term3Fee: { type: Number, default: 0 },
+      totalFee: { type: Number, default: 0 },
+      term1LateFee: { type: Number, default: 0 },
+      term2LateFee: { type: Number, default: 0 },
+      term3LateFee: { type: Number, default: 0 }
+    },
+    // New academic year details
+    newAcademicYear: {
+      type: String,
+      required: true
+    },
+    newYear: {
+      type: Number,
+      required: true
+    },
+    newFees: {
+      term1Fee: { type: Number, default: 0 },
+      term2Fee: { type: Number, default: 0 },
+      term3Fee: { type: Number, default: 0 },
+      totalFee: { type: Number, default: 0 }
+    },
+    // Fee structure reference (optional)
+    feeStructureId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'FeeStructure',
+      default: null
+    },
+    // Concession at time of renewal
+    concessionApplied: {
+      type: Number,
+      default: 0
+    },
+    // Renewal metadata
+    renewedAt: {
+      type: Date,
+      default: Date.now
+    },
+    renewedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      default: null
+    },
+    notes: {
+      type: String,
+      default: ''
+    }
+  }],
+  // Total renewals count
+  totalRenewals: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true
