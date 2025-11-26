@@ -159,9 +159,34 @@ class NotificationService {
 
   // Send complaint status update notification
   async sendComplaintStatusUpdate(recipientId, complaintData, newStatus, adminName = 'Admin', adminId = null) {
+    // Customize message based on status
+    let message;
+    if (newStatus === 'Resolved') {
+      message = `🎉 great news! Your complaint has been resolved! Please provide feedback to help us improve.`;
+    } else if (newStatus === 'In Progress') {
+      message = `📋 your complaint is now being worked on! We'll keep you updated.`;
+    } else if (newStatus === 'Closed') {
+      message = `✅ your complaint has been closed. Thank you for your feedback!`;
+    } else {
+      message = `📝 your complaint status has been updated to ${newStatus.toLowerCase()}`;
+    }
+
     const notificationData = {
       type: 'complaint',
-      message: `great news! Your complaint has been ${newStatus.toLowerCase()} ✅`,
+      message: message,
+      relatedId: complaintData._id || complaintData.id,
+      sender: adminId,
+      onModel: 'Complaint'
+    };
+
+    return await this.sendToUser(recipientId, notificationData);
+  }
+
+  // Send feedback reminder notification for resolved complaints
+  async sendFeedbackReminderNotification(recipientId, complaintData, adminId = null) {
+    const notificationData = {
+      type: 'complaint',
+      message: `⏰ reminder! Your complaint "${complaintData.category}" is resolved. Please share your feedback to close it.`,
       relatedId: complaintData._id || complaintData.id,
       sender: adminId,
       onModel: 'Complaint'
