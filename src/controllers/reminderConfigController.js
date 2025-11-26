@@ -24,7 +24,7 @@ const getReminderConfig = async (req, res) => {
             template: 'pre_reminder_push'
           },
           sms: {
-            enabled: false,
+            enabled: true,
             daysBeforeDue: [3, 1],
             template: 'pre_reminder_sms'
           }
@@ -41,7 +41,7 @@ const getReminderConfig = async (req, res) => {
             template: 'post_reminder_push'
           },
           sms: {
-            enabled: false,
+            enabled: true,
             daysAfterDue: [1, 3, 7],
             template: 'post_reminder_sms'
           }
@@ -226,7 +226,7 @@ const resetReminderConfig = async (req, res) => {
           template: 'pre_reminder_push'
         },
         sms: {
-          enabled: false,
+          enabled: true,
           daysBeforeDue: [3, 1],
           template: 'pre_reminder_sms'
         }
@@ -243,7 +243,7 @@ const resetReminderConfig = async (req, res) => {
           template: 'post_reminder_push'
         },
         sms: {
-          enabled: false,
+          enabled: true,
           daysAfterDue: [1, 3, 7],
           template: 'post_reminder_sms'
         }

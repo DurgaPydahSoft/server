@@ -3,67 +3,11 @@ import User from '../models/User.js';
 import Notification from '../models/Notification.js';
 import FeeStructure from '../models/FeeStructure.js';
 import { sendFeeReminderEmail } from '../utils/emailService.js';
-import { sendSMS } from '../utils/smsService.js';
+import { sendSMS, sendFeeReminderSMS as smsServiceFeeReminder } from '../utils/smsService.js';
 
-// SMS template for fee reminders
-const FEE_REMINDER_SMS_TEMPLATE = "earliest to avoid late fee	Dear {#var#}, your Hostel Term {#var#} Fee of {#var#} is due on {#var#}. Kindly pay at the earliest to avoid late fee. - Pydah Hostel";
-const FEE_REMINDER_SMS_TEMPLATE_ID = "1707175825997463253";
-
-// Helper function to send fee reminder SMS
+// Helper function to send fee reminder SMS (wrapper)
 const sendFeeReminderSMS = async (studentPhone, studentName, term, amount, dueDate) => {
-  try {
-    if (!studentPhone) {
-      console.log('📱 No phone number for student:', studentName);
-      return { success: false, reason: 'No phone number' };
-    }
-
-    // Format the amount with currency symbol
-    const formattedAmount = `₹${amount}`;
-    
-    // Format the due date
-    const formattedDueDate = new Date(dueDate).toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
-
-    // Replace template variables
-    const message = FEE_REMINDER_SMS_TEMPLATE
-      .replace('{#var#}', studentName)        // var1 - student name
-      .replace('{#var#}', term)               // var2 - term1 or term2 or term3
-      .replace('{#var#}', formattedAmount)    // var3 - amount pending
-      .replace('{#var#}', formattedDueDate);  // var4 - due date
-
-    const params = {
-      apikey: process.env.BULKSMS_API_KEY || "7c9c967a-4ce9-4748-9dc7-d2aaef847275",
-      sender: process.env.BULKSMS_SENDER_ID || "PYDAHK",
-      number: studentPhone,
-      message: message,
-      templateid: FEE_REMINDER_SMS_TEMPLATE_ID
-    };
-
-    console.log('📱 Fee reminder SMS params:', {
-      message: params.message,
-      templateid: params.templateid,
-      studentName,
-      term,
-      amount: formattedAmount,
-      dueDate: formattedDueDate
-    });
-
-    const result = await sendSMS(studentPhone, message, { templateId: FEE_REMINDER_SMS_TEMPLATE_ID });
-    
-    if (result.success) {
-      console.log(`✅ Fee reminder SMS sent to: ${studentPhone} (${studentName})`);
-      return { success: true, messageId: result.messageId };
-    } else {
-      console.log(`❌ Failed to send fee reminder SMS to: ${studentPhone} (${studentName})`);
-      return { success: false, reason: 'SMS sending failed' };
-    }
-  } catch (error) {
-    console.error(`📱 Error sending fee reminder SMS to ${studentPhone}:`, error);
-    return { success: false, reason: error.message };
-  }
+  return await smsServiceFeeReminder(studentPhone, studentName, term, amount, dueDate);
 };
 
 // Get fee reminders for a student

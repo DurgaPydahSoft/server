@@ -19,6 +19,10 @@ const HOSTEL_ENGLISH_OTP_TEMPLATE = "Dear Parents, your child {#var#} is seeking
 const ADMIN_CREDENTIAL_TEMPLATE = "Welcome to PYDAH HOSTEL. Your Account is created with UserID: {#var#} Password: {#var#} login with link: {#var#} -Pydah";
 const ADMIN_CREDENTIAL_TEMPLATE_ID = process.env.ADMIN_CREDENTIAL_TEMPLATE_ID || "1707175393810117693"; // Admin credential template ID
 
+// Fee reminder template
+const FEE_REMINDER_TEMPLATE = "Dear {#var#}, your Hostel Term {#var#} Fee of {#var#} is due on {#var#}. Kindly pay at the earliest to avoid late fee. - Pydah Hostel";
+const FEE_REMINDER_TEMPLATE_ID = process.env.FEE_REMINDER_TEMPLATE_ID || "1707175825997463253";
+
 // Helper function to check if response is valid
 const isValidSMSResponse = (responseData) => {
   if (!responseData || typeof responseData !== 'string') {
@@ -146,6 +150,89 @@ export const sendAdminCredentialsSMS = async (phoneNumber, username, password) =
   } catch (error) {
     console.error('📱 Error sending admin credential SMS:', error);
     throw error;
+  }
+};
+
+// Function to send fee reminder SMS
+export const sendFeeReminderSMS = async (phoneNumber, studentName, term, amount, dueDate) => {
+  try {
+    if (!BULKSMS_API_KEY || !BULKSMS_SENDER_ID || !BULKSMS_ENGLISH_API_URL) {
+      console.log('📱 SMS service configuration missing');
+      return { success: false, reason: 'SMS service configuration missing' };
+    }
+
+    if (!phoneNumber) {
+      console.log('📱 No phone number provided for student:', studentName);
+      return { success: false, reason: 'No phone number' };
+    }
+
+    console.log('📱 Sending fee reminder SMS to:', phoneNumber);
+    
+    // Format the amount with currency symbol (remove ₹ if already present, then add it)
+    const cleanAmount = String(amount).replace('₹', '').trim();
+    const formattedAmount = `Rs.${cleanAmount}`;
+    
+    // Format the due date
+    const formattedDueDate = new Date(dueDate).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    });
+
+    // Format term (e.g., "Term 1", "Term 2", "Term 3")
+    const formattedTerm = term.toString().toLowerCase().includes('term') 
+      ? term 
+      : `Term ${term}`;
+
+    // Replace template variables with actual values
+    // Template: "Dear {#var#}, your Hostel Term {#var#} Fee of {#var#} is due on {#var#}. Kindly pay at the earliest to avoid late fee. - Pydah Hostel"
+    const message = FEE_REMINDER_TEMPLATE
+      .replace('{#var#}', studentName)        // var1 - student name
+      .replace('{#var#}', formattedTerm)      // var2 - term (e.g., "Term 1")
+      .replace('{#var#}', formattedAmount)    // var3 - amount pending
+      .replace('{#var#}', formattedDueDate);  // var4 - due date
+    
+    const params = {
+      apikey: BULKSMS_API_KEY,
+      sender: BULKSMS_SENDER_ID,
+      number: phoneNumber,
+      message: message,
+      templateid: FEE_REMINDER_TEMPLATE_ID
+    };
+    
+    console.log('📱 Fee reminder SMS params:', {
+      message: params.message,
+      templateid: params.templateid,
+      originalTemplate: FEE_REMINDER_TEMPLATE,
+      studentName: studentName,
+      term: formattedTerm,
+      amount: formattedAmount,
+      dueDate: formattedDueDate
+    });
+    
+    const response = await sendSMSPost(params, false); // isUnicode = false for English
+    
+    console.log('📱 Fee reminder SMS response:', response.data);
+    
+    // Check if response is valid
+    if (isValidSMSResponse(response.data)) {
+      const messageId = extractMessageId(response.data);
+      if (messageId) {
+        console.log('✅ Fee reminder SMS sent successfully with MessageId:', messageId);
+        return {
+          success: true,
+          messageId: messageId,
+          approach: 'Fee Reminder Template',
+          language: 'English'
+        };
+      }
+    }
+    
+    console.log('❌ Fee reminder SMS returned invalid response');
+    return { success: false, reason: 'Invalid SMS response' };
+  } catch (error) {
+    console.error('📱 Error sending fee reminder SMS:', error);
+    return { success: false, reason: error.message };
   }
 };
 

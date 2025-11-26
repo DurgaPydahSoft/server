@@ -35,7 +35,7 @@ const reminderConfigSchema = new mongoose.Schema({
     sms: {
       enabled: {
         type: Boolean,
-        default: false
+        default: true
       },
       daysBeforeDue: [{
         type: Number,
@@ -82,7 +82,7 @@ const reminderConfigSchema = new mongoose.Schema({
     sms: {
       enabled: {
         type: Boolean,
-        default: false
+        default: true
       },
       daysAfterDue: [{
         type: Number,
