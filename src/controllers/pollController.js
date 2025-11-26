@@ -30,10 +30,11 @@ export const createPoll = async (req, res, next) => {
         const studentIds = students.map(student => student._id);
         
         // Send poll notification to all students
+        // Note: Admin model uses 'username' not 'name'
         await notificationService.sendPollNotification(
           studentIds,
           poll,
-          req.admin.name,
+          req.admin.username || req.admin.name || 'Admin',
           req.admin._id
         );
       }
@@ -51,45 +52,66 @@ export const createPoll = async (req, res, next) => {
 // Get all polls (admin)
 export const getAllPolls = async (req, res, next) => {
   try {
+    // First, update any polls that need status changes
+    const now = new Date();
+    
+    // Update scheduled polls that should now be active
+    await Poll.updateMany(
+      { status: 'scheduled', scheduledTime: { $lte: now } },
+      { $set: { status: 'active' } }
+    );
+    
+    // Update active polls that have ended
+    await Poll.updateMany(
+      { status: 'active', endTime: { $lt: now } },
+      { $set: { status: 'ended' } }
+    );
+
+    // Now fetch all polls with proper population
+    // Note: Admin model uses 'username' not 'name'
     const polls = await Poll.find()
-      .populate('createdBy', 'name')
+      .populate('createdBy', 'username role')
       .sort({ createdAt: -1 });
 
-    // Update poll statuses based on end time and scheduled time
-    const updatedPolls = await Promise.all(polls.map(async (poll) => {
-      const now = new Date();
+    const adminId = req.admin._id.toString();
+    const adminRole = req.admin.role;
+    const isSuperAdmin = adminRole === 'super_admin';
+
+    // Process polls for response
+    const processedPolls = polls.map((poll) => {
+      // Get creator ID safely
+      const creatorId = poll.createdBy?._id?.toString() || poll.createdBy?.toString() || '';
+      // Admin model uses 'username' field, not 'name'
+      const creatorName = poll.createdBy?.username || 'Unknown Admin';
       
-      // Handle scheduled polls
-      if (poll.status === 'scheduled' && poll.scheduledTime && now >= poll.scheduledTime) {
-        poll.status = 'active';
-        await poll.save();
-        
-        // Create notifications for all students when scheduled poll becomes active
-        const students = await User.find({ role: 'student' });
-        if (students.length > 0) {
-          const studentIds = students.map(student => student._id);
-          
-          await notificationService.sendPollNotification(
-            studentIds,
-            poll,
-            poll.createdBy.name,
-            poll.createdBy._id
-          );
-        }
+      // Check if the current admin can see the results
+      const isCreator = creatorId === adminId;
+      const canViewResults = isSuperAdmin || isCreator;
+      // Check if the current admin can manage (end/delete) this poll
+      const canManage = isSuperAdmin || isCreator;
+      
+      // Convert to object and add flags
+      const pollObj = poll.toObject();
+      pollObj.canViewResults = canViewResults;
+      pollObj.canManage = canManage;
+      pollObj.isCreator = isCreator;
+      pollObj.creatorName = creatorName;
+      
+      // If admin cannot view results, hide vote counts
+      if (!canViewResults) {
+        pollObj.options = pollObj.options.map(opt => ({
+          ...opt,
+          votes: 0  // Hide actual votes
+        }));
+        pollObj.voters = []; // Hide voters list
       }
       
-      // Handle active polls that have ended
-      if (poll.status === 'active' && now > poll.endTime) {
-        poll.status = 'ended';
-        await poll.save();
-      }
-      
-      return poll;
-    }));
+      return pollObj;
+    });
 
     res.json({
       success: true,
-      data: updatedPolls
+      data: processedPolls
     });
   } catch (error) {
     next(error);
@@ -216,11 +238,19 @@ export const votePoll = async (req, res, next) => {
 export const endPoll = async (req, res, next) => {
   try {
     const { pollId } = req.params;
+    const adminId = req.admin._id.toString();
+    const isSuperAdmin = req.admin.role === 'super_admin';
 
     const poll = await Poll.findById(pollId);
     
     if (!poll) {
       throw createError(404, 'Poll not found');
+    }
+
+    // Check if the admin has permission to end this poll
+    const isCreator = poll.createdBy.toString() === adminId;
+    if (!isSuperAdmin && !isCreator) {
+      throw createError(403, 'You can only end polls that you created');
     }
 
     if (poll.status === 'ended') {
@@ -243,11 +273,19 @@ export const endPoll = async (req, res, next) => {
 export const deletePoll = async (req, res, next) => {
   try {
     const { pollId } = req.params;
+    const adminId = req.admin._id.toString();
+    const isSuperAdmin = req.admin.role === 'super_admin';
 
     const poll = await Poll.findById(pollId);
     
     if (!poll) {
       throw createError(404, 'Poll not found');
+    }
+
+    // Check if the admin has permission to delete this poll
+    const isCreator = poll.createdBy.toString() === adminId;
+    if (!isSuperAdmin && !isCreator) {
+      throw createError(403, 'You can only delete polls that you created');
     }
 
     await poll.deleteOne();
