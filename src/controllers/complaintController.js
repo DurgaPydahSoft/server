@@ -597,9 +597,11 @@ export const updateComplaintStatus = async (req, res) => {
     const { id } = req.params;
     const { status, note, memberId } = req.body;
     const adminId = req.admin ? req.admin._id : req.user._id;
+    const adminRole = req.admin ? req.admin.role : req.user?.role;
 
     console.log('📝 Updating complaint status:', id, 'to:', status);
     console.log('📝 Request body:', req.body);
+    console.log('📝 Admin role:', adminRole);
 
     const complaint = await Complaint.findById(id).populate('student', 'name email');
 
@@ -615,6 +617,14 @@ export const updateComplaintStatus = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Complaint is locked and cannot be updated'
+      });
+    }
+
+    // Only super_admin can directly close a complaint
+    if (status === 'Closed' && adminRole !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only Super Admin can directly close a complaint. Please set status to "Resolved" instead.'
       });
     }
 
