@@ -44,25 +44,45 @@ export const processLateFees = async () => {
           continue;
         }
 
-        // Get semester start date from academic calendar
-        const academicCalendar = await AcademicCalendar.findOne({
+        // Get both semester start dates from academic calendar
+        const semester1Calendar = await AcademicCalendar.findOne({
           course: student.course._id,
           academicYear: student.academicYear,
           semester: 'Semester 1',
           isActive: true
         });
 
-        if (!academicCalendar || !academicCalendar.startDate) {
+        const semester2Calendar = await AcademicCalendar.findOne({
+          course: student.course._id,
+          academicYear: student.academicYear,
+          semester: 'Semester 2',
+          isActive: true
+        });
+
+        if (!semester1Calendar?.startDate && !semester2Calendar?.startDate) {
           console.log(`⚠️ No academic calendar found for student ${student.name}`);
           continue;
         }
 
-        // Calculate actual due dates
-        const semesterStartDate = new Date(academicCalendar.startDate);
+        // Prepare semester dates object
+        const semesterDates = {
+          semester1: semester1Calendar?.startDate ? new Date(semester1Calendar.startDate) : null,
+          semester2: semester2Calendar?.startDate ? new Date(semester2Calendar.startDate) : null
+        };
+
+        // Calculate actual due dates based on configured reference semester for each term
+        const getReferenceDate = (termKey) => {
+          const referenceSemester = termConfig.termDueDates[termKey]?.referenceSemester || 'Semester 1';
+          if (referenceSemester === 'Semester 2' && semesterDates.semester2) {
+            return semesterDates.semester2;
+          }
+          return semesterDates.semester1 || semesterDates.semester2; // Fallback
+        };
+
         const dueDates = {
-          term1: new Date(semesterStartDate.getTime() + termConfig.termDueDates.term1.daysFromSemesterStart * 24 * 60 * 60 * 1000),
-          term2: new Date(semesterStartDate.getTime() + termConfig.termDueDates.term2.daysFromSemesterStart * 24 * 60 * 60 * 1000),
-          term3: new Date(semesterStartDate.getTime() + termConfig.termDueDates.term3.daysFromSemesterStart * 24 * 60 * 60 * 1000)
+          term1: new Date(getReferenceDate('term1').getTime() + termConfig.termDueDates.term1.daysFromSemesterStart * 24 * 60 * 60 * 1000),
+          term2: new Date(getReferenceDate('term2').getTime() + termConfig.termDueDates.term2.daysFromSemesterStart * 24 * 60 * 60 * 1000),
+          term3: new Date(getReferenceDate('term3').getTime() + termConfig.termDueDates.term3.daysFromSemesterStart * 24 * 60 * 60 * 1000)
         };
 
         // Get fee structure to check term balances

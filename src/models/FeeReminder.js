@@ -121,7 +121,7 @@ feeReminderSchema.index({ 'feeStatus.term1': 1, 'feeStatus.term2': 1, 'feeStatus
 // Method to calculate reminder dates based on academic calendar and configurable term due dates
 feeReminderSchema.methods.calculateReminderDates = async function() {
   try {
-    // Try to get academic calendar for semester-1 start date
+    // Try to get academic calendar for both semesters
     const AcademicCalendar = mongoose.model('AcademicCalendar');
     const User = mongoose.model('User');
     const ReminderConfig = mongoose.model('ReminderConfig');
@@ -134,25 +134,38 @@ feeReminderSchema.methods.calculateReminderDates = async function() {
       return;
     }
     
-    // Find academic calendar for current academic year and semester-1
+    // Find academic calendars for current academic year (both semesters)
     const currentAcademicYear = this.academicYear;
-    const academicCalendar = await AcademicCalendar.findOne({
+    
+    const semester1Calendar = await AcademicCalendar.findOne({
       course: student.course._id,
       academicYear: currentAcademicYear,
       semester: 'Semester 1',
       isActive: true
     });
     
-    if (academicCalendar && academicCalendar.startDate) {
+    const semester2Calendar = await AcademicCalendar.findOne({
+      course: student.course._id,
+      academicYear: currentAcademicYear,
+      semester: 'Semester 2',
+      isActive: true
+    });
+    
+    if (semester1Calendar?.startDate || semester2Calendar?.startDate) {
       console.log('📅 Using academic calendar for reminder dates');
-      const semesterStartDate = new Date(academicCalendar.startDate);
       
-      // Try to get configurable term due dates
+      // Prepare semester dates object for the model method
+      const semesterDates = {
+        semester1: semester1Calendar?.startDate ? new Date(semester1Calendar.startDate) : null,
+        semester2: semester2Calendar?.startDate ? new Date(semester2Calendar.startDate) : null
+      };
+      
+      // Try to get configurable term due dates with semester reference support
       const termDueDates = await ReminderConfig.calculateTermDueDates(
         student.course._id,
         currentAcademicYear,
         student.year,
-        semesterStartDate
+        semesterDates
       );
       
       // Calculate reminder dates based on configurable term due dates
@@ -161,7 +174,8 @@ feeReminderSchema.methods.calculateReminderDates = async function() {
       this.thirdReminderDate = new Date(termDueDates.term3);
       
       console.log('📅 Reminder dates calculated from configurable term due dates:', {
-        semesterStart: semesterStartDate,
+        semester1Start: semesterDates.semester1,
+        semester2Start: semesterDates.semester2,
         term1Due: termDueDates.term1,
         term2Due: termDueDates.term2,
         term3Due: termDueDates.term3,

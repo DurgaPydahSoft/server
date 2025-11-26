@@ -320,6 +320,8 @@ const updateTermDueDateConfig = async (req, res) => {
 
     // Validate term due dates structure
     const requiredTerms = ['term1', 'term2', 'term3'];
+    const validSemesters = ['Semester 1', 'Semester 2'];
+    
     for (const term of requiredTerms) {
       if (!termDueDates[term] || typeof termDueDates[term].daysFromSemesterStart !== 'number') {
         return res.status(400).json({
@@ -327,6 +329,20 @@ const updateTermDueDateConfig = async (req, res) => {
           message: `Invalid term due dates structure for ${term}`
         });
       }
+      
+      // Validate and set referenceSemester (optional field, defaults to 'Semester 1')
+      if (termDueDates[term].referenceSemester) {
+        if (!validSemesters.includes(termDueDates[term].referenceSemester)) {
+          return res.status(400).json({
+            success: false,
+            message: `Reference semester for ${term} must be 'Semester 1' or 'Semester 2'`
+          });
+        }
+      } else {
+        // Default to 'Semester 1' if not provided
+        termDueDates[term].referenceSemester = 'Semester 1';
+      }
+      
       // Validate lateFee if provided (optional field, but must be valid number if present)
       if (termDueDates[term].lateFee !== undefined && termDueDates[term].lateFee !== null) {
         const lateFee = parseFloat(termDueDates[term].lateFee);
