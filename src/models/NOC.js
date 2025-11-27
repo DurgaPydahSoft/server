@@ -49,6 +49,17 @@ const nocSchema = new mongoose.Schema({
     default: Date.now,
     required: true
   },
+  // Track who raised the NOC
+  raisedBy: {
+    type: String,
+    enum: ['student', 'warden'],
+    default: 'student'
+  },
+  raisedByWarden: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null
+  },
   // Status flow: Pending → Warden Verified → Approved
   status: {
     type: String,

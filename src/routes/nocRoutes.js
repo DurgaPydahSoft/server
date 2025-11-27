@@ -4,6 +4,8 @@ import {
   getStudentNOCRequests,
   getNOCRequestById,
   deleteNOCRequest,
+  createNOCForStudent,
+  getStudentsForNOC,
   getWardenNOCRequests,
   wardenVerifyNOC,
   wardenRejectNOC,
@@ -47,6 +49,8 @@ router.get('/student/:id', authenticateStudent, getNOCRequestById);
 router.delete('/student/:id', authenticateStudent, deleteNOCRequest);
 
 // Warden routes
+router.get('/warden/students', wardenAuth, getStudentsForNOC);  // Get students for creating NOC
+router.post('/warden/create', wardenAuth, createNOCForStudent);  // Create NOC on behalf of student
 router.get('/warden/all', wardenAuth, getWardenNOCRequests);
 router.post('/warden/:id/verify', wardenAuth, wardenVerifyNOC);
 router.post('/warden/:id/reject', wardenAuth, wardenRejectNOC);

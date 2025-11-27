@@ -65,8 +65,9 @@ export const getStudentNOCRequests = async (req, res, next) => {
   try {
     const studentId = req.user.id;
 
-    const nocRequests = await NOC.findByStudent(studentId)
+    const nocRequests = await NOC.find({ student: studentId })
       .populate('course branch', 'name')
+      .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
       .sort({ createdAt: -1 });
 
     res.json({
@@ -87,7 +88,7 @@ export const getNOCRequestById = async (req, res, next) => {
     const nocRequest = await NOC.findOne({ _id: id, student: studentId })
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy', 'username role');
+      .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role');
 
     if (!nocRequest) {
       return next(createError(404, 'NOC request not found'));
@@ -129,6 +130,156 @@ export const deleteNOCRequest = async (req, res, next) => {
   }
 };
 
+// Warden: Create NOC request on behalf of student
+export const createNOCForStudent = async (req, res, next) => {
+  try {
+    const { studentId, reason } = req.body;
+    const wardenId = req.warden._id;
+
+    console.log('📝 Warden creating NOC for student:', { studentId, reason, wardenId });
+
+    // Validate required fields
+    if (!studentId || !reason) {
+      return next(createError(400, 'Student ID and reason are required'));
+    }
+
+    // Validate reason length
+    if (reason.trim().length < 10) {
+      return next(createError(400, 'Reason must be at least 10 characters long'));
+    }
+
+    if (reason.trim().length > 500) {
+      return next(createError(400, 'Reason cannot exceed 500 characters'));
+    }
+
+    // Get student details
+    const student = await User.findById(studentId).populate('course branch');
+    if (!student) {
+      return next(createError(404, 'Student not found'));
+    }
+
+    // Check if student already has a pending NOC request
+    const existingNOC = await NOC.findOne({
+      student: studentId,
+      status: { $in: ['Pending', 'Warden Verified'] }
+    });
+
+    if (existingNOC) {
+      return next(createError(400, 'Student already has a pending NOC request'));
+    }
+
+    // Check if student is already deactivated
+    if (student.hostelStatus === 'Inactive') {
+      return next(createError(400, 'Student account is already deactivated'));
+    }
+
+    // Create NOC request
+    const nocRequest = new NOC({
+      student: studentId,
+      studentName: student.name,
+      rollNumber: student.rollNumber,
+      course: student.course._id,
+      branch: student.branch._id,
+      year: student.year,
+      academicYear: student.academicYear,
+      reason: reason.trim(),
+      raisedBy: 'warden',
+      raisedByWarden: wardenId
+    });
+
+    await nocRequest.save();
+
+    // Create notification for student about the NOC request
+    await Notification.create({
+      recipient: studentId,
+      recipientModel: 'User',
+      title: 'NOC Request Created',
+      message: `A NOC request has been created on your behalf by the warden. Reason: ${reason.substring(0, 100)}${reason.length > 100 ? '...' : ''}`,
+      type: 'system',
+      priority: 'high'
+    });
+
+    // Populate the created NOC
+    const populatedNOC = await NOC.findById(nocRequest._id)
+      .populate('student', 'name rollNumber course branch year academicYear')
+      .populate('course branch', 'name')
+      .populate('raisedByWarden', 'username role');
+
+    console.log('📝 NOC request created by warden successfully:', nocRequest._id);
+
+    res.status(201).json({
+      success: true,
+      message: 'NOC request created successfully on behalf of student',
+      data: populatedNOC
+    });
+  } catch (error) {
+    console.error('❌ Error creating NOC for student:', error);
+    next(error);
+  }
+};
+
+// Warden: Get students for NOC request creation
+export const getStudentsForNOC = async (req, res, next) => {
+  try {
+    const { search, course, year } = req.query;
+    const wardenHostelType = req.warden.hostelType;
+
+    // Build query - only active students
+    let query = { 
+      hostelStatus: 'Active',
+      role: 'student'
+    };
+
+    // Filter by hostel type (boys/girls)
+    if (wardenHostelType) {
+      query.gender = wardenHostelType === 'boys' ? 'Male' : 'Female';
+    }
+
+    // Add search filter
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { rollNumber: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Add course filter
+    if (course) {
+      query.course = course;
+    }
+
+    // Add year filter
+    if (year) {
+      query.year = parseInt(year);
+    }
+
+    const students = await User.find(query)
+      .select('name rollNumber course branch year academicYear gender roomNumber')
+      .populate('course branch', 'name code')
+      .sort({ name: 1 })
+      .limit(50);
+
+    // Filter out students who already have pending NOC requests
+    const studentIds = students.map(s => s._id);
+    const pendingNOCs = await NOC.find({
+      student: { $in: studentIds },
+      status: { $in: ['Pending', 'Warden Verified'] }
+    }).select('student');
+
+    const pendingStudentIds = new Set(pendingNOCs.map(n => n.student.toString()));
+
+    const availableStudents = students.filter(s => !pendingStudentIds.has(s._id.toString()));
+
+    res.json({
+      success: true,
+      data: availableStudents
+    });
+  } catch (error) {
+    console.error('❌ Error fetching students for NOC:', error);
+    next(error);
+  }
+};
+
 // Warden: Get all NOC requests for verification
 export const getWardenNOCRequests = async (req, res, next) => {
   try {
@@ -142,7 +293,7 @@ export const getWardenNOCRequests = async (req, res, next) => {
     const nocRequests = await NOC.find(query)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy', 'username role')
+      .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
       .sort({ createdAt: -1 });
 
     res.json({
@@ -263,7 +414,7 @@ export const getAllNOCRequests = async (req, res, next) => {
     const nocRequests = await NOC.find(query)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy', 'username role')
+      .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
       .sort({ createdAt: -1 });
 
     res.json({
