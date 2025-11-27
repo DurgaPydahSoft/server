@@ -1456,7 +1456,28 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
     await autoDeleteExpiredLeaves();
     
     const { status, principalDecision, wardenRecommendation, page = 1, limit = 10, fromDate, toDate } = req.query;
-    const query = { applicationType: 'Stay in Hostel' };
+    const principal = req.principal; // From principalAuth middleware
+
+    console.log('🎓 Principal Stay in Hostel requests:', {
+      principalId: principal._id,
+      principalCourse: principal.course,
+      principalCourseName: principal.course?.name
+    });
+
+    // First, get all students who belong to the principal's course
+    const studentsInCourse = await User.find({ 
+      course: principal.course._id || principal.course,
+      role: 'student'
+    }).select('_id');
+
+    const studentIds = studentsInCourse.map(s => s._id);
+    console.log(`🎓 Found ${studentIds.length} students in principal's course`);
+
+    // Build query to filter by students in principal's course
+    const query = { 
+      applicationType: 'Stay in Hostel',
+      student: { $in: studentIds }
+    };
 
     if (status) {
       query.status = status;
@@ -1493,6 +1514,8 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
 
     const count = await Leave.countDocuments(query);
 
+    console.log(`🎓 Found ${leaves.length} stay in hostel requests for principal's course`);
+
     res.json({
       success: true,
       data: {
@@ -1503,6 +1526,7 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       }
     });
   } catch (error) {
+    console.error('🎓 Error in getStayInHostelRequestsForPrincipal:', error);
     next(error);
   }
 };
@@ -2137,17 +2161,24 @@ export const principalRejectLeave = async (req, res, next) => {
 // Principal decision for Stay in Hostel request
 export const principalDecision = async (req, res, next) => {
   try {
-    const { requestId, decision, comment } = req.body;
-    const principalId = req.user.id;
+    // Accept both 'leaveId' (from frontend) and 'requestId' (legacy) for backwards compatibility
+    const { leaveId, requestId, decision, comment } = req.body;
+    const actualLeaveId = leaveId || requestId;
+    const principalId = req.principal._id || req.user.id;
 
     // Get principal details
-    const principal = await Admin.findById(principalId);
+    const principal = await Admin.findById(principalId).populate('course', 'name');
     if (!principal) {
       throw createError(404, 'Principal not found');
     }
 
     // Find the stay in hostel request
-    const request = await Leave.findById(requestId);
+    const request = await Leave.findById(actualLeaveId).populate({
+      path: 'student',
+      select: 'name rollNumber course',
+      populate: { path: 'course', select: 'name' }
+    });
+    
     if (!request) {
       throw createError(404, 'Stay in hostel request not found');
     }
@@ -2157,63 +2188,58 @@ export const principalDecision = async (req, res, next) => {
       throw createError(400, 'Invalid request type');
     }
 
-    // Verify the request is pending principal decision
-    if (request.status !== 'Pending Principal Decision') {
-      throw createError(400, 'Request is not pending principal decision');
+    // Verify the student belongs to the principal's course
+    const studentCourseId = request.student?.course?._id || request.student?.course;
+    const principalCourseId = principal.course?._id || principal.course;
+    
+    if (studentCourseId && principalCourseId && studentCourseId.toString() !== principalCourseId.toString()) {
+      throw createError(403, 'You can only make decisions for students in your assigned course');
     }
 
+    // Verify the request is in a status that allows principal decision
+    // Accept: Pending, Warden Recommended, Rejected (for re-review)
+    const allowedStatuses = ['Pending', 'Warden Recommended', 'Rejected', 'Pending Principal Decision'];
+    if (!allowedStatuses.includes(request.status)) {
+      throw createError(400, `Request cannot be processed. Current status: ${request.status}`);
+    }
+
+    // Normalize decision value (handle both 'approve'/'reject' and 'Approved'/'Rejected')
+    const isApproved = decision === 'approve' || decision === 'Approved';
+    const normalizedDecision = isApproved ? 'Approved' : 'Rejected';
+    
     // Update the request status
-    request.status = decision === 'approve' ? 'Approved' : 'Rejected';
-    request.principalDecision = {
-      decision,
-      comment,
-      decidedAt: new Date(),
-      principal: principalId
-    };
+    request.status = isApproved ? 'Principal Approved' : 'Principal Rejected';
+    request.principalDecision = normalizedDecision;
+    request.principalComment = comment || '';
+    request.decidedBy = principalId;
+    request.decidedAt = new Date();
 
     await request.save();
 
-    // Get student details for notification
-    const student = await User.findById(request.student);
+    // Get student details for notification (already populated above)
+    const student = request.student;
     if (student) {
       // Create notification for student
       const notification = new Notification({
-        recipient: request.student,
+        recipient: student._id,
+        recipientModel: 'User',
         type: 'stay_in_hostel_decision',
-        title: `Stay in Hostel Request ${decision === 'approve' ? 'Approved' : 'Rejected'}`,
-        message: `Your stay in hostel request for ${new Date(request.stayDate).toLocaleDateString()} has been ${decision === 'approve' ? 'approved' : 'rejected'} by the principal.${comment ? ` Comment: ${comment}` : ''}`,
-        data: {
-          requestId: request._id,
-          decision,
-          comment
-        }
+        title: `Stay in Hostel Request ${normalizedDecision}`,
+        message: `Your stay in hostel request for ${new Date(request.stayDate).toLocaleDateString()} has been ${normalizedDecision.toLowerCase()} by the principal.${comment ? ` Comment: ${comment}` : ''}`,
+        priority: 'high'
       });
       await notification.save();
-
-      // Send OneSignal notification
-      if (student.oneSignalId) {
-        await sendOneSignalNotification(
-          student.oneSignalId,
-          `Stay in Hostel Request ${decision === 'approve' ? 'Approved' : 'Rejected'}`,
-          `Your stay in hostel request for ${new Date(request.stayDate).toLocaleDateString()} has been ${decision === 'approve' ? 'approved' : 'rejected'} by the principal.${comment ? ` Comment: ${comment}` : ''}`,
-          {
-            type: 'stay_in_hostel_decision',
-            requestId: request._id.toString(),
-            decision,
-            comment
-          }
-        );
-      }
     }
 
     res.status(200).json({
       success: true,
-      message: `Stay in hostel request ${decision === 'approve' ? 'approved' : 'rejected'} successfully`,
+      message: `Stay in hostel request ${normalizedDecision.toLowerCase()} successfully`,
       data: {
         request: {
           _id: request._id,
           status: request.status,
-          principalDecision: request.principalDecision
+          principalDecision: request.principalDecision,
+          principalComment: request.principalComment
         }
       }
     });
