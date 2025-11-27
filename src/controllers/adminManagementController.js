@@ -608,7 +608,7 @@ export const adminLogin = async (req, res, next) => {
 // Create a new principal
 export const createPrincipal = async (req, res, next) => {
   try {
-    const { username, password, course } = req.body;
+    const { username, password, course, email } = req.body;
 
     // Check if username already exists
     const existingAdmin = await Admin.findOne({ username });
@@ -628,6 +628,14 @@ export const createPrincipal = async (req, res, next) => {
       throw createError(400, 'Invalid course selected');
     }
 
+    // Validate email format if provided
+    if (email && email.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        throw createError(400, 'Invalid email address format');
+      }
+    }
+
     // Default principal permissions
     const principalPermissions = [
       'principal_attendance_oversight',
@@ -636,15 +644,21 @@ export const createPrincipal = async (req, res, next) => {
     ];
 
     // Create new principal
-    const principal = new Admin({
+    const principalData = {
       username,
       password,
       role: 'principal',
       course,
       permissions: principalPermissions,
       createdBy: req.admin._id
-    });
+    };
 
+    // Add email if provided
+    if (email && email.trim()) {
+      principalData.email = email.trim().toLowerCase();
+    }
+
+    const principal = new Admin(principalData);
     const savedPrincipal = await principal.save();
     
     // Remove password from response
@@ -691,10 +705,10 @@ export const getPrincipals = async (req, res, next) => {
 export const updatePrincipal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, course, isActive } = req.body;
+    const { username, password, course, isActive, email } = req.body;
 
     console.log('🎓 Updating principal:', id);
-    console.log('🎓 Update data:', { username, course, isActive });
+    console.log('🎓 Update data:', { username, course, isActive, email });
 
     // Build query based on admin role
     let query = {
@@ -735,6 +749,21 @@ export const updatePrincipal = async (req, res, next) => {
     }
     if (typeof isActive === 'boolean') {
       principal.isActive = isActive;
+    }
+    
+    // Update email - allow setting to empty string to clear it
+    if (email !== undefined) {
+      if (email && email.trim()) {
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+          throw createError(400, 'Invalid email address format');
+        }
+        principal.email = email.trim().toLowerCase();
+      } else {
+        // Clear email if empty string is passed
+        principal.email = undefined;
+      }
     }
 
     const updatedPrincipal = await principal.save();

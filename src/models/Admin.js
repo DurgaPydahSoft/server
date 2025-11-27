@@ -46,6 +46,12 @@ const adminSchema = new mongoose.Schema({
       return this.role === 'principal';
     }
   },
+  email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email address']
+  },
   leaveManagementCourses: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Course'

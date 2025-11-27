@@ -1571,6 +1571,323 @@ This is an automated reminder. Please do not reply to this email.
     `
   },
 
+  leaveRequestForwarded: {
+    subject: 'Leave Request Forwarded for Approval - Pydah Hostel',
+    html: (principalName, studentName, rollNumber, applicationType, leaveDetails, loginUrl) => `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Leave Request Forwarded - Pydah Hostel</title>
+        <style>
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+          }
+          
+          body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #2c3e50;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+          }
+          
+          .email-container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+          }
+          
+          .header {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+            position: relative;
+          }
+          
+          .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><pattern id="grain" width="100" height="100" patternUnits="userSpaceOnUse"><circle cx="25" cy="25" r="1" fill="white" opacity="0.1"/><circle cx="75" cy="75" r="1" fill="white" opacity="0.1"/><circle cx="50" cy="10" r="0.5" fill="white" opacity="0.1"/><circle cx="10" cy="60" r="0.5" fill="white" opacity="0.1"/><circle cx="90" cy="40" r="0.5" fill="white" opacity="0.1"/></pattern></defs><rect width="100" height="100" fill="url(%23grain)"/></svg>');
+            opacity: 0.3;
+          }
+          
+          .logo {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            position: relative;
+            z-index: 1;
+          }
+          
+          .subtitle {
+            font-size: 16px;
+            opacity: 0.9;
+            position: relative;
+            z-index: 1;
+          }
+          
+          .content {
+            padding: 40px 30px;
+          }
+          
+          .greeting {
+            font-size: 18px;
+            color: #2c3e50;
+            margin-bottom: 25px;
+            font-weight: 500;
+          }
+          
+          .message {
+            color: #5a6c7d;
+            margin-bottom: 30px;
+            font-size: 16px;
+          }
+          
+          .details-card {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 15px;
+            padding: 30px;
+            margin: 30px 0;
+            border: 2px solid #e3f2fd;
+            position: relative;
+            overflow: hidden;
+          }
+          
+          .details-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #3498db, #2980b9);
+          }
+          
+          .details-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 25px;
+            text-align: center;
+          }
+          
+          .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #e9ecef;
+          }
+          
+          .detail-row:last-child {
+            border-bottom: none;
+          }
+          
+          .detail-label {
+            font-weight: 600;
+            color: #495057;
+            font-size: 16px;
+          }
+          
+          .detail-value {
+            background: #ffffff;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 16px;
+            border: 2px solid #e9ecef;
+            color: #2c3e50;
+            min-width: 150px;
+            text-align: center;
+          }
+          
+          .urgent-box {
+            background: linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%);
+            border-left: 5px solid #f39c12;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 30px 0;
+          }
+          
+          .urgent-icon {
+            font-size: 20px;
+            margin-right: 10px;
+          }
+          
+          .urgent-text {
+            color: #856404;
+            font-weight: 500;
+            font-size: 16px;
+          }
+          
+          .login-section {
+            text-align: center;
+            margin: 40px 0;
+          }
+          
+          .login-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            padding: 18px 40px;
+            text-decoration: none;
+            border-radius: 50px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 20px rgba(52, 152, 219, 0.3);
+          }
+          
+          .login-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 30px rgba(52, 152, 219, 0.4);
+          }
+          
+          .footer {
+            background: #f8f9fa;
+            padding: 30px;
+            text-align: center;
+            border-top: 1px solid #e9ecef;
+          }
+          
+          .footer-text {
+            color: #6c757d;
+            font-size: 14px;
+            margin-bottom: 10px;
+          }
+          
+          .footer-copyright {
+            color: #adb5bd;
+            font-size: 12px;
+          }
+          
+          @media (max-width: 600px) {
+            .detail-row {
+              flex-direction: column;
+              align-items: flex-start;
+              gap: 10px;
+            }
+            
+            .detail-value {
+              min-width: auto;
+              width: 100%;
+            }
+            
+            .content {
+              padding: 20px;
+            }
+            
+            .header {
+              padding: 30px 20px;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="email-container">
+          <div class="header">
+            <div class="logo">🏠 Pydah Hostel</div>
+            <div class="subtitle">Leave Request Awaiting Your Approval</div>
+          </div>
+          
+          <div class="content">
+            <div class="greeting">
+              Dear <strong>${principalName}</strong>,
+            </div>
+            
+            <div class="message">
+              A ${applicationType} request has been verified by the warden and is now awaiting your approval. 
+              Please review the details below and take appropriate action.
+            </div>
+            
+            <div class="details-card">
+              <div class="details-title">📋 ${applicationType} Request Details</div>
+              <div class="detail-row">
+                <span class="detail-label">Student Name:</span>
+                <span class="detail-value">${studentName}</span>
+              </div>
+              <div class="detail-row">
+                <span class="detail-label">Roll Number:</span>
+                <span class="detail-value">${rollNumber}</span>
+              </div>
+              ${leaveDetails}
+            </div>
+            
+            <div class="urgent-box">
+              <span class="urgent-icon">⏰</span>
+              <span class="urgent-text">
+                <strong>Action Required:</strong> Please review and approve/reject this request at your earliest convenience.
+              </span>
+            </div>
+            
+            <div class="login-section">
+              <a href="${loginUrl}" class="login-button">
+                📱 Review Request
+              </a>
+            </div>
+            
+            <div style="margin-top: 30px; color: #5a6c7d; font-size: 16px;">
+              You can approve or reject this request from your principal dashboard.
+            </div>
+            
+            <div style="margin-top: 20px; color: #5a6c7d; font-size: 16px;">
+              Best regards,<br>
+              <strong style="color: #2c3e50;">Pydah Hostel Management System</strong>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <div class="footer-text">
+              This is an automated notification. Please do not reply to this email.
+            </div>
+            <div class="footer-copyright">
+              © ${new Date().getFullYear()} Pydah Hostel. All rights reserved.
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `,
+    text: (principalName, studentName, rollNumber, applicationType, leaveDetailsText, loginUrl) => `
+Leave Request Forwarded for Approval - Pydah Hostel
+
+Dear ${principalName},
+
+A ${applicationType} request has been verified by the warden and is now awaiting your approval.
+
+${applicationType} Request Details:
+- Student Name: ${studentName}
+- Roll Number: ${rollNumber}
+${leaveDetailsText}
+
+ACTION REQUIRED: Please review and approve/reject this request at your earliest convenience.
+
+Review Request: ${loginUrl}
+
+You can approve or reject this request from your principal dashboard.
+
+Best regards,
+Pydah Hostel Management System
+
+---
+This is an automated notification. Please do not reply to this email.
+© ${new Date().getFullYear()} Pydah Hostel. All rights reserved.
+    `
+  },
+
   subAdminRegistration: {
     subject: 'Sub-Admin Account Created - Hostel Management System',
     html: (adminName, username, generatedPassword, loginUrl) => `
@@ -2255,4 +2572,107 @@ export const getEmailServiceStatus = () => {
     senderEmail: BREVO_SENDER_EMAIL || 'Missing',
     service: 'Brevo'
   };
+};
+
+/**
+ * Send leave request forwarded email to principal
+ * @param {string} principalEmail - Principal's email address
+ * @param {string} principalName - Principal's name (username)
+ * @param {string} studentName - Student's name
+ * @param {string} rollNumber - Student's roll number
+ * @param {string} applicationType - Type of leave application (Leave, Permission)
+ * @param {Object} leaveData - Leave request data containing dates, times, reason
+ * @returns {Promise<Object>} - Response from email service
+ */
+export const sendLeaveForwardedEmail = async (principalEmail, principalName, studentName, rollNumber, applicationType, leaveData) => {
+  try {
+    // Safety check - skip if no email provided
+    if (!principalEmail || !principalEmail.trim()) {
+      console.log('⚠️ No email provided for principal, skipping email notification');
+      return { success: false, skipped: true, message: 'No email provided' };
+    }
+    
+    console.log(`📧 Sending leave forwarded email to principal: ${principalEmail}`);
+    
+    // Build leave details HTML based on application type
+    let leaveDetailsHtml = '';
+    let leaveDetailsText = '';
+    
+    if (applicationType === 'Leave') {
+      const startDate = new Date(leaveData.startDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const endDate = new Date(leaveData.endDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      const gatePassDate = leaveData.gatePassDateTime ? new Date(leaveData.gatePassDateTime).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A';
+      
+      leaveDetailsHtml = `
+        <div class="detail-row">
+          <span class="detail-label">Leave Type:</span>
+          <span class="detail-value">Leave</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Start Date:</span>
+          <span class="detail-value">${startDate}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">End Date:</span>
+          <span class="detail-value">${endDate}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Gate Pass Time:</span>
+          <span class="detail-value">${gatePassDate}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Reason:</span>
+          <span class="detail-value">${leaveData.reason || 'Not specified'}</span>
+        </div>
+      `;
+      
+      leaveDetailsText = `- Leave Type: Leave
+- Start Date: ${startDate}
+- End Date: ${endDate}
+- Gate Pass Time: ${gatePassDate}
+- Reason: ${leaveData.reason || 'Not specified'}`;
+      
+    } else if (applicationType === 'Permission') {
+      const permissionDate = new Date(leaveData.permissionDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      
+      leaveDetailsHtml = `
+        <div class="detail-row">
+          <span class="detail-label">Leave Type:</span>
+          <span class="detail-value">Permission</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Permission Date:</span>
+          <span class="detail-value">${permissionDate}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Out Time:</span>
+          <span class="detail-value">${leaveData.outTime || 'N/A'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">In Time:</span>
+          <span class="detail-value">${leaveData.inTime || 'N/A'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Reason:</span>
+          <span class="detail-value">${leaveData.reason || 'Not specified'}</span>
+        </div>
+      `;
+      
+      leaveDetailsText = `- Leave Type: Permission
+- Permission Date: ${permissionDate}
+- Out Time: ${leaveData.outTime || 'N/A'}
+- In Time: ${leaveData.inTime || 'N/A'}
+- Reason: ${leaveData.reason || 'Not specified'}`;
+    }
+    
+    const template = EMAIL_TEMPLATES.leaveRequestForwarded;
+    const subject = template.subject;
+    const htmlContent = template.html(principalName, studentName, rollNumber, applicationType, leaveDetailsHtml, loginUrl);
+    const textContent = template.text(principalName, studentName, rollNumber, applicationType, leaveDetailsText, loginUrl);
+
+    return await sendEmail(principalEmail, subject, htmlContent, textContent);
+  } catch (error) {
+    console.error('📧 Error sending leave forwarded email:', error);
+    throw error;
+  }
 }; 

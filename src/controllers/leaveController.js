@@ -6,6 +6,7 @@ import { createError } from '../utils/error.js';
 import { sendSMS } from '../utils/smsService.js';
 import Notification from '../models/Notification.js';
 import { sendOneSignalNotification, sendOneSignalBulkNotification } from '../utils/oneSignalService.js';
+import { sendLeaveForwardedEmail } from '../utils/emailService.js';
 
 // Generate OTP (4 digits)
 const generateOTP = () => {
@@ -664,6 +665,7 @@ export const verifyOTPAndApprove = async (req, res, next) => {
       console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseId}`);
       
       for (const principal of principals) {
+        // Send in-app notification
         await Notification.createNotification({
           type: 'leave',
           recipient: principal._id,
@@ -675,6 +677,8 @@ export const verifyOTPAndApprove = async (req, res, next) => {
           onModel: 'Leave',
           priority: 'high'
         });
+        
+        // Send push notification
         await sendOneSignalNotification(principal._id, {
           title: notificationTitle,
           message: notificationMessage,
@@ -682,6 +686,39 @@ export const verifyOTPAndApprove = async (req, res, next) => {
           relatedId: leave._id,
           priority: 10
         });
+        
+        // Send email notification if principal has email configured
+        if (principal.email && principal.email.trim()) {
+          try {
+            console.log(`📧 Sending leave forwarded email to principal: ${principal.email}`);
+            const emailResult = await sendLeaveForwardedEmail(
+              principal.email,
+              principal.username || 'Principal',
+              leave.student?.name || 'Unknown Student',
+              leave.student?.rollNumber || 'N/A',
+              leave.applicationType || 'Leave',
+              {
+                startDate: leave.startDate,
+                endDate: leave.endDate,
+                gatePassDateTime: leave.gatePassDateTime,
+                permissionDate: leave.permissionDate,
+                outTime: leave.outTime,
+                inTime: leave.inTime,
+                reason: leave.reason || 'Not specified'
+              }
+            );
+            if (emailResult && emailResult.success) {
+              console.log(`✅ Email sent successfully to principal: ${principal.email}`);
+            } else if (emailResult && emailResult.skipped) {
+              console.log(`⏭️ Email skipped for principal: ${emailResult.message}`);
+            }
+          } catch (emailError) {
+            console.error(`❌ Failed to send email to principal ${principal.email}:`, emailError.message || emailError);
+            // Continue with other principals even if email fails for one
+          }
+        } else {
+          console.log(`⚠️ Principal ${principal.username || principal._id} has no email configured, skipping email notification`);
+        }
       }
 
       res.json({
@@ -1728,18 +1765,21 @@ export const wardenVerifyOTP = async (req, res, next) => {
     
     console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseId}`);
     
-          for (const principal of principals) {
-        await Notification.createNotification({
-          type: 'leave',
-          recipient: principal._id,
-          recipientModel: 'Admin',
-          sender: warden._id,
-          title: notificationTitle,
-          message: notificationMessage,
-          relatedId: leave._id,
-          onModel: 'Leave',
-          priority: 'high'
-        });
+    for (const principal of principals) {
+      // Send in-app notification
+      await Notification.createNotification({
+        type: 'leave',
+        recipient: principal._id,
+        recipientModel: 'Admin',
+        sender: warden._id,
+        title: notificationTitle,
+        message: notificationMessage,
+        relatedId: leave._id,
+        onModel: 'Leave',
+        priority: 'high'
+      });
+      
+      // Send push notification
       await sendOneSignalNotification(principal._id, {
         title: notificationTitle,
         message: notificationMessage,
@@ -1747,6 +1787,39 @@ export const wardenVerifyOTP = async (req, res, next) => {
         relatedId: leave._id,
         priority: 10
       });
+      
+      // Send email notification if principal has email configured
+      if (principal.email && principal.email.trim()) {
+        try {
+          console.log(`📧 Sending leave forwarded email to principal: ${principal.email}`);
+          const emailResult = await sendLeaveForwardedEmail(
+            principal.email,
+            principal.username || 'Principal',
+            leave.student?.name || 'Unknown Student',
+            leave.student?.rollNumber || 'N/A',
+            leave.applicationType || 'Leave',
+            {
+              startDate: leave.startDate,
+              endDate: leave.endDate,
+              gatePassDateTime: leave.gatePassDateTime,
+              permissionDate: leave.permissionDate,
+              outTime: leave.outTime,
+              inTime: leave.inTime,
+              reason: leave.reason || 'Not specified'
+            }
+          );
+          if (emailResult && emailResult.success) {
+            console.log(`✅ Email sent successfully to principal: ${principal.email}`);
+          } else if (emailResult && emailResult.skipped) {
+            console.log(`⏭️ Email skipped for principal: ${emailResult.message}`);
+          }
+        } catch (emailError) {
+          console.error(`❌ Failed to send email to principal ${principal.email}:`, emailError.message || emailError);
+          // Continue with other principals even if email fails for one
+        }
+      } else {
+        console.log(`⚠️ Principal ${principal.username || principal._id} has no email configured, skipping email notification`);
+      }
     }
 
     res.json({
