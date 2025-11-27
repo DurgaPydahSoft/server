@@ -27,8 +27,10 @@ const customRoleSchema = new mongoose.Schema({
       'attendance_management',
       'found_lost_management',
       'fee_management',
+      'concession_management',
       'feature_controls',
-      'security_management'
+      'security_management',
+      'staff_guests_management'
     ]
   }],
   permissionAccessLevels: {

@@ -58,7 +58,25 @@ import {
   verifyOTPAndApprove,
   rejectLeaveRequest
 } from '../controllers/leaveController.js';
-import { adminAuth, wardenAuth, superAdminAuth } from '../middleware/authMiddleware.js';
+import { adminAuth, wardenAuth, superAdminAuth, checkPermission } from '../middleware/authMiddleware.js';
+
+// Middleware for concession management permission
+const concessionManagementAuth = [adminAuth, (req, res, next) => {
+  // Super admin always has access
+  if (req.admin?.role === 'super_admin') {
+    return next();
+  }
+  
+  // Check if user has concession_management permission
+  if (req.admin?.permissions?.includes('concession_management')) {
+    return next();
+  }
+  
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied. You need concession_management permission.'
+  });
+}];
 import { testEmailService, getEmailServiceStatus } from '../utils/emailService.js';
 import multer from 'multer';
 
@@ -205,9 +223,9 @@ router.delete('/students/temp-clear', clearTempStudents);
 router.get('/students/admit-cards', getStudentsForAdmitCards);
 router.post('/students/bulk-admit-cards', generateBulkAdmitCards);
 
-// Concession approval routes (super admin only) - must come before dynamic /students/:id routes
-router.get('/students/concession-approvals', superAdminAuth, getConcessionApprovals);
-router.get('/students/approved-concessions', superAdminAuth, getApprovedConcessions);
+// Concession approval routes - must come before dynamic /students/:id routes
+router.get('/students/concession-approvals', concessionManagementAuth, getConcessionApprovals);
+router.get('/students/approved-concessions', concessionManagementAuth, getApprovedConcessions);
 
 // Password fetching routes (must come before dynamic /students/:id routes)
 router.get('/students/:id/temp-password', getStudentTempPassword);
@@ -228,9 +246,9 @@ router.post('/students/:id/reset-password', resetStudentPassword);
 // Share student credentials via SMS
 router.post('/students/share-credentials', shareStudentCredentials);
 
-// Concession approval action routes (super admin only)
-router.post('/students/:id/approve-concession', superAdminAuth, approveConcession);
-router.post('/students/:id/reject-concession', superAdminAuth, rejectConcession);
+// Concession approval action routes
+router.post('/students/:id/approve-concession', concessionManagementAuth, approveConcession);
+router.post('/students/:id/reject-concession', concessionManagementAuth, rejectConcession);
 
 // Utility routes
 router.get('/branches/:course', getBranchesByCourse);
