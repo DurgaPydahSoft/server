@@ -2,9 +2,57 @@ import express from 'express';
 import Course from '../models/Course.js';
 import Branch from '../models/Branch.js';
 import AcademicCalendar from '../models/AcademicCalendar.js';
-import { superAdminAuth, protect } from '../middleware/authMiddleware.js';
+import { superAdminAuth, protect, adminAuth, checkPermission } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
+
+// Middleware for course management permission (allows super_admin or sub-admin with course_management permission)
+const courseManagementAuth = [adminAuth, (req, res, next) => {
+  // Super admin always has access
+  if (req.admin?.role === 'super_admin') {
+    return next();
+  }
+  
+  // Check if user has course_management permission
+  if (req.admin?.permissions?.includes('course_management')) {
+    return next();
+  }
+  
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied. You need course_management permission.'
+  });
+}];
+
+// Middleware that requires full access for write operations (POST, PUT, DELETE)
+const courseManagementWriteAuth = [adminAuth, (req, res, next) => {
+  // Super admin always has access
+  if (req.admin?.role === 'super_admin') {
+    return next();
+  }
+  
+  // Check if user has course_management permission
+  if (!req.admin?.permissions?.includes('course_management')) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. You need course_management permission.'
+    });
+  }
+  
+  // Check access level - need 'full' access for write operations
+  const accessLevel = req.admin?.permissionAccessLevels?.get?.('course_management') 
+    || req.admin?.permissionAccessLevels?.['course_management'] 
+    || 'view';
+  
+  if (accessLevel !== 'full') {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. You need full access to course_management to perform this action.'
+    });
+  }
+  
+  return next();
+}];
 
 // ==================== COURSE ROUTES ====================
 
@@ -29,7 +77,7 @@ router.get('/courses', async (req, res) => {
 });
 
 // Get all courses (admin view with inactive courses)
-router.get('/courses/all', superAdminAuth, async (req, res) => {
+router.get('/courses/all', courseManagementAuth, async (req, res) => {
   try {
     const courses = await Course.find()
       .populate('createdBy', 'username')
@@ -49,7 +97,7 @@ router.get('/courses/all', superAdminAuth, async (req, res) => {
 });
 
 // Create new course
-router.post('/courses', superAdminAuth, async (req, res) => {
+router.post('/courses', courseManagementWriteAuth, async (req, res) => {
   try {
     const { name, code, description, duration, durationUnit } = req.body;
     
@@ -96,7 +144,7 @@ router.post('/courses', superAdminAuth, async (req, res) => {
 });
 
 // Update course
-router.put('/courses/:id', superAdminAuth, async (req, res) => {
+router.put('/courses/:id', courseManagementWriteAuth, async (req, res) => {
   try {
     const { name, code, description, duration, durationUnit, isActive } = req.body;
     const courseId = req.params.id;
@@ -153,7 +201,7 @@ router.put('/courses/:id', superAdminAuth, async (req, res) => {
 });
 
 // Delete course (hard delete)
-router.delete('/courses/:id', superAdminAuth, async (req, res) => {
+router.delete('/courses/:id', courseManagementWriteAuth, async (req, res) => {
   try {
     const courseId = req.params.id;
     
@@ -239,7 +287,7 @@ router.get('/branches', async (req, res) => {
 });
 
 // Get all branches (admin view with inactive branches)
-router.get('/branches/all', superAdminAuth, async (req, res) => {
+router.get('/branches/all', courseManagementAuth, async (req, res) => {
   try {
     const branches = await Branch.find()
       .populate('course', 'name code')
@@ -260,7 +308,7 @@ router.get('/branches/all', superAdminAuth, async (req, res) => {
 });
 
 // Create new branch
-router.post('/branches', superAdminAuth, async (req, res) => {
+router.post('/branches', courseManagementWriteAuth, async (req, res) => {
   try {
     const { name, code, courseId, description } = req.body;
     
@@ -321,7 +369,7 @@ router.post('/branches', superAdminAuth, async (req, res) => {
 });
 
 // Update branch
-router.put('/branches/:id', superAdminAuth, async (req, res) => {
+router.put('/branches/:id', courseManagementWriteAuth, async (req, res) => {
   try {
     const { name, code, description, isActive } = req.body;
     const branchId = req.params.id;
@@ -377,7 +425,7 @@ router.put('/branches/:id', superAdminAuth, async (req, res) => {
 });
 
 // Delete branch (soft delete)
-router.delete('/branches/:id', superAdminAuth, async (req, res) => {
+router.delete('/branches/:id', courseManagementWriteAuth, async (req, res) => {
   try {
     const branchId = req.params.id;
     
@@ -518,7 +566,7 @@ router.get('/academic-calendars/course/:courseId', async (req, res) => {
 });
 
 // Create new academic calendar entry
-router.post('/academic-calendars', async (req, res) => {
+router.post('/academic-calendars', courseManagementWriteAuth, async (req, res) => {
   try {
     const { courseId, academicYear, yearOfStudy, semester, startDate, endDate } = req.body;
     
@@ -597,7 +645,7 @@ router.post('/academic-calendars', async (req, res) => {
 });
 
 // Update academic calendar entry
-router.put('/academic-calendars/:id', async (req, res) => {
+router.put('/academic-calendars/:id', courseManagementWriteAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { academicYear, yearOfStudy, semester, startDate, endDate, isActive } = req.body;
@@ -685,7 +733,7 @@ router.put('/academic-calendars/:id', async (req, res) => {
 });
 
 // Delete academic calendar entry (hard delete)
-router.delete('/academic-calendars/:id', async (req, res) => {
+router.delete('/academic-calendars/:id', courseManagementWriteAuth, async (req, res) => {
   try {
     const { id } = req.params;
     
