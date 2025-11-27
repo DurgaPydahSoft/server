@@ -246,13 +246,13 @@ export const giveFeedback = async (req, res) => {
         );
       }
     } else {
-      // If satisfied, keep status as Resolved but lock it
-      complaint.currentStatus = 'Resolved';
+      // If satisfied, move to Closed status and lock it
+      complaint.currentStatus = 'Closed';
       complaint.isLockedForUpdates = true; // Lock the complaint
       complaint.statusHistory.push({
-        status: 'Resolved',
+        status: 'Closed',
         timestamp: new Date(),
-        note: 'Complaint resolved and locked after positive feedback'
+        note: 'Complaint closed after positive feedback from student'
       });
 
       // Delete image from S3 if exists
@@ -842,11 +842,46 @@ export const submitFeedback = async (req, res) => {
       timestamp: new Date()
     };
 
+    // Handle status change based on feedback
+    if (isSatisfied) {
+      // Positive feedback - move to Closed status
+      complaint.currentStatus = 'Closed';
+      complaint.isLockedForUpdates = true;
+      complaint.statusHistory.push({
+        status: 'Closed',
+        timestamp: new Date(),
+        note: 'Complaint closed after positive feedback from student'
+      });
+
+      // Delete image from S3 if exists
+      if (complaint.imageUrl) {
+        try {
+          const { deleteFromS3 } = await import('../utils/s3.js');
+          await deleteFromS3(complaint.imageUrl);
+          complaint.imageUrl = null;
+        } catch (deleteError) {
+          console.error('Error deleting image from S3:', deleteError);
+        }
+      }
+    } else {
+      // Negative feedback - reopen the complaint
+      complaint.currentStatus = 'In Progress';
+      complaint.isReopened = true;
+      complaint.statusHistory.push({
+        status: 'In Progress',
+        timestamp: new Date(),
+        note: 'Complaint reopened due to negative feedback from student'
+      });
+    }
+
     await complaint.save();
 
     res.json({
       success: true,
-      data: complaint
+      data: complaint,
+      message: isSatisfied 
+        ? 'Thank you for your feedback! Complaint has been closed.'
+        : 'Complaint has been reopened for further attention.'
     });
   } catch (err) {
     console.error('Error submitting feedback:', err);
