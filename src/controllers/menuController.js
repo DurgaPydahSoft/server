@@ -646,7 +646,7 @@ export const getFoodPreparationCount = async (req, res, next) => {
     const studentNightAttendance = await Attendance.find({
       date: yesterdayDate,
       night: true
-    }).populate('student', '_id name rollNumber');
+    }).populate('student', '_id name rollNumber mealType');
 
     // Get staff/guests who were present for night session yesterday
     const staffNightAttendance = await StaffAttendance.find({
@@ -656,9 +656,23 @@ export const getFoodPreparationCount = async (req, res, next) => {
 
     // Count unique students (in case of duplicate records)
     const uniqueStudents = new Set();
+    let vegCount = 0;
+    let nonVegCount = 0;
+
     studentNightAttendance.forEach(att => {
       if (att.student && att.student._id) {
-        uniqueStudents.add(att.student._id.toString());
+        const studentId = att.student._id.toString();
+        if (!uniqueStudents.has(studentId)) {
+          uniqueStudents.add(studentId);
+          
+          // Count meal types
+          if (att.student.mealType === 'veg') {
+            vegCount++;
+          } else {
+            // Default to non-veg if not specified or explicitly non-veg
+            nonVegCount++;
+          }
+        }
       }
     });
 
@@ -676,6 +690,8 @@ export const getFoodPreparationCount = async (req, res, next) => {
 
     console.log('🍽️ Food count results:', {
       studentCount,
+      vegCount,
+      nonVegCount,
       staffCount,
       totalCount,
       studentRecords: studentNightAttendance.length,
@@ -688,7 +704,8 @@ export const getFoodPreparationCount = async (req, res, next) => {
       .map(att => ({
         id: att.student._id,
         name: att.student.name,
-        rollNumber: att.student.rollNumber
+        rollNumber: att.student.rollNumber,
+        mealType: att.student.mealType || 'non-veg'
       }));
 
     const staffDetails = staffNightAttendance
@@ -705,6 +722,8 @@ export const getFoodPreparationCount = async (req, res, next) => {
         date: yesterdayDate,
         counts: {
           students: studentCount,
+          vegStudents: vegCount,
+          nonVegStudents: nonVegCount,
           staff: staffCount,
           total: totalCount
         },
@@ -726,6 +745,8 @@ export const getFoodPreparationCount = async (req, res, next) => {
         date: new Date(),
         counts: {
           students: 0,
+          vegStudents: 0,
+          nonVegStudents: 0,
           staff: 0,
           total: 0
         },
