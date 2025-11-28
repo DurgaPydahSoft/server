@@ -130,7 +130,6 @@ const userSchema = new mongoose.Schema({
   mealType: {
     type: String,
     enum: ['veg', 'non-veg'],
-    default: 'non-veg',
     required: function() { return this.role === 'student'; }
   },
   parentPermissionForOuting: {

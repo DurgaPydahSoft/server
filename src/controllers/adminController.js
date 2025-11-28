@@ -275,7 +275,7 @@ export const addStudent = async (req, res, next) => {
       year,
       branch,
       category,
-      mealType: mealType || 'non-veg',
+      mealType,
       parentPermissionForOuting: parentPermissionForOuting !== undefined ? parentPermissionForOuting : true,
       roomNumber,
       bedNumber,
