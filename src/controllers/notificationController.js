@@ -535,11 +535,13 @@ export const sendMenuNotification = async (req, res) => {
 
     // Send via OneSignal if configured
     try {
-      const { sendOneSignalNotification } = await import('../utils/oneSignalService.js');
-      await sendOneSignalNotification({
+      const { sendOneSignalNotification, getNotificationPayload } = await import('../utils/oneSignalService.js');
+      const user = await User.findById(userId).select('role');
+      const payload = getNotificationPayload('menu', {
         ...notificationData,
-        userId: userId.toString()
-      });
+        id: notification._id.toString()
+      }, user?.role || 'student');
+      await sendOneSignalNotification(userId.toString(), payload);
       console.log(`🔔 Menu notification sent via OneSignal for ${mealType}`);
     } catch (oneSignalError) {
       console.warn(`🔔 OneSignal menu notification failed for ${mealType}:`, oneSignalError);
@@ -616,14 +618,13 @@ export const sendMenuNotificationToAllStudents = async (req, res) => {
 
     // Send via OneSignal if configured
     try {
-      const { sendOneSignalNotification } = await import('../utils/oneSignalService.js');
-      const oneSignalPromises = students.map(student => 
-        sendOneSignalNotification({
-          ...notificationData,
-          userId: student._id.toString()
-        })
-      );
-      await Promise.allSettled(oneSignalPromises);
+      const { sendOneSignalBulkNotification, getNotificationPayload } = await import('../utils/oneSignalService.js');
+      const payload = getNotificationPayload('menu', {
+        ...notificationData,
+        id: notifications[0]?._id.toString()
+      }, 'student'); // All recipients are students
+      const studentIds = students.map(s => s._id.toString());
+      await sendOneSignalBulkNotification(studentIds, payload);
       console.log(`🔔 Menu notifications sent via OneSignal for ${mealType}`);
     } catch (oneSignalError) {
       console.warn(`🔔 OneSignal menu notifications failed for ${mealType}:`, oneSignalError);

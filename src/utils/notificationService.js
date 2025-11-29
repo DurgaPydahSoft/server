@@ -17,9 +17,10 @@ class NotificationService {
   async sendToUser(userId, notificationData) {
     try {
 
-      // Get user name for personalization
-      const user = await User.findById(userId).select('name');
+      // Get user name and role for personalization and URL routing
+      const user = await User.findById(userId).select('name role');
       const userName = user?.name || 'there';
+      const userRole = user?.role || null;
       const personalizedMessage = notificationData.message.replace(/^/, `Hey ${userName}, `);
 
       // Create database notification first
@@ -38,7 +39,7 @@ class NotificationService {
         const payload = getNotificationPayload(notificationData.type, {
           ...notificationData,
           id: dbNotification._id
-        });
+        }, userRole);
         
         const sent = await sendOneSignalNotification(userId, payload);
         if (sent) {
@@ -63,13 +64,14 @@ class NotificationService {
 
       const results = [];
 
-      // Get all users for personalization
-      const users = await User.find({ _id: { $in: userIds } }).select('name');
-      const userMap = new Map(users.map(user => [user._id.toString(), user.name]));
+      // Get all users for personalization and role detection
+      const users = await User.find({ _id: { $in: userIds } }).select('name role');
+      const userMap = new Map(users.map(user => [user._id.toString(), { name: user.name, role: user.role }]));
 
       // Create database notifications for all users
       for (const userId of userIds) {
-        const userName = userMap.get(userId.toString()) || 'there';
+        const userInfo = userMap.get(userId.toString()) || { name: 'there', role: null };
+        const userName = userInfo.name;
         const personalizedMessage = notificationData.message.replace(/^/, `Hey ${userName}, `);
         
         const dbNotification = await this.createDatabaseNotification({
@@ -89,11 +91,17 @@ class NotificationService {
       }
 
       // Send OneSignal bulk notification
+      // For bulk notifications, we assume all recipients are students (most common case)
+      // If URL is explicitly set, use it; otherwise use default student routes
       if (this.isOneSignalAvailable && userIds.length > 0) {
+        // Check if all users are students (most common case for bulk notifications)
+        const allStudents = users.every(u => u.role === 'student');
+        const recipientRole = allStudents ? 'student' : null;
+        
         const payload = getNotificationPayload(notificationData.type, {
           ...notificationData,
           id: results[0]?._id
-        });
+        }, recipientRole);
         
         const sent = await sendOneSignalBulkNotification(userIds, payload);
         if (sent) {

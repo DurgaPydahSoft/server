@@ -203,8 +203,8 @@ export const sendOneSignalSegmentNotification = async (segment, notificationData
   }
 };
 
-// Get notification payload based on type
-export const getNotificationPayload = (type, data) => {
+// Get notification payload based on type and recipient role
+export const getNotificationPayload = (type, data, recipientRole = null) => {
   const basePayload = {
     title: data.title || 'New Notification',
     message: data.message,
@@ -213,12 +213,50 @@ export const getNotificationPayload = (type, data) => {
     relatedId: data.relatedId
   };
 
+  // If URL is explicitly provided, use it
+  if (data.url) {
+    return {
+      ...basePayload,
+      url: data.url,
+      collapseId: data.collapseId || `${type}-${data.relatedId}`,
+      priority: data.priority || 8
+    };
+  }
+
+  // Determine URL based on type and recipient role
   switch (type) {
     case 'complaint':
+      // If recipient is admin/warden/principal, go to their complaints page
+      if (recipientRole === 'admin' || recipientRole === 'super_admin' || recipientRole === 'sub_admin') {
+        return {
+          ...basePayload,
+          title: data.title || 'Complaint Update',
+          url: `/admin/dashboard/complaints`,
+          collapseId: `complaint-${data.relatedId}`,
+          priority: 10
+        };
+      } else if (recipientRole === 'warden') {
+        return {
+          ...basePayload,
+          title: data.title || 'Complaint Update',
+          url: `/warden/dashboard/complaints/view`,
+          collapseId: `complaint-${data.relatedId}`,
+          priority: 10
+        };
+      } else if (recipientRole === 'principal') {
+        return {
+          ...basePayload,
+          title: data.title || 'Complaint Update',
+          url: `/principal/dashboard/complaints`,
+          collapseId: `complaint-${data.relatedId}`,
+          priority: 10
+        };
+      }
+      // Default to student route
       return {
         ...basePayload,
         title: data.title || 'Complaint Update',
-        url: `/complaints/${data.relatedId}`,
+        url: `/student/my-complaints`,
         collapseId: `complaint-${data.relatedId}`,
         priority: 10
       };
@@ -227,7 +265,7 @@ export const getNotificationPayload = (type, data) => {
       return {
         ...basePayload,
         title: data.title || 'New Announcement',
-        url: `/announcements/${data.relatedId}`,
+        url: `/student/announcements`,
         collapseId: `announcement-${data.relatedId}`,
         priority: 8
       };
@@ -236,7 +274,7 @@ export const getNotificationPayload = (type, data) => {
       return {
         ...basePayload,
         title: data.title || 'New Poll',
-        url: `/polls/${data.relatedId}`,
+        url: `/student/polls`,
         collapseId: `poll-${data.relatedId}`,
         priority: 9
       };
@@ -245,16 +283,43 @@ export const getNotificationPayload = (type, data) => {
       return {
         ...basePayload,
         title: data.title || 'Poll Ending Soon',
-        url: `/polls/${data.relatedId}`,
+        url: `/student/polls`,
         collapseId: `poll-ending-${data.relatedId}`,
         priority: 10
       };
     
     case 'leave':
+      // If recipient is admin/warden/principal, go to their leave management page
+      if (recipientRole === 'admin' || recipientRole === 'super_admin' || recipientRole === 'sub_admin') {
+        return {
+          ...basePayload,
+          title: data.title || 'Leave Request Update',
+          url: `/admin/dashboard/leave`,
+          collapseId: `leave-${data.relatedId}`,
+          priority: 9
+        };
+      } else if (recipientRole === 'warden') {
+        return {
+          ...basePayload,
+          title: data.title || 'Leave Request Update',
+          url: `/warden/dashboard/leave-management`,
+          collapseId: `leave-${data.relatedId}`,
+          priority: 9
+        };
+      } else if (recipientRole === 'principal') {
+        return {
+          ...basePayload,
+          title: data.title || 'Leave Request Update',
+          url: `/principal/dashboard/leave-management`,
+          collapseId: `leave-${data.relatedId}`,
+          priority: 9
+        };
+      }
+      // Default to student route
       return {
         ...basePayload,
         title: data.title || 'Leave Request Update',
-        url: `/leave/${data.relatedId}`,
+        url: `/student/leave`,
         collapseId: `leave-${data.relatedId}`,
         priority: 9
       };
@@ -263,7 +328,7 @@ export const getNotificationPayload = (type, data) => {
       return {
         ...basePayload,
         title: data.title || 'System Notification',
-        url: data.url || '/',
+        url: data.url || '/student',
         priority: 7
       };
     
@@ -271,15 +336,35 @@ export const getNotificationPayload = (type, data) => {
       return {
         ...basePayload,
         title: data.title || 'Menu Updated',
-        url: `/menu/today`,
+        url: `/student`,
         collapseId: `menu-${data.relatedId}`,
+        priority: 8
+      };
+    
+    case 'foundlost':
+      // If recipient is admin, go to admin foundlost page
+      if (recipientRole === 'admin' || recipientRole === 'super_admin' || recipientRole === 'sub_admin') {
+        return {
+          ...basePayload,
+          title: data.title || 'Found & Lost Update',
+          url: `/admin/dashboard/foundlost`,
+          collapseId: `foundlost-${data.relatedId}`,
+          priority: 8
+        };
+      }
+      // Default to student route
+      return {
+        ...basePayload,
+        title: data.title || 'Found & Lost Update',
+        url: `/student/foundlost`,
+        collapseId: `foundlost-${data.relatedId}`,
         priority: 8
       };
     
     default:
       return {
         ...basePayload,
-        url: data.url || '/',
+        url: data.url || '/student',
         priority: 8
       };
   }
