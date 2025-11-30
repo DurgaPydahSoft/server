@@ -112,9 +112,10 @@ app.use(cors({
 app.options('*', cors());
 
 // Increase body parser limits to handle file uploads
-// Set to 10MB to accommodate multiple images (student + 2 guardians = 3 images max 5MB each)
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Set to 50MB to accommodate multiple images and form data
+// (student + 2 guardians = 3 images max 10MB each + form data)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/hostel-management')
@@ -216,6 +217,20 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.resolve(__dirname, '../client/dist/index.html'));
   });
 }
+
+// Handle 413 Payload Too Large errors specifically
+app.use((err, req, res, next) => {
+  if (err.status === 413 || err.code === 'LIMIT_FILE_SIZE' || err.message.includes('too large') || err.message.includes('413')) {
+    return res.status(413).json({
+      success: false,
+      message: 'File size too large. Maximum file size is 10MB per image. Please compress your images and try again.',
+      error: 'Request entity too large',
+      maxFileSize: '10MB per file',
+      maxTotalSize: '30MB total (3 images)'
+    });
+  }
+  next(err);
+});
 
 // Error handling middleware
 app.use(errorHandler);

@@ -98,9 +98,15 @@ const upload = multer({
 });
 
 // Setup multer for image uploads
+// Increased limit to 10MB per file to handle high-quality photos
+// Total request can be up to 30MB (student + 2 guardians = 3 images)
 const imageUpload = multer({
   storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
+  limits: { 
+    fileSize: 10 * 1024 * 1024, // 10MB per file
+    fieldSize: 10 * 1024 * 1024, // 10MB for other fields
+    files: 3 // Maximum 3 files (student photo + 2 guardian photos)
+  },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
