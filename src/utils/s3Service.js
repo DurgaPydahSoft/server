@@ -57,6 +57,20 @@ const validateS3Config = () => {
 let s3Client;
 let bucketName;
 
+// Function to mask credentials for logging
+const maskCredential = (value, showStart = 4, showEnd = 4) => {
+  if (!value || value.length === 0) return '[EMPTY]';
+  if (value.length <= showStart + showEnd) return '[TOO_SHORT]';
+  return value.substring(0, showStart) + '...' + value.substring(value.length - showEnd);
+};
+
+console.log('🔍 Checking S3 Configuration...');
+console.log('📁 Environment variables status:');
+console.log('   AWS_ACCESS_KEY:', process.env.AWS_ACCESS_KEY ? `[SET - Length: ${process.env.AWS_ACCESS_KEY.length}]` : '[NOT SET]');
+console.log('   AWS_SECRET_KEY:', process.env.AWS_SECRET_KEY ? `[SET - Length: ${process.env.AWS_SECRET_KEY.length}]` : '[NOT SET]');
+console.log('   AWS_S3_BUCKET:', process.env.AWS_S3_BUCKET ? `[SET - Value: ${process.env.AWS_S3_BUCKET}]` : '[NOT SET]');
+console.log('   AWS_REGION:', process.env.AWS_REGION ? `[SET - Value: ${process.env.AWS_REGION}]` : '[NOT SET]');
+
 try {
   validateS3Config();
   
@@ -66,21 +80,43 @@ try {
   bucketName = process.env.AWS_S3_BUCKET.trim();
   
   // Log configuration (mask sensitive data)
-  console.log('🔧 S3 Configuration:');
-  console.log('   Access Key:', accessKey.substring(0, 8) + '...' + accessKey.substring(accessKey.length - 4));
-  console.log('   Secret Key:', secretKey.substring(0, 4) + '...' + secretKey.substring(secretKey.length - 4));
+  console.log('🔧 S3 Configuration Details:');
+  console.log('   Access Key:', maskCredential(accessKey, 8, 4), `(Length: ${accessKey.length})`);
+  console.log('   Secret Key:', maskCredential(secretKey, 4, 4), `(Length: ${secretKey.length})`);
   console.log('   Bucket:', bucketName);
   console.log('   Region:', region);
   
-  // Validate credentials are not just placeholder values
-  if (accessKey.includes('your_') || accessKey.includes('EXAMPLE') || accessKey.length < 16) {
+  // Check for common issues
+  if (accessKey.includes('your_') || accessKey.includes('EXAMPLE') || accessKey.includes('placeholder')) {
+    console.warn('⚠️  AWS_ACCESS_KEY appears to be a placeholder value');
     throw new Error('AWS_ACCESS_KEY appears to be a placeholder. Please provide a valid access key.');
   }
   
-  if (secretKey.includes('your_') || secretKey.includes('EXAMPLE') || secretKey.length < 20) {
+  if (secretKey.includes('your_') || secretKey.includes('EXAMPLE') || secretKey.includes('placeholder')) {
+    console.warn('⚠️  AWS_SECRET_KEY appears to be a placeholder value');
     throw new Error('AWS_SECRET_KEY appears to be a placeholder. Please provide a valid secret key.');
   }
   
+  if (accessKey.length < 16) {
+    console.warn('⚠️  AWS_ACCESS_KEY is too short (should be at least 16 characters)');
+    throw new Error('AWS_ACCESS_KEY appears to be invalid (too short). Please check your credentials.');
+  }
+  
+  if (secretKey.length < 20) {
+    console.warn('⚠️  AWS_SECRET_KEY is too short (should be at least 20 characters)');
+    throw new Error('AWS_SECRET_KEY appears to be invalid (too short). Please check your credentials.');
+  }
+  
+  // Check for whitespace issues
+  if (process.env.AWS_ACCESS_KEY !== process.env.AWS_ACCESS_KEY.trim()) {
+    console.warn('⚠️  AWS_ACCESS_KEY has leading/trailing whitespace');
+  }
+  
+  if (process.env.AWS_SECRET_KEY !== process.env.AWS_SECRET_KEY.trim()) {
+    console.warn('⚠️  AWS_SECRET_KEY has leading/trailing whitespace');
+  }
+  
+  console.log('🔐 Creating S3 client...');
   s3Client = new S3Client({
     region: region,
     credentials: {
@@ -90,10 +126,15 @@ try {
   });
   
   console.log('✅ S3 client initialized successfully');
+  console.log('📦 Ready to upload to bucket:', bucketName, 'in region:', region);
 } catch (error) {
   console.error('❌ Failed to initialize S3 client:', error.message);
-  console.error('💡 Make sure your .env file is in the server/ folder (not client/)');
-  console.error('💡 Restart your server after updating .env file');
+  console.error('💡 Troubleshooting steps:');
+  console.error('   1. Make sure your .env file is in the server/ folder (not client/)');
+  console.error('   2. Check that all AWS environment variables are set');
+  console.error('   3. Verify no extra spaces or quotes around values in .env');
+  console.error('   4. Restart your server after updating .env file');
+  console.error('   5. For PM2: Use "pm2 restart all" or "pm2 restart my-backend"');
   // Don't throw here - let individual functions handle it
   s3Client = null;
   bucketName = null;
