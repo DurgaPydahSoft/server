@@ -215,14 +215,29 @@ export const addStudent = async (req, res, next) => {
     let guardianPhoto2Url = null;
 
     if (req.files) {
-      if (req.files.studentPhoto && req.files.studentPhoto[0]) {
-        studentPhotoUrl = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
-      }
-      if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
-        guardianPhoto1Url = await uploadToS3(req.files.guardianPhoto1[0], 'guardian-photos');
-      }
-      if (req.files.guardianPhoto2 && req.files.guardianPhoto2[0]) {
-        guardianPhoto2Url = await uploadToS3(req.files.guardianPhoto2[0], 'guardian-photos');
+      try {
+        if (req.files.studentPhoto && req.files.studentPhoto[0]) {
+          console.log('📸 Uploading student photo to S3...');
+          studentPhotoUrl = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
+          console.log('✅ Student photo uploaded successfully:', studentPhotoUrl);
+        }
+        if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
+          console.log('📸 Uploading guardian 1 photo to S3...');
+          guardianPhoto1Url = await uploadToS3(req.files.guardianPhoto1[0], 'guardian-photos');
+          console.log('✅ Guardian 1 photo uploaded successfully:', guardianPhoto1Url);
+        }
+        if (req.files.guardianPhoto2 && req.files.guardianPhoto2[0]) {
+          console.log('📸 Uploading guardian 2 photo to S3...');
+          guardianPhoto2Url = await uploadToS3(req.files.guardianPhoto2[0], 'guardian-photos');
+          console.log('✅ Guardian 2 photo uploaded successfully:', guardianPhoto2Url);
+        }
+      } catch (uploadError) {
+        console.error('❌ Error uploading photos to S3:', uploadError);
+        // Check if S3 credentials are configured
+        if (!process.env.AWS_ACCESS_KEY || !process.env.AWS_SECRET_KEY || !process.env.AWS_S3_BUCKET || !process.env.AWS_REGION) {
+          throw createError(500, 'S3 configuration is missing. Please configure AWS credentials and S3 bucket settings.');
+        }
+        throw createError(500, `Failed to upload photos to S3: ${uploadError.message}`);
       }
     }
 
