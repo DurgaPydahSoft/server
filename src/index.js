@@ -105,7 +105,9 @@ app.use(cors({
   ],
   exposedHeaders: ["Content-Range", "X-Content-Range"],
   preflightContinue: false,
-  optionsSuccessStatus: 204
+  optionsSuccessStatus: 204,
+  // Handle CORS even for error responses (like 413)
+  maxAge: 86400
 }));
 
 // Add pre-flight OPTIONS handler
@@ -218,15 +220,32 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-// Handle 413 Payload Too Large errors specifically
+// Handle 413 Payload Too Large errors specifically with CORS headers
 app.use((err, req, res, next) => {
   if (err.status === 413 || err.code === 'LIMIT_FILE_SIZE' || err.message.includes('too large') || err.message.includes('413')) {
+    // Set CORS headers even for error responses
+    const origin = req.headers.origin;
+    const allowedOrigins = [
+      "https://hostel-complaint-frontend.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "https://hms.pydahsoft.in",
+      process.env.BACKEND_URL,
+      process.env.FRONTEND_URL
+    ];
+    
+    if (origin && allowedOrigins.some(allowed => origin.includes(allowed.split('//')[1]?.split(':')[0]) || origin === allowed)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    
     return res.status(413).json({
       success: false,
       message: 'File size too large. Maximum file size is 10MB per image. Please compress your images and try again.',
       error: 'Request entity too large',
       maxFileSize: '10MB per file',
-      maxTotalSize: '30MB total (3 images)'
+      maxTotalSize: '30MB total (3 images)',
+      note: 'If you see this error, your nginx server may need client_max_body_size increased to 50M'
     });
   }
   next(err);
