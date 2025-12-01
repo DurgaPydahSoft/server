@@ -50,6 +50,11 @@ const roomSchema = new mongoose.Schema({
     default: 1,
     min: 1
   },
+  meterType: {
+    type: String,
+    enum: ['single', 'dual'],
+    default: 'single'
+  },
   electricityBills: [
     {
       month: {
@@ -57,14 +62,38 @@ const roomSchema = new mongoose.Schema({
         required: true,
         match: [/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format']
       },
+      // Single meter fields (for backward compatibility)
       startUnits: {
         type: Number,
-        required: true,
         min: 0
       },
       endUnits: {
         type: Number,
-        required: true,
+        min: 0
+      },
+      // Dual meter fields
+      meter1StartUnits: {
+        type: Number,
+        min: 0
+      },
+      meter1EndUnits: {
+        type: Number,
+        min: 0
+      },
+      meter1Consumption: {
+        type: Number,
+        min: 0
+      },
+      meter2StartUnits: {
+        type: Number,
+        min: 0
+      },
+      meter2EndUnits: {
+        type: Number,
+        min: 0
+      },
+      meter2Consumption: {
+        type: Number,
         min: 0
       },
       consumption: {

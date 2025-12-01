@@ -107,7 +107,7 @@ export const getWardenRooms = async (req, res, next) => {
 // Add a new room
 export const addRoom = async (req, res, next) => {
   try {
-    const { gender, category, roomNumber, bedCount } = req.body;
+    const { gender, category, roomNumber, bedCount, meterType } = req.body;
 
     // Check if room already exists
     const existingRoom = await Room.findOne({ roomNumber });
@@ -119,7 +119,8 @@ export const addRoom = async (req, res, next) => {
       gender,
       category,
       roomNumber,
-      bedCount: bedCount || 1
+      bedCount: bedCount || 1,
+      meterType: meterType || 'single' // Default to single meter
     });
 
     const savedRoom = await room.save();
@@ -133,7 +134,7 @@ export const addRoom = async (req, res, next) => {
 export const updateRoom = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { gender, category, roomNumber, isActive, bedCount } = req.body;
+    const { gender, category, roomNumber, isActive, bedCount, meterType } = req.body;
 
     const room = await Room.findById(id);
     if (!room) {
@@ -154,6 +155,7 @@ export const updateRoom = async (req, res, next) => {
     if (roomNumber) room.roomNumber = roomNumber;
     if (typeof isActive === 'boolean') room.isActive = isActive;
     if (typeof bedCount === 'number' && bedCount > 0) room.bedCount = bedCount;
+    if (meterType && ['single', 'dual'].includes(meterType)) room.meterType = meterType;
 
     const updatedRoom = await room.save();
     res.json(updatedRoom);
@@ -345,13 +347,30 @@ export const getRoomStudents = async (req, res) => {
 export const addOrUpdateElectricityBill = async (req, res, next) => {
   try {
     const { roomId } = req.params;
-    const { month, startUnits, endUnits, rate } = req.body;
-    if (!month || typeof startUnits !== 'number' || typeof endUnits !== 'number') {
-      return res.status(400).json({ success: false, message: 'Month, startUnits, and endUnits are required' });
+    const { 
+      month, 
+      startUnits, 
+      endUnits, 
+      rate,
+      // Dual meter fields
+      meter1StartUnits,
+      meter1EndUnits,
+      meter2StartUnits,
+      meter2EndUnits
+    } = req.body;
+
+    if (!month) {
+      return res.status(400).json({ success: false, message: 'Month is required' });
     }
-    if (endUnits < startUnits) {
-      return res.status(400).json({ success: false, message: 'Ending units must be greater than or equal to starting units' });
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found' });
     }
+
+    const isDualMeter = room.meterType === 'dual';
+    let consumption, total, billData;
+
     // Parse rate as number if provided
     let billRate = Room.defaultElectricityRate;
     if (rate !== undefined && rate !== null && rate !== '') {
@@ -363,26 +382,93 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
         }
       }
     }
-    const consumption = endUnits - startUnits;
-    const total = consumption * billRate;
-    const room = await Room.findById(roomId);
-    if (!room) {
-      return res.status(404).json({ success: false, message: 'Room not found' });
+
+    if (isDualMeter) {
+      // Dual meter mode
+      if (typeof meter1StartUnits !== 'number' || typeof meter1EndUnits !== 'number' ||
+          typeof meter2StartUnits !== 'number' || typeof meter2EndUnits !== 'number') {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'All dual meter readings (meter1StartUnits, meter1EndUnits, meter2StartUnits, meter2EndUnits) are required' 
+        });
+      }
+
+      if (meter1EndUnits < meter1StartUnits) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Meter 1 ending units must be greater than or equal to starting units' 
+        });
+      }
+
+      if (meter2EndUnits < meter2StartUnits) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Meter 2 ending units must be greater than or equal to starting units' 
+        });
+      }
+
+      const meter1Consumption = meter1EndUnits - meter1StartUnits;
+      const meter2Consumption = meter2EndUnits - meter2StartUnits;
+      consumption = meter1Consumption + meter2Consumption;
+      total = consumption * billRate;
+
+      billData = {
+        month,
+        meter1StartUnits,
+        meter1EndUnits,
+        meter1Consumption,
+        meter2StartUnits,
+        meter2EndUnits,
+        meter2Consumption,
+        consumption,
+        rate: billRate,
+        total
+      };
+    } else {
+      // Single meter mode (backward compatible)
+      if (typeof startUnits !== 'number' || typeof endUnits !== 'number') {
+        return res.status(400).json({ success: false, message: 'Month, startUnits, and endUnits are required' });
+      }
+
+      if (endUnits < startUnits) {
+        return res.status(400).json({ success: false, message: 'Ending units must be greater than or equal to starting units' });
+      }
+
+      consumption = endUnits - startUnits;
+      total = consumption * billRate;
+
+      billData = {
+        month,
+        startUnits,
+        endUnits,
+        consumption,
+        rate: billRate,
+        total
+      };
     }
+
     // Check if bill for this month exists
     const existingIndex = room.electricityBills.findIndex(bill => bill.month === month);
     if (existingIndex !== -1) {
-      // Update existing bill
-      room.electricityBills[existingIndex] = { month, startUnits, endUnits, consumption, rate: billRate, total };
+      // Update existing bill - preserve other fields like studentBills, paymentStatus, etc.
+      const existingBill = room.electricityBills[existingIndex];
+      room.electricityBills[existingIndex] = {
+        ...existingBill.toObject(),
+        ...billData
+      };
     } else {
       // Add new bill
-      room.electricityBills.push({ month, startUnits, endUnits, consumption, rate: billRate, total });
+      room.electricityBills.push(billData);
     }
 
     // Data migration: Ensure all bills have a consumption value before saving
     room.electricityBills.forEach(bill => {
       if (bill.consumption === undefined || bill.consumption === null) {
-        bill.consumption = bill.endUnits - bill.startUnits;
+        if (bill.meter1Consumption !== undefined && bill.meter2Consumption !== undefined) {
+          bill.consumption = bill.meter1Consumption + bill.meter2Consumption;
+        } else if (bill.endUnits !== undefined && bill.startUnits !== undefined) {
+          bill.consumption = bill.endUnits - bill.startUnits;
+        }
       }
     });
     
@@ -410,34 +496,97 @@ export const addBulkElectricityBills = async (req, res, next) => {
     const defaultRate = Room.defaultElectricityRate;
 
     for (const billData of bills) {
-      const { roomId, startUnits, endUnits, rate } = billData;
+      const { 
+        roomId, 
+        startUnits, 
+        endUnits, 
+        rate,
+        // Dual meter fields
+        meter1StartUnits,
+        meter1EndUnits,
+        meter2StartUnits,
+        meter2EndUnits
+      } = billData;
 
-      // Basic validation for each bill entry
-      if (!roomId || startUnits === undefined || endUnits === undefined) {
-        continue; // Skip entries that are not fully filled
+      if (!roomId) {
+        continue; // Skip entries without roomId
       }
-      
-      const start = Number(startUnits);
-      const end = Number(endUnits);
 
-      if (isNaN(start) || isNaN(end) || end < start) {
-        console.warn(`Skipping invalid bill data for room ${roomId}: start=${start}, end=${end}`);
+      // Fetch room to check meter type
+      const room = await Room.findById(roomId);
+      if (!room) {
+        console.warn(`Room ${roomId} not found, skipping`);
         continue;
       }
 
-      const billRate = (rate !== undefined && rate !== null && !isNaN(Number(rate))) ? Number(rate) : defaultRate;
-      const consumption = end - start;
-      const total = consumption * billRate;
+      const isDualMeter = room.meterType === 'dual';
+      let consumption, total, newBillPayload;
 
-      const newBillPayload = {
-        month,
-        startUnits: start,
-        endUnits: end,
-        consumption,
-        rate: billRate,
-        total,
-        createdAt: new Date()
-      };
+      const billRate = (rate !== undefined && rate !== null && !isNaN(Number(rate))) ? Number(rate) : defaultRate;
+
+      if (isDualMeter) {
+        // Dual meter mode
+        if (meter1StartUnits === undefined || meter1EndUnits === undefined ||
+            meter2StartUnits === undefined || meter2EndUnits === undefined) {
+          continue; // Skip entries that are not fully filled
+        }
+
+        const m1Start = Number(meter1StartUnits);
+        const m1End = Number(meter1EndUnits);
+        const m2Start = Number(meter2StartUnits);
+        const m2End = Number(meter2EndUnits);
+
+        if (isNaN(m1Start) || isNaN(m1End) || isNaN(m2Start) || isNaN(m2End) ||
+            m1End < m1Start || m2End < m2Start) {
+          console.warn(`Skipping invalid dual meter bill data for room ${roomId}`);
+          continue;
+        }
+
+        const meter1Consumption = m1End - m1Start;
+        const meter2Consumption = m2End - m2Start;
+        consumption = meter1Consumption + meter2Consumption;
+        total = consumption * billRate;
+
+        newBillPayload = {
+          month,
+          meter1StartUnits: m1Start,
+          meter1EndUnits: m1End,
+          meter1Consumption,
+          meter2StartUnits: m2Start,
+          meter2EndUnits: m2End,
+          meter2Consumption,
+          consumption,
+          rate: billRate,
+          total,
+          createdAt: new Date()
+        };
+      } else {
+        // Single meter mode (backward compatible)
+        if (startUnits === undefined || endUnits === undefined) {
+          continue; // Skip entries that are not fully filled
+        }
+
+        const start = Number(startUnits);
+        const end = Number(endUnits);
+
+        if (isNaN(start) || isNaN(end) || end < start) {
+          console.warn(`Skipping invalid bill data for room ${roomId}: start=${start}, end=${end}`);
+          continue;
+        }
+
+        consumption = end - start;
+        total = consumption * billRate;
+
+        newBillPayload = {
+          month,
+          startUnits: start,
+          endUnits: end,
+          consumption,
+          rate: billRate,
+          total,
+          createdAt: new Date()
+        };
+      }
       
       // Upsert logic: Pull the old bill for the month and push the new one
       bulkOps.push({
