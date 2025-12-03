@@ -13,7 +13,8 @@
     "ai-init": "node src/scripts/initAIConfig.js",
     "init-global-settings": "node src/scripts/initializeGlobalSettings.js",
     "migrate-pending-to-received": "node src/scripts/migratePendingToReceived.js",
-    "update-meter-type-dual": "node src/scripts/updateMeterTypeToDual.js"
+    "update-meter-type-dual": "node src/scripts/updateMeterTypeToDual.js",
+    "add-staff": "node src/scripts/addMonthlyStaffSept2025.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.812.0",

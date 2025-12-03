@@ -40,7 +40,8 @@ import {
   getStaffGuestStats,
   getDailyRateSettings,
   updateDailyRateSettings,
-  generateAdmitCard as generateStaffGuestAdmitCard
+  generateAdmitCard as generateStaffGuestAdmitCard,
+  renewMonthlyStaff
 } from '../controllers/staffGuestController.js';
 import {
   getStaffForAttendance,
@@ -293,6 +294,7 @@ router.get('/staff-guests/:id', getStaffGuestById);
 router.put('/staff-guests/:id', imageUpload.single('photo'), updateStaffGuest);
 router.delete('/staff-guests/:id', deleteStaffGuest);
 router.post('/staff-guests/:id/checkin-out', checkInOutStaffGuest);
+router.post('/staff-guests/:id/renew', renewMonthlyStaff);
 
 // Staff Attendance management routes
 router.get('/staff-attendance', getStaffAttendanceForDate);

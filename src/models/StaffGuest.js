@@ -62,6 +62,23 @@ const staffGuestSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  stayType: {
+    type: String,
+    enum: ['daily', 'monthly'],
+    default: 'daily' // Only applicable for staff type
+  },
+  selectedMonth: {
+    type: String, // Format: YYYY-MM (e.g., "2024-03")
+    default: null // Only applicable when stayType is 'monthly' and type is 'staff'
+  },
+  roomNumber: {
+    type: String,
+    default: null // Room allocation for staff
+  },
+  bedNumber: {
+    type: String,
+    default: null // Bed number within the room
+  },
   dailyRate: {
     type: Number,
     default: null // null means use default from settings
@@ -105,10 +122,13 @@ staffGuestSchema.index({ type: 1 });
 staffGuestSchema.index({ phoneNumber: 1 });
 staffGuestSchema.index({ isActive: 1 });
 staffGuestSchema.index({ createdAt: -1 });
+staffGuestSchema.index({ roomNumber: 1 });
+staffGuestSchema.index({ type: 1, roomNumber: 1 });
 
 // Virtual for full name with type
 staffGuestSchema.virtual('displayName').get(function() {
-  return `${this.name} (${this.type.charAt(0).toUpperCase() + this.type.slice(1)})`;
+  if (!this.type) return this.name || '';
+  return `${this.name || ''} (${this.type.charAt(0).toUpperCase() + this.type.slice(1)})`;
 });
 
 // Method to check if currently checked in
@@ -131,6 +151,14 @@ staffGuestSchema.methods.getStayDuration = function() {
 
 // Method to calculate day count between checkin and checkout dates
 staffGuestSchema.methods.getDayCount = function() {
+  // For monthly basis, calculate days in the selected month
+  if (this.type === 'staff' && this.stayType === 'monthly' && this.selectedMonth) {
+    const [year, month] = this.selectedMonth.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    return daysInMonth;
+  }
+  
+  // For daily basis, use checkin/checkout dates
   if (!this.checkinDate) return 0;
   
   const startDate = new Date(this.checkinDate);
@@ -146,9 +174,52 @@ staffGuestSchema.methods.getDayCount = function() {
   return Math.max(0, dayCount);
 };
 
+// Method to check if validity period has expired (for monthly basis)
+staffGuestSchema.methods.isValidityExpired = function() {
+  if (this.type !== 'staff' || this.stayType !== 'monthly' || !this.selectedMonth) {
+    return false;
+  }
+  
+  const [year, month] = this.selectedMonth.split('-').map(Number);
+  const selectedDate = new Date(year, month - 1, 1); // First day of selected month
+  const lastDayOfMonth = new Date(year, month, 0); // Last day of selected month
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
+  return today > lastDayOfMonth;
+};
+
+// Method to get validity period (for monthly basis)
+staffGuestSchema.methods.getValidityPeriod = function() {
+  if (this.type !== 'staff' || this.stayType !== 'monthly' || !this.selectedMonth) {
+    return null;
+  }
+  
+  const [year, month] = this.selectedMonth.split('-').map(Number);
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'];
+  
+  return {
+    month: monthNames[month - 1],
+    year: year,
+    startDate: new Date(year, month - 1, 1),
+    endDate: new Date(year, month, 0)
+  };
+};
+
 // Method to calculate charges (for staff and students only)
 staffGuestSchema.methods.calculateCharges = function(defaultDailyRate = 0) {
-  if (!['staff', 'student'].includes(this.type) || !this.checkinDate) return 0;
+  if (!['staff', 'student'].includes(this.type)) return 0;
+  
+  // For monthly staff stays, check for selectedMonth instead of checkinDate
+  if (this.type === 'staff' && this.stayType === 'monthly' && this.selectedMonth) {
+    const dayCount = this.getDayCount();
+    const rateToUse = this.dailyRate !== null ? this.dailyRate : defaultDailyRate;
+    return dayCount * rateToUse;
+  }
+  
+  // For daily staff stays and students, check for checkinDate
+  if (!this.checkinDate) return 0;
   
   const dayCount = this.getDayCount();
   const rateToUse = this.dailyRate !== null ? this.dailyRate : defaultDailyRate;
