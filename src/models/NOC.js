@@ -60,10 +60,10 @@ const nocSchema = new mongoose.Schema({
     ref: 'Admin',
     default: null
   },
-  // Status flow: Pending → Warden Verified → Approved
+  // Status flow: Pending → Warden Verified → Sent for Correction → Approved
   status: {
     type: String,
-    enum: ['Pending', 'Warden Verified', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Warden Verified', 'Sent for Correction', 'Approved', 'Rejected'],
     default: 'Pending',
     index: true
   },
@@ -115,6 +115,49 @@ const nocSchema = new mongoose.Schema({
   deactivatedAt: {
     type: Date,
     default: null
+  },
+  // Checklist responses from warden
+  checklistResponses: [{
+    checklistItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'NOCChecklistConfig',
+      required: true
+    },
+    checkedOut: {
+      type: String,
+      trim: true,
+      maxLength: [100, 'Checked out value cannot exceed 100 characters']
+    },
+    remarks: {
+      type: String,
+      trim: true,
+      maxLength: [500, 'Remarks cannot exceed 500 characters']
+    },
+    signature: {
+      type: String,
+      trim: true
+    }
+  }],
+  // Admin remarks for corrections
+  adminRemarks: {
+    type: String,
+    trim: true,
+    maxLength: [1000, 'Admin remarks cannot exceed 1000 characters']
+  },
+  // Track if sent for correction
+  sentForCorrectionBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null
+  },
+  sentForCorrectionAt: {
+    type: Date,
+    default: null
+  },
+  // Track correction resubmission
+  resubmittedAt: {
+    type: Date,
+    default: null
   }
 }, {
   timestamps: true,
@@ -164,13 +207,16 @@ nocSchema.statics.findByStudent = function(studentId) {
 nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = '') {
   const validTransitions = {
     'Pending': ['Warden Verified', 'Rejected'],
-    'Warden Verified': ['Approved', 'Rejected'],
+    'Warden Verified': ['Sent for Correction', 'Approved', 'Rejected'],
+    'Sent for Correction': ['Warden Verified', 'Rejected'], // Can be resubmitted or rejected
     'Approved': [], // Final state
     'Rejected': [] // Final state
   };
 
-  if (!validTransitions[this.status]?.includes(newStatus)) {
-    throw new Error(`Invalid status transition from ${this.status} to ${newStatus}`);
+  const oldStatus = this.status;
+
+  if (!validTransitions[oldStatus]?.includes(newStatus)) {
+    throw new Error(`Invalid status transition from ${oldStatus} to ${newStatus}`);
   }
 
   this.status = newStatus;
@@ -179,9 +225,20 @@ nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = 
     this.verifiedBy = updatedBy;
     this.verifiedAt = new Date();
     this.wardenRemarks = remarks;
+    // If resubmitted after correction, update resubmittedAt
+    if (oldStatus === 'Sent for Correction') {
+      this.resubmittedAt = new Date();
+    }
+  } else if (newStatus === 'Sent for Correction') {
+    this.sentForCorrectionBy = updatedBy;
+    this.sentForCorrectionAt = new Date();
+    this.adminRemarks = remarks;
   } else if (newStatus === 'Approved') {
     this.approvedBy = updatedBy;
     this.approvedAt = new Date();
+    if (remarks) {
+      this.adminRemarks = remarks;
+    }
   } else if (newStatus === 'Rejected') {
     this.rejectedBy = updatedBy;
     this.rejectedAt = new Date();

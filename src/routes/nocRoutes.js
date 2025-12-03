@@ -7,10 +7,12 @@ import {
   createNOCForStudent,
   getStudentsForNOC,
   getWardenNOCRequests,
+  getWardenChecklistItems,
   wardenVerifyNOC,
   wardenRejectNOC,
   getAllNOCRequests,
   approveNOCRequest,
+  sendForCorrection,
   rejectNOCRequest,
   getNOCStats
 } from '../controllers/nocController.js';
@@ -52,12 +54,14 @@ router.delete('/student/:id', authenticateStudent, deleteNOCRequest);
 router.get('/warden/students', wardenAuth, getStudentsForNOC);  // Get students for creating NOC
 router.post('/warden/create', wardenAuth, createNOCForStudent);  // Create NOC on behalf of student
 router.get('/warden/all', wardenAuth, getWardenNOCRequests);
+router.get('/warden/checklist', wardenAuth, getWardenChecklistItems);  // Get active checklist items
 router.post('/warden/:id/verify', wardenAuth, wardenVerifyNOC);
 router.post('/warden/:id/reject', wardenAuth, wardenRejectNOC);
 
 // Admin routes (requires noc_management permission)
 router.get('/admin/all', nocManagementAuth, getAllNOCRequests);
 router.post('/admin/:id/approve', nocManagementAuth, approveNOCRequest);
+router.post('/admin/:id/send-for-correction', nocManagementAuth, sendForCorrection);
 router.post('/admin/:id/reject', nocManagementAuth, rejectNOCRequest);
 router.get('/admin/stats', nocManagementAuth, getNOCStats);
 

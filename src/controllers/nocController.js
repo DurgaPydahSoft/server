@@ -1,6 +1,7 @@
 import NOC from '../models/NOC.js';
 import User from '../models/User.js';
 import Admin from '../models/Admin.js';
+import NOCChecklistConfig from '../models/NOCChecklistConfig.js';
 import { createError } from '../utils/error.js';
 import Notification from '../models/Notification.js';
 
@@ -293,7 +294,8 @@ export const getWardenNOCRequests = async (req, res, next) => {
     const nocRequests = await NOC.find(query)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
+      .populate('verifiedBy approvedBy rejectedBy raisedByWarden sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId')
       .sort({ createdAt: -1 });
 
     res.json({
@@ -305,12 +307,27 @@ export const getWardenNOCRequests = async (req, res, next) => {
   }
 };
 
+// Warden: Get active checklist items for NOC verification
+export const getWardenChecklistItems = async (req, res, next) => {
+  try {
+    const checklistItems = await NOCChecklistConfig.find({ isActive: true })
+      .sort({ order: 1, createdAt: 1 });
+
+    res.json({
+      success: true,
+      data: checklistItems
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Warden: Verify NOC request
 export const wardenVerifyNOC = async (req, res, next) => {
   try {
     console.log('🔍 wardenVerifyNOC called with:', { params: req.params, body: req.body, user: req.user });
     const { id } = req.params;
-    const { remarks } = req.body;
+    const { remarks, checklistResponses } = req.body;
     const wardenId = req.user.id;
 
     const nocRequest = await NOC.findById(id);
@@ -318,12 +335,65 @@ export const wardenVerifyNOC = async (req, res, next) => {
       return next(createError(404, 'NOC request not found'));
     }
 
-    if (nocRequest.status !== 'Pending') {
-      return next(createError(400, 'Only pending NOC requests can be verified'));
+    // Allow verification for both Pending and Sent for Correction status
+    if (nocRequest.status !== 'Pending' && nocRequest.status !== 'Sent for Correction') {
+      return next(createError(400, 'Only pending or sent for correction NOC requests can be verified'));
+    }
+
+    // Validate and save checklist responses if provided
+    if (checklistResponses && Array.isArray(checklistResponses)) {
+      // Get all active checklist items
+      const activeChecklistItems = await NOCChecklistConfig.find({ isActive: true }).sort({ order: 1 });
+      
+      // Validate that all required checklist items are provided
+      const providedItemIds = checklistResponses.map(r => r.checklistItemId?.toString());
+      const requiredItemIds = activeChecklistItems.map(item => item._id.toString());
+      
+      // Check if all required items are provided
+      const missingItems = requiredItemIds.filter(id => !providedItemIds.includes(id));
+      if (missingItems.length > 0) {
+        return next(createError(400, `Missing checklist responses for required items`));
+      }
+
+      // Validate each response
+      for (const response of checklistResponses) {
+        const checklistItem = activeChecklistItems.find(item => item._id.toString() === response.checklistItemId?.toString());
+        if (!checklistItem) {
+          return next(createError(400, `Invalid checklist item ID: ${response.checklistItemId}`));
+        }
+
+        // Validate required fields
+        if (!response.checkedOut || !response.checkedOut.trim()) {
+          return next(createError(400, `Checked out value is required for: ${checklistItem.description}`));
+        }
+
+        if (checklistItem.requiresRemarks && (!response.remarks || !response.remarks.trim())) {
+          return next(createError(400, `Remarks are required for: ${checklistItem.description}`));
+        }
+
+        if (checklistItem.requiresSignature && (!response.signature || !response.signature.trim())) {
+          return next(createError(400, `Signature is required for: ${checklistItem.description}`));
+        }
+      }
+
+      // Save checklist responses
+      nocRequest.checklistResponses = checklistResponses.map(response => ({
+        checklistItemId: response.checklistItemId,
+        checkedOut: response.checkedOut.trim(),
+        remarks: response.remarks ? response.remarks.trim() : '',
+        signature: response.signature ? response.signature.trim() : ''
+      }));
+    } else {
+      // If no checklist responses provided, check if there are active checklist items
+      const activeChecklistItems = await NOCChecklistConfig.find({ isActive: true });
+      if (activeChecklistItems.length > 0) {
+        return next(createError(400, 'Checklist responses are required'));
+      }
     }
 
     // Update status to Warden Verified
-    await nocRequest.updateStatus('Warden Verified', wardenId, remarks);
+    await nocRequest.updateStatus('Warden Verified', wardenId, remarks || '');
+    await nocRequest.save();
 
     // Create notification for super admin
     // Find a super admin to send notification to
@@ -343,7 +413,8 @@ export const wardenVerifyNOC = async (req, res, next) => {
     const updatedNOC = await NOC.findById(id)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy', 'username role');
+      .populate('verifiedBy approvedBy rejectedBy sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId');
 
     res.json({
       success: true,
@@ -414,7 +485,8 @@ export const getAllNOCRequests = async (req, res, next) => {
     const nocRequests = await NOC.find(query)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
+      .populate('verifiedBy approvedBy rejectedBy raisedByWarden sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId')
       .sort({ createdAt: -1 });
 
     res.json({
@@ -430,6 +502,7 @@ export const getAllNOCRequests = async (req, res, next) => {
 export const approveNOCRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { adminRemarks } = req.body;
     const superAdminId = req.user.id;
 
     const nocRequest = await NOC.findById(id);
@@ -441,8 +514,8 @@ export const approveNOCRequest = async (req, res, next) => {
       return next(createError(400, 'Only warden verified NOC requests can be approved'));
     }
 
-    // Update status to Approved
-    await nocRequest.updateStatus('Approved', superAdminId);
+    // Update status to Approved with optional admin remarks
+    await nocRequest.updateStatus('Approved', superAdminId, adminRemarks || '');
 
     // Deactivate student and vacate room allocation
     console.log(`🏠 Deactivating student ${nocRequest.studentName} (${nocRequest.rollNumber}) and vacating room allocation...`);
@@ -463,11 +536,75 @@ export const approveNOCRequest = async (req, res, next) => {
     const updatedNOC = await NOC.findById(id)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy', 'username role');
+      .populate('verifiedBy approvedBy rejectedBy sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId');
 
     res.json({
       success: true,
       message: 'NOC request approved and student deactivated successfully',
+      data: updatedNOC
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Super Admin: Send NOC request for correction
+export const sendForCorrection = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { adminRemarks } = req.body;
+    const superAdminId = req.user.id;
+
+    if (!adminRemarks || !adminRemarks.trim()) {
+      return next(createError(400, 'Admin remarks are required when sending for correction'));
+    }
+
+    const nocRequest = await NOC.findById(id);
+    if (!nocRequest) {
+      return next(createError(404, 'NOC request not found'));
+    }
+
+    if (nocRequest.status !== 'Warden Verified') {
+      return next(createError(400, 'Only warden verified NOC requests can be sent for correction'));
+    }
+
+    // Update status to Sent for Correction
+    await nocRequest.updateStatus('Sent for Correction', superAdminId, adminRemarks.trim());
+
+    // Create notification for warden
+    const warden = await Admin.findById(nocRequest.verifiedBy);
+    if (warden) {
+      await Notification.create({
+        recipient: warden._id,
+        recipientModel: 'Admin',
+        title: 'NOC Request Sent for Correction',
+        message: `NOC request from ${nocRequest.studentName} (${nocRequest.rollNumber}) has been sent back for corrections. Please review the admin remarks.`,
+        type: 'system',
+        priority: 'high'
+      });
+    }
+
+    // Create notification for student
+    await Notification.create({
+      recipient: nocRequest.student,
+      recipientModel: 'User',
+      title: 'NOC Request Requires Corrections',
+      message: `Your NOC request has been sent back for corrections. Please contact the warden for details.`,
+      type: 'system',
+      priority: 'high'
+    });
+
+    // Populate the updated NOC
+    const updatedNOC = await NOC.findById(id)
+      .populate('student', 'name rollNumber course branch year academicYear')
+      .populate('course branch', 'name')
+      .populate('verifiedBy approvedBy rejectedBy sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId');
+
+    res.json({
+      success: true,
+      message: 'NOC request sent for correction successfully',
       data: updatedNOC
     });
   } catch (error) {
@@ -487,8 +624,8 @@ export const rejectNOCRequest = async (req, res, next) => {
       return next(createError(404, 'NOC request not found'));
     }
 
-    if (nocRequest.status !== 'Warden Verified') {
-      return next(createError(400, 'Only warden verified NOC requests can be rejected'));
+    if (nocRequest.status !== 'Warden Verified' && nocRequest.status !== 'Sent for Correction') {
+      return next(createError(400, 'Only warden verified or sent for correction NOC requests can be rejected'));
     }
 
     // Update status to Rejected
@@ -508,7 +645,8 @@ export const rejectNOCRequest = async (req, res, next) => {
     const updatedNOC = await NOC.findById(id)
       .populate('student', 'name rollNumber course branch year academicYear')
       .populate('course branch', 'name')
-      .populate('verifiedBy approvedBy rejectedBy', 'username role');
+      .populate('verifiedBy approvedBy rejectedBy sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId');
 
     res.json({
       success: true,
