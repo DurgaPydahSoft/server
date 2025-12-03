@@ -22,6 +22,7 @@ import paymentRoutes from './paymentRoutes.js';
 import studentPreRegistrationRoutes from './studentPreRegistrationRoutes.js';
 import staffAttendanceRoutes from './staffAttendanceRoutes.js';
 import globalSettingsRoutes from './globalSettingsRoutes.js';
+import uploadPastPaymentsRoutes from './uploadPastPaymentsRoutes.js';
 
 const router = express.Router();
 
@@ -49,5 +50,6 @@ router.use('/payments', paymentRoutes);
 router.use('/student', studentPreRegistrationRoutes);
 router.use('/staff-attendance', staffAttendanceRoutes);
 router.use('/global-settings', globalSettingsRoutes);
+router.use('/upload-past-payments', uploadPastPaymentsRoutes);
 
 export default router; 

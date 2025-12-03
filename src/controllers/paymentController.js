@@ -1251,30 +1251,32 @@ export const getAllPayments = async (req, res) => {
     // Get total count
     const totalCount = await Payment.countDocuments(query);
 
-    // Transform payments to include student details
-    const transformedPayments = payments.map(payment => ({
-      _id: payment._id,
-      studentId: payment.studentId._id,
-      studentName: payment.studentId.name,
-      studentRollNumber: payment.studentId.rollNumber,
-      category: payment.studentId.category,
-      academicYear: payment.studentId.academicYear,
-      roomNumber: payment.studentId.roomNumber || payment.roomId?.roomNumber,
-      amount: payment.amount,
-      paymentType: payment.paymentType,
-      paymentMethod: payment.paymentMethod,
-      paymentDate: payment.paymentDate,
-      status: payment.status,
-      notes: payment.notes,
-      collectedByName: payment.collectedByName,
-      // Payment type specific fields
-      term: payment.term,
-      billMonth: payment.billMonth,
-      billDetails: payment.billDetails,
-      receiptNumber: payment.receiptNumber,
-      transactionId: payment.transactionId,
-      cashfreeOrderId: payment.cashfreeOrderId
-    }));
+    // Transform payments to include student details - handle null studentId
+    const transformedPayments = payments
+      .filter(payment => payment.studentId !== null && payment.studentId !== undefined) // Filter out payments with deleted students
+      .map(payment => ({
+        _id: payment._id,
+        studentId: payment.studentId?._id || payment.studentId,
+        studentName: payment.studentId?.name || 'Unknown Student',
+        studentRollNumber: payment.studentId?.rollNumber || 'N/A',
+        category: payment.studentId?.category || null,
+        academicYear: payment.studentId?.academicYear || payment.academicYear || null,
+        roomNumber: payment.studentId?.roomNumber || payment.roomId?.roomNumber || null,
+        amount: payment.amount,
+        paymentType: payment.paymentType,
+        paymentMethod: payment.paymentMethod,
+        paymentDate: payment.paymentDate,
+        status: payment.status,
+        notes: payment.notes,
+        collectedByName: payment.collectedByName,
+        // Payment type specific fields
+        term: payment.term,
+        billMonth: payment.billMonth,
+        billDetails: payment.billDetails,
+        receiptNumber: payment.receiptNumber,
+        transactionId: payment.transactionId,
+        cashfreeOrderId: payment.cashfreeOrderId
+      }));
 
     console.log('📋 Found payments:', transformedPayments.length);
 
