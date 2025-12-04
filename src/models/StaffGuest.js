@@ -83,6 +83,15 @@ const staffGuestSchema = new mongoose.Schema({
     type: Number,
     default: null // null means use default from settings
   },
+  chargeType: {
+    type: String,
+    enum: ['per_day', 'monthly_fixed'],
+    default: 'per_day' // Only applicable for monthly stayType
+  },
+  monthlyFixedAmount: {
+    type: Number,
+    default: null // Only applicable when chargeType is 'monthly_fixed'
+  },
   calculatedCharges: {
     type: Number,
     default: 0
@@ -213,6 +222,11 @@ staffGuestSchema.methods.calculateCharges = function(defaultDailyRate = 0) {
   
   // For monthly staff stays, check for selectedMonth instead of checkinDate
   if (this.type === 'staff' && this.stayType === 'monthly' && this.selectedMonth) {
+    // If monthly fixed amount is set, use that
+    if (this.chargeType === 'monthly_fixed' && this.monthlyFixedAmount !== null && this.monthlyFixedAmount > 0) {
+      return this.monthlyFixedAmount;
+    }
+    // Otherwise, calculate based on daily rate
     const dayCount = this.getDayCount();
     const rateToUse = this.dailyRate !== null ? this.dailyRate : defaultDailyRate;
     return dayCount * rateToUse;

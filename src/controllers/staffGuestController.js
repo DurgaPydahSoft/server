@@ -8,6 +8,7 @@ import axios from 'axios';
 // Global settings for daily rates (in-memory for now, can be moved to database later)
 let dailyRateSettings = {
   staffDailyRate: 100, // Default daily rate for staff
+  monthlyFixedAmount: 3000, // Default monthly fixed amount for staff
   lastUpdated: new Date(),
   updatedBy: null
 };
@@ -182,11 +183,18 @@ export const addStaffGuest = async (req, res, next) => {
     if (type === 'staff') {
       if (stayType === 'monthly' && selectedMonth) {
         // For monthly basis, calculate charges for the entire month
+        const chargeTypeValue = chargeType || 'per_day';
+        const monthlyFixedAmountValue = (chargeTypeValue === 'monthly_fixed' && monthlyFixedAmount) 
+          ? parseFloat(monthlyFixedAmount) 
+          : (chargeTypeValue === 'monthly_fixed' ? dailyRateSettings.monthlyFixedAmount : null);
+        
         const tempStaffGuest = new StaffGuest({
           type: 'staff',
           stayType: 'monthly',
           selectedMonth,
-          dailyRate: dailyRate ? parseFloat(dailyRate) : null
+          dailyRate: dailyRate ? parseFloat(dailyRate) : null,
+          chargeType: chargeTypeValue,
+          monthlyFixedAmount: monthlyFixedAmountValue
         });
         calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
       } else if (stayType === 'daily' && checkinDate) {
@@ -227,6 +235,10 @@ export const addStaffGuest = async (req, res, next) => {
       roomNumber: type === 'staff' && roomNumber ? roomNumber.trim() : null,
       bedNumber: type === 'staff' && bedNumber ? bedNumber.trim() : null,
       dailyRate: dailyRate ? parseFloat(dailyRate) : null,
+      chargeType: (type === 'staff' && stayType === 'monthly') ? (chargeType || 'per_day') : 'per_day',
+      monthlyFixedAmount: (type === 'staff' && stayType === 'monthly' && (chargeType || 'per_day') === 'monthly_fixed') 
+        ? (monthlyFixedAmount ? parseFloat(monthlyFixedAmount) : dailyRateSettings.monthlyFixedAmount)
+        : null,
       calculatedCharges,
       photo: photoUrl,
       createdBy: req.admin._id
@@ -434,7 +446,9 @@ export const updateStaffGuest = async (req, res, next) => {
       selectedMonth,
       roomNumber,
       bedNumber,
-      dailyRate
+      dailyRate,
+      chargeType,
+      monthlyFixedAmount
     } = req.body;
 
     const staffGuest = await StaffGuest.findById(id);
@@ -595,6 +609,23 @@ export const updateStaffGuest = async (req, res, next) => {
     }
     
     if (dailyRate !== undefined) staffGuest.dailyRate = dailyRate ? parseFloat(dailyRate) : null;
+    
+    // Update charge type and monthly fixed amount for monthly staff
+    if (currentType === 'staff' && staffGuest.stayType === 'monthly') {
+      if (chargeType !== undefined) {
+        staffGuest.chargeType = chargeType;
+      }
+      if (monthlyFixedAmount !== undefined) {
+        const chargeTypeValue = chargeType !== undefined ? chargeType : staffGuest.chargeType;
+        if (chargeTypeValue === 'monthly_fixed') {
+          staffGuest.monthlyFixedAmount = monthlyFixedAmount 
+            ? parseFloat(monthlyFixedAmount) 
+            : dailyRateSettings.monthlyFixedAmount;
+        } else {
+          staffGuest.monthlyFixedAmount = null;
+        }
+      }
+    }
     
     // Recalculate charges for staff and students
     if (currentType === 'staff') {
@@ -769,7 +800,9 @@ export const renewMonthlyStaff = async (req, res, next) => {
       type: 'staff',
       stayType: 'monthly',
       selectedMonth,
-      dailyRate: staffGuest.dailyRate
+      dailyRate: staffGuest.dailyRate,
+      chargeType: staffGuest.chargeType || 'per_day',
+      monthlyFixedAmount: staffGuest.monthlyFixedAmount
     });
     staffGuest.calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
 
@@ -837,6 +870,7 @@ export const getDailyRateSettings = async (req, res, next) => {
       success: true,
       data: {
         staffDailyRate: dailyRateSettings.staffDailyRate,
+        monthlyFixedAmount: dailyRateSettings.monthlyFixedAmount,
         lastUpdated: dailyRateSettings.lastUpdated,
         updatedBy: dailyRateSettings.updatedBy
       }
@@ -849,36 +883,49 @@ export const getDailyRateSettings = async (req, res, next) => {
 // Update daily rate settings
 export const updateDailyRateSettings = async (req, res, next) => {
   try {
-    const { staffDailyRate } = req.body;
+    const { staffDailyRate, monthlyFixedAmount } = req.body;
 
-    if (!staffDailyRate || staffDailyRate < 0) {
-      throw createError(400, 'Valid daily rate is required');
+    if (staffDailyRate !== undefined) {
+      if (staffDailyRate < 0) {
+        throw createError(400, 'Valid daily rate is required');
+      }
+      dailyRateSettings.staffDailyRate = parseFloat(staffDailyRate);
     }
 
-    dailyRateSettings.staffDailyRate = parseFloat(staffDailyRate);
+    if (monthlyFixedAmount !== undefined) {
+      if (monthlyFixedAmount < 0) {
+        throw createError(400, 'Monthly fixed amount must be a positive number');
+      }
+      dailyRateSettings.monthlyFixedAmount = parseFloat(monthlyFixedAmount);
+    }
+
     dailyRateSettings.lastUpdated = new Date();
     dailyRateSettings.updatedBy = req.admin._id;
 
-    // Recalculate charges for all active staff
-    const activeStaff = await StaffGuest.find({ 
-      type: 'staff', 
-      isActive: true,
-      checkinDate: { $exists: true }
-    });
+    // Recalculate charges for all active staff (only for daily basis staff when daily rate changes)
+    if (staffDailyRate !== undefined) {
+      const activeStaff = await StaffGuest.find({ 
+        type: 'staff', 
+        isActive: true,
+        stayType: 'daily',
+        checkinDate: { $exists: true }
+      });
 
-    for (const staff of activeStaff) {
-      staff.calculatedCharges = staff.calculateCharges(dailyRateSettings.staffDailyRate);
-      await staff.save();
+      for (const staff of activeStaff) {
+        staff.calculatedCharges = staff.calculateCharges(dailyRateSettings.staffDailyRate);
+        await staff.save();
+      }
     }
 
     res.json({
       success: true,
       data: {
         staffDailyRate: dailyRateSettings.staffDailyRate,
+        monthlyFixedAmount: dailyRateSettings.monthlyFixedAmount,
         lastUpdated: dailyRateSettings.lastUpdated,
         updatedBy: dailyRateSettings.updatedBy
       },
-      message: 'Daily rate updated successfully. All staff charges have been recalculated.'
+      message: 'Settings updated successfully' + (staffDailyRate !== undefined ? '. All daily staff charges have been recalculated.' : '.')
     });
   } catch (error) {
     next(error);

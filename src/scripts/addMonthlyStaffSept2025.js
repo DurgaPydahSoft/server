@@ -10,7 +10,12 @@ dotenv.config();
 const DEFAULT_DAILY_RATE = 100;
 
 // Calculate charges for monthly staff
-const calculateMonthlyCharges = (selectedMonth, dailyRate = DEFAULT_DAILY_RATE) => {
+const calculateMonthlyCharges = (selectedMonth, dailyRate = DEFAULT_DAILY_RATE, chargeType = 'per_day', monthlyFixedAmount = null) => {
+  // If monthly fixed amount is specified, use that
+  if (chargeType === 'monthly_fixed' && monthlyFixedAmount !== null && monthlyFixedAmount > 0) {
+    return monthlyFixedAmount;
+  }
+  // Otherwise, calculate based on daily rate
   const [year, month] = selectedMonth.split('-').map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
   return daysInMonth * dailyRate;
@@ -34,7 +39,9 @@ const staffMembers = [
     purpose: 'Monthly stay',
     roomNumber: '303', // Set room number as string (e.g., '303') or null
     bedNumber: null,    // Set bed number as string (e.g., '1') or null
-    dailyRate: null     // null will use default rate
+    dailyRate: null,     // null will use default rate (only for per_day charge type)
+    chargeType: 'per_day', // 'per_day' or 'monthly_fixed'
+    monthlyFixedAmount: null // Only used when chargeType is 'monthly_fixed'
   },
   // Add more staff members here
   // {
@@ -128,7 +135,9 @@ const addMonthlyStaff = async () => {
 
         // Calculate charges for the month
         const dailyRate = staffData.dailyRate || DEFAULT_DAILY_RATE;
-        const calculatedCharges = calculateMonthlyCharges(selectedMonth, dailyRate);
+        const chargeType = staffData.chargeType || 'per_day';
+        const monthlyFixedAmount = staffData.monthlyFixedAmount || null;
+        const calculatedCharges = calculateMonthlyCharges(selectedMonth, dailyRate, chargeType, monthlyFixedAmount);
 
         // Convert roomNumber and bedNumber to strings if they exist
         const roomNumberStr = staffData.roomNumber 
@@ -153,6 +162,8 @@ const addMonthlyStaff = async () => {
           roomNumber: roomNumberStr,
           bedNumber: bedNumberStr,
           dailyRate: staffData.dailyRate || null,
+          chargeType: chargeType,
+          monthlyFixedAmount: (chargeType === 'monthly_fixed' && monthlyFixedAmount) ? monthlyFixedAmount : null,
           calculatedCharges: calculatedCharges,
           isActive: true,
           checkInTime: new Date(),
