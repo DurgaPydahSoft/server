@@ -2,6 +2,7 @@ import FeeReminder from '../models/FeeReminder.js';
 import User from '../models/User.js';
 import Notification from '../models/Notification.js';
 import FeeStructure from '../models/FeeStructure.js';
+import ReminderConfig from '../models/ReminderConfig.js';
 import { sendFeeReminderEmail } from '../utils/emailService.js';
 import { sendSMS, sendFeeReminderSMS as smsServiceFeeReminder } from '../utils/smsService.js';
 
@@ -394,6 +395,10 @@ export const processAutomatedReminders = async () => {
   try {
     const now = new Date();
     
+    // Get reminder configuration to check if SMS is enabled
+    const reminderConfig = await ReminderConfig.findOne();
+    const isSMSEnabled = reminderConfig?.preReminders?.sms?.enabled ?? true; // Default to true if config not found
+    
     // Find students who need reminders
     const feeReminders = await FeeReminder.find({
       isActive: true,
@@ -491,8 +496,8 @@ export const processAutomatedReminders = async () => {
           console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
         }
 
-        // Send SMS notification if student has phone number
-        if (feeReminder.student.studentPhone) {
+        // Send SMS notification if student has phone number and SMS is enabled
+        if (isSMSEnabled && feeReminder.student.studentPhone) {
           try {
             // Determine which term and amount to send SMS for
             let term, amount, dueDate;
@@ -528,8 +533,10 @@ export const processAutomatedReminders = async () => {
             console.error(`📱 Error sending fee reminder ${reminderNumber} SMS to ${feeReminder.student.studentPhone}:`, smsError);
             // Continue processing even if SMS fails
           }
-        } else {
+        } else if (isSMSEnabled && !feeReminder.student.studentPhone) {
           console.log(`📱 No phone number for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
+        } else if (!isSMSEnabled) {
+          console.log(`📱 SMS reminders are disabled in configuration`);
         }
       }
     }
@@ -618,6 +625,10 @@ export const sendManualReminder = async (req, res) => {
     const { studentId, reminderType = 'manual', message, sendEmail = true, sendPushNotification = true, sendSMS = true } = req.body;
     const adminId = req.admin?._id || req.user?._id;
     
+    // Get reminder configuration to check if SMS is enabled
+    const reminderConfig = await ReminderConfig.findOne();
+    const isSMSEnabled = reminderConfig?.preReminders?.sms?.enabled ?? true; // Default to true if config not found
+    
     console.log('📤 Sending manual reminder to student:', studentId);
     
     // Find the fee reminder for the student, or create one if it doesn't exist
@@ -704,9 +715,9 @@ export const sendManualReminder = async (req, res) => {
       console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
     }
 
-    // Send SMS notification if student has phone number and SMS is enabled
+    // Send SMS notification if student has phone number, SMS is requested, and SMS is enabled in config
     let smsSent = false;
-    if (sendSMS && feeReminder.student.studentPhone) {
+    if (sendSMS && isSMSEnabled && feeReminder.student.studentPhone) {
       try {
         // Determine which term and amount to send SMS for (use current reminder or 1 for manual)
         const reminderNumber = feeReminder.currentReminder > 0 ? feeReminder.currentReminder : 1;
@@ -744,6 +755,8 @@ export const sendManualReminder = async (req, res) => {
         console.error(`📱 Error sending manual fee reminder SMS to ${feeReminder.student.studentPhone}:`, smsError);
         // Continue processing even if SMS fails
       }
+    } else if (sendSMS && !isSMSEnabled) {
+      console.log(`📱 SMS reminders are disabled in configuration`);
     } else if (sendSMS && !feeReminder.student.studentPhone) {
       console.log(`📱 No phone number for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
     }
@@ -783,6 +796,10 @@ export const sendBulkReminders = async (req, res) => {
   try {
     const { studentIds, message, sendEmail = true, sendPushNotification = true, sendSMS = true } = req.body;
     const adminId = req.admin?._id || req.user?._id;
+    
+    // Get reminder configuration to check if SMS is enabled
+    const reminderConfig = await ReminderConfig.findOne();
+    const isSMSEnabled = reminderConfig?.preReminders?.sms?.enabled ?? true; // Default to true if config not found
     
     console.log('📤 Sending bulk reminders to:', studentIds.length, 'students');
     
@@ -889,8 +906,8 @@ export const sendBulkReminders = async (req, res) => {
           }
         }
 
-        // Send SMS notification if student has phone number and SMS is enabled
-        if (sendSMS && feeReminder.student.studentPhone) {
+        // Send SMS notification if student has phone number, SMS is requested, and SMS is enabled in config
+        if (sendSMS && isSMSEnabled && feeReminder.student.studentPhone) {
           try {
             // Determine which term and amount to send SMS for (use current reminder or 1 for bulk)
             const reminderNumber = feeReminder.currentReminder > 0 ? feeReminder.currentReminder : 1;

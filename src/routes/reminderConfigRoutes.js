@@ -11,7 +11,8 @@ import {
   calculateTermDueDates,
   recalculateAllReminderDates,
   deleteTermDueDateConfig,
-  processLateFees
+  processLateFees,
+  getSemesterDates
 } from '../controllers/reminderConfigController.js';
 import { adminAuth } from '../middleware/authMiddleware.js';
 
@@ -111,13 +112,27 @@ router.get('/term-due-dates/:courseId/:academicYear/:yearOfStudy', adminAuth, [
   param('yearOfStudy').isInt({ min: 1, max: 10 }).withMessage('Year of study must be between 1 and 10')
 ], getTermDueDateConfig);
 
-// POST /api/reminder-config/term-due-dates/:courseId/:academicYear/:yearOfStudy/calculate - Calculate term due dates
+// GET /api/reminder-config/calculate-term-due-dates/:courseId/:academicYear/:yearOfStudy - Calculate term due dates (GET for frontend compatibility)
+router.get('/calculate-term-due-dates/:courseId/:academicYear/:yearOfStudy', adminAuth, [
+  param('courseId').isMongoId().withMessage('Valid course ID is required'),
+  param('academicYear').matches(/^\d{4}-\d{4}$/).withMessage('Academic year must be in format YYYY-YYYY'),
+  param('yearOfStudy').isInt({ min: 1, max: 10 }).withMessage('Year of study must be between 1 and 10')
+], calculateTermDueDates);
+
+// POST /api/reminder-config/term-due-dates/:courseId/:academicYear/:yearOfStudy/calculate - Calculate term due dates (POST for backward compatibility)
 router.post('/term-due-dates/:courseId/:academicYear/:yearOfStudy/calculate', adminAuth, [
   param('courseId').isMongoId().withMessage('Valid course ID is required'),
   param('academicYear').matches(/^\d{4}-\d{4}$/).withMessage('Academic year must be in format YYYY-YYYY'),
   param('yearOfStudy').isInt({ min: 1, max: 10 }).withMessage('Year of study must be between 1 and 10'),
-  body('semesterStartDate').isISO8601().withMessage('Valid semester start date is required')
+  body('semesterStartDate').optional().isISO8601().withMessage('Valid semester start date is required if provided')
 ], calculateTermDueDates);
+
+// GET /api/reminder-config/semester-dates/:courseId/:academicYear/:yearOfStudy - Get semester dates from AcademicCalendar
+router.get('/semester-dates/:courseId/:academicYear/:yearOfStudy', adminAuth, [
+  param('courseId').isMongoId().withMessage('Valid course ID is required'),
+  param('academicYear').matches(/^\d{4}-\d{4}$/).withMessage('Academic year must be in format YYYY-YYYY'),
+  param('yearOfStudy').isInt({ min: 1, max: 10 }).withMessage('Year of study must be between 1 and 10')
+], getSemesterDates);
 
 // POST /api/reminder-config/recalculate-dates - Recalculate all reminder dates
 router.post('/recalculate-dates', adminAuth, recalculateAllReminderDates);

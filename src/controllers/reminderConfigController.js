@@ -58,9 +58,12 @@ const getReminderConfig = async (req, res) => {
       console.log('✅ Created default reminder configuration');
     }
 
+    // Convert Mongoose document to plain object to ensure proper serialization
+    const configObj = config.toObject ? config.toObject() : config;
+
     res.json({
       success: true,
-      data: config
+      data: configObj
     });
   } catch (error) {
     console.error('❌ Error getting reminder configuration:', error);
@@ -101,27 +104,114 @@ const updateReminderConfig = async (req, res) => {
     let config = await ReminderConfig.findOne();
     
     if (config) {
-      // Update existing configuration
-      config.preReminders = preReminders;
-      config.postReminders = postReminders;
-      config.autoReminders = autoReminders;
+      // Update existing configuration - explicitly update nested objects
+      // Ensure boolean values are properly converted
+      config.preReminders = {
+        email: {
+          enabled: Boolean(preReminders.email?.enabled),
+          daysBeforeDue: preReminders.email?.daysBeforeDue || [],
+          template: preReminders.email?.template || 'pre_reminder_email'
+        },
+        push: {
+          enabled: Boolean(preReminders.push?.enabled),
+          daysBeforeDue: preReminders.push?.daysBeforeDue || [],
+          template: preReminders.push?.template || 'pre_reminder_push'
+        },
+        sms: {
+          enabled: Boolean(preReminders.sms?.enabled),
+          daysBeforeDue: preReminders.sms?.daysBeforeDue || [],
+          template: preReminders.sms?.template || 'pre_reminder_sms'
+        }
+      };
+      
+      config.postReminders = {
+        email: {
+          enabled: Boolean(postReminders.email?.enabled),
+          daysAfterDue: postReminders.email?.daysAfterDue || [],
+          template: postReminders.email?.template || 'post_reminder_email'
+        },
+        push: {
+          enabled: Boolean(postReminders.push?.enabled),
+          daysAfterDue: postReminders.push?.daysAfterDue || [],
+          template: postReminders.push?.template || 'post_reminder_push'
+        },
+        sms: {
+          enabled: Boolean(postReminders.sms?.enabled),
+          daysAfterDue: postReminders.sms?.daysAfterDue || [],
+          template: postReminders.sms?.template || 'post_reminder_sms'
+        }
+      };
+      
+      config.autoReminders = {
+        enabled: Boolean(autoReminders.enabled),
+        frequency: autoReminders.frequency || 'weekly',
+        maxPreReminders: autoReminders.maxPreReminders || 3,
+        maxPostReminders: autoReminders.maxPostReminders || 4
+      };
+      
+      // Mark nested objects as modified so Mongoose saves them
+      config.markModified('preReminders');
+      config.markModified('postReminders');
+      config.markModified('autoReminders');
       config.updatedAt = new Date();
     } else {
-      // Create new configuration
+      // Create new configuration - ensure boolean values are properly set
       config = new ReminderConfig({
-        preReminders,
-        postReminders,
-        autoReminders
+        preReminders: {
+          email: {
+            enabled: Boolean(preReminders.email?.enabled),
+            daysBeforeDue: preReminders.email?.daysBeforeDue || [],
+            template: preReminders.email?.template || 'pre_reminder_email'
+          },
+          push: {
+            enabled: Boolean(preReminders.push?.enabled),
+            daysBeforeDue: preReminders.push?.daysBeforeDue || [],
+            template: preReminders.push?.template || 'pre_reminder_push'
+          },
+          sms: {
+            enabled: Boolean(preReminders.sms?.enabled),
+            daysBeforeDue: preReminders.sms?.daysBeforeDue || [],
+            template: preReminders.sms?.template || 'pre_reminder_sms'
+          }
+        },
+        postReminders: {
+          email: {
+            enabled: Boolean(postReminders.email?.enabled),
+            daysAfterDue: postReminders.email?.daysAfterDue || [],
+            template: postReminders.email?.template || 'post_reminder_email'
+          },
+          push: {
+            enabled: Boolean(postReminders.push?.enabled),
+            daysAfterDue: postReminders.push?.daysAfterDue || [],
+            template: postReminders.push?.template || 'post_reminder_push'
+          },
+          sms: {
+            enabled: Boolean(postReminders.sms?.enabled),
+            daysAfterDue: postReminders.sms?.daysAfterDue || [],
+            template: postReminders.sms?.template || 'post_reminder_sms'
+          }
+        },
+        autoReminders: {
+          enabled: Boolean(autoReminders.enabled),
+          frequency: autoReminders.frequency || 'weekly',
+          maxPreReminders: autoReminders.maxPreReminders || 3,
+          maxPostReminders: autoReminders.maxPostReminders || 4
+        }
       });
     }
 
     await config.save();
     console.log('✅ Reminder configuration updated successfully');
+    console.log('📝 Saved config preReminders.sms.enabled:', config.preReminders.sms.enabled);
+    console.log('📝 Saved config postReminders.sms.enabled:', config.postReminders.sms.enabled);
+
+    // Convert Mongoose document to plain object to ensure proper serialization
+    const configObj = config.toObject ? config.toObject() : config;
 
     res.json({
       success: true,
       message: 'Reminder configuration updated successfully',
-      data: config
+      data: configObj
     });
   } catch (error) {
     console.error('❌ Error updating reminder configuration:', error);
@@ -422,28 +512,72 @@ const getTermDueDateConfig = async (req, res) => {
 };
 
 // Calculate term due dates for a specific course/academic year/year of study
+// Automatically fetches semester dates from AcademicCalendar if available
 const calculateTermDueDates = async (req, res) => {
   try {
     const { courseId, academicYear, yearOfStudy } = req.params;
-    const { semesterStartDate } = req.body;
+    // Support both GET (query params) and POST (body) for backward compatibility
+    const semesterStartDate = req.body?.semesterStartDate || req.query?.semesterStartDate;
 
-    if (!semesterStartDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'Semester start date is required'
-      });
+    // Try to fetch semester dates from AcademicCalendar first
+    let semesterDates = null;
+    try {
+      const AcademicCalendar = (await import('../models/AcademicCalendar.js')).default;
+      
+      // Fetch both Semester 1 and Semester 2 dates for this course/academicYear/yearOfStudy
+      const [semester1, semester2] = await Promise.all([
+        AcademicCalendar.findOne({
+          course: courseId,
+          academicYear: academicYear,
+          yearOfStudy: parseInt(yearOfStudy),
+          semester: 'Semester 1',
+          isActive: true
+        }),
+        AcademicCalendar.findOne({
+          course: courseId,
+          academicYear: academicYear,
+          yearOfStudy: parseInt(yearOfStudy),
+          semester: 'Semester 2',
+          isActive: true
+        })
+      ]);
+
+      if (semester1 || semester2) {
+        semesterDates = {
+          semester1: semester1?.startDate || null,
+          semester2: semester2?.startDate || null
+        };
+        console.log(`📅 Fetched semester dates from AcademicCalendar:`, {
+          semester1: semester1?.startDate,
+          semester2: semester2?.startDate
+        });
+      }
+    } catch (calendarError) {
+      console.log('ℹ️ AcademicCalendar not available or error fetching:', calendarError.message);
+      // Continue with fallback
+    }
+
+    // If no AcademicCalendar dates found, use provided semesterStartDate or current date as fallback
+    if (!semesterDates || (!semesterDates.semester1 && !semesterDates.semester2)) {
+      const fallbackDate = semesterStartDate ? new Date(semesterStartDate) : new Date();
+      semesterDates = {
+        semester1: fallbackDate,
+        semester2: null
+      };
+      console.log(`⚠️ Using fallback semester date:`, fallbackDate);
     }
 
     const dueDates = await ReminderConfig.calculateTermDueDates(
       courseId,
       academicYear,
       yearOfStudy,
-      new Date(semesterStartDate)
+      semesterDates
     );
 
     res.json({
       success: true,
-      data: dueDates
+      data: dueDates,
+      semesterDates: semesterDates // Include semester dates in response for frontend reference
     });
   } catch (error) {
     console.error('Error calculating term due dates:', error);
@@ -543,6 +677,74 @@ const processLateFees = async (req, res) => {
   }
 };
 
+// Get semester dates from AcademicCalendar for a specific course/academic year/year of study
+const getSemesterDates = async (req, res) => {
+  try {
+    const { courseId, academicYear, yearOfStudy } = req.params;
+
+    if (!courseId || !academicYear || !yearOfStudy) {
+      return res.status(400).json({
+        success: false,
+        message: 'Course ID, academic year, and year of study are required'
+      });
+    }
+
+    try {
+      const AcademicCalendar = (await import('../models/AcademicCalendar.js')).default;
+      
+      // Fetch both Semester 1 and Semester 2 dates
+      const [semester1, semester2] = await Promise.all([
+        AcademicCalendar.findOne({
+          course: courseId,
+          academicYear: academicYear,
+          yearOfStudy: parseInt(yearOfStudy),
+          semester: 'Semester 1',
+          isActive: true
+        }).populate('course', 'name code'),
+        AcademicCalendar.findOne({
+          course: courseId,
+          academicYear: academicYear,
+          yearOfStudy: parseInt(yearOfStudy),
+          semester: 'Semester 2',
+          isActive: true
+        }).populate('course', 'name code')
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          semester1: semester1 ? {
+            _id: semester1._id,
+            startDate: semester1.startDate,
+            endDate: semester1.endDate,
+            semester: semester1.semester
+          } : null,
+          semester2: semester2 ? {
+            _id: semester2._id,
+            startDate: semester2.startDate,
+            endDate: semester2.endDate,
+            semester: semester2.semester
+          } : null
+        }
+      });
+    } catch (calendarError) {
+      console.error('Error fetching semester dates from AcademicCalendar:', calendarError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch semester dates from Academic Calendar',
+        error: calendarError.message
+      });
+    }
+  } catch (error) {
+    console.error('Error getting semester dates:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get semester dates',
+      error: error.message
+    });
+  }
+};
+
 export {
   getReminderConfig,
   updateReminderConfig,
@@ -554,5 +756,6 @@ export {
   calculateTermDueDates,
   recalculateAllReminderDates,
   deleteTermDueDateConfig,
-  processLateFees
+  processLateFees,
+  getSemesterDates
 };
