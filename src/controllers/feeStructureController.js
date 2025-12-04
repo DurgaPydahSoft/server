@@ -152,9 +152,13 @@ export const getFeeStructures = async (req, res) => {
     console.log('🔍 Backend: Found fee structures:', feeStructures.length);
     console.log('🔍 Backend: Fee structures:', feeStructures);
 
+    // Get additional fees for this academic year (common for all students)
+    const additionalFees = await FeeStructure.getAdditionalFees(academicYear);
+
     res.json({
       success: true,
-      data: feeStructures
+      data: feeStructures,
+      additionalFees: additionalFees
     });
   } catch (error) {
     console.error('Error fetching fee structures:', error);
@@ -642,6 +646,83 @@ export const getCourseYears = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Internal server error'
+    });
+  }
+};
+
+// Get additional fees for an academic year
+export const getAdditionalFees = async (req, res) => {
+  try {
+    const { academicYear } = req.params;
+    
+    if (!academicYear) {
+      return res.status(400).json({
+        success: false,
+        message: 'Academic year is required'
+      });
+    }
+
+    const additionalFees = await FeeStructure.getAdditionalFees(academicYear);
+
+    res.json({
+      success: true,
+      data: additionalFees
+    });
+  } catch (error) {
+    console.error('Error fetching additional fees:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Set additional fees for an academic year
+export const setAdditionalFees = async (req, res) => {
+  try {
+    const { academicYear, additionalFees } = req.body;
+    const adminId = req.admin?._id || req.user?._id;
+
+    if (!academicYear) {
+      return res.status(400).json({
+        success: false,
+        message: 'Academic year is required'
+      });
+    }
+
+    if (!additionalFees || typeof additionalFees !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: 'Additional fees object is required'
+      });
+    }
+
+    // Validate additional fees structure
+    const validAdditionalFees = {
+      cautionDeposit: additionalFees.cautionDeposit || 0
+      // Add more validations as needed
+    };
+
+    // Ensure all values are non-negative numbers
+    if (validAdditionalFees.cautionDeposit < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Caution deposit must be a non-negative number'
+      });
+    }
+
+    await FeeStructure.setAdditionalFees(academicYear, validAdditionalFees, adminId);
+
+    res.json({
+      success: true,
+      message: 'Additional fees updated successfully',
+      data: validAdditionalFees
+    });
+  } catch (error) {
+    console.error('Error setting additional fees:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error'
     });
   }
 };

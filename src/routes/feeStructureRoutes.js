@@ -11,7 +11,9 @@ import {
   fixInactiveFeeStructures,
   getFeeStructureForAdmitCard,
   getCourses,
-  getCourseYears
+  getCourseYears,
+  getAdditionalFees,
+  setAdditionalFees
 } from '../controllers/feeStructureController.js';
 import { adminAuth, restrictTo } from '../middleware/authMiddleware.js';
 
@@ -34,5 +36,9 @@ router.get('/:academicYear/:course/:year/:category', getFeeStructure);
 // Admin only routes
 router.post('/', adminAuth, restrictTo('super_admin', 'admin'), createOrUpdateFeeStructure);
 router.delete('/:academicYear/:course/:year/:category', adminAuth, restrictTo('super_admin', 'admin'), deleteFeeStructure);
+
+// Additional fees routes (common for all students per academic year)
+router.get('/additional-fees/:academicYear', getAdditionalFees);
+router.post('/additional-fees', adminAuth, restrictTo('super_admin', 'admin'), setAdditionalFees);
 
 export default router; 

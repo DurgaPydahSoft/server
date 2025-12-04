@@ -1507,6 +1507,159 @@ export const recordElectricityPayment = async (req, res) => {
   }
 };
 
+// Record additional fee payment (e.g., caution deposit)
+export const recordAdditionalFeePayment = async (req, res) => {
+  try {
+    const {
+      studentId,
+      amount,
+      paymentMethod,
+      notes,
+      academicYear,
+      utrNumber,
+      additionalFeeType = 'caution_deposit'
+    } = req.body;
+    
+    const adminId = req.user._id;
+    const adminName = req.user.username || req.user.name;
+
+    console.log('💰 Recording additional fee payment:', {
+      studentId,
+      amount,
+      paymentMethod,
+      academicYear,
+      additionalFeeType,
+      adminId
+    });
+
+    // Validate required fields
+    if (!studentId || !amount || !paymentMethod || !academicYear || !additionalFeeType) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID, amount, payment method, academic year, and additional fee type are required'
+      });
+    }
+
+    // Validate UTR for online payments
+    if (paymentMethod === 'Online' && !utrNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'UTR number is required for online payments'
+      });
+    }
+
+    // Validate amount
+    if (amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Amount must be greater than 0'
+      });
+    }
+
+    // Validate decimal precision
+    if (amount % 1 !== 0 && amount.toString().split('.')[1]?.length > 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment amount cannot have more than 2 decimal places'
+      });
+    }
+
+    // Check if student exists
+    const student = await User.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Validate student status
+    if (student.hostelStatus !== 'Active') {
+      return res.status(400).json({
+        success: false,
+        message: 'Student is not active in hostel'
+      });
+    }
+
+    // Check for duplicate payments (within last 5 minutes)
+    const recentPayment = await Payment.findOne({
+      studentId: studentId,
+      academicYear: academicYear,
+      paymentType: additionalFeeType === 'caution_deposit' ? 'caution_deposit' : 'additional_fee',
+      additionalFeeType: additionalFeeType,
+      status: 'success',
+      createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
+    });
+
+    if (recentPayment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Duplicate payment detected. Please wait before making another payment.'
+      });
+    }
+
+    // Get additional fees for this academic year to validate amount
+    const FeeStructure = (await import('../models/FeeStructure.js')).default;
+    const additionalFees = await FeeStructure.getAdditionalFees(academicYear);
+    
+    // Validate that the fee type exists and amount doesn't exceed configured amount
+    const feeAmount = additionalFees[additionalFeeType] || 0;
+    if (feeAmount > 0 && amount > feeAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment amount (₹${amount}) exceeds configured ${additionalFeeType} amount (₹${feeAmount})`
+      });
+    }
+
+    // Generate receipt and transaction IDs
+    const receiptNumber = `AFR${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+    const transactionId = `AFT${Date.now()}${Math.random().toString(36).substr(2, 5)}`;
+
+    // Create payment record
+    const paymentRecord = new Payment({
+      studentId: studentId,
+      amount: amount,
+      paymentMethod: paymentMethod,
+      notes: notes || `Payment for ${additionalFeeType}`,
+      collectedBy: adminId,
+      collectedByName: adminName,
+      paymentType: additionalFeeType === 'caution_deposit' ? 'caution_deposit' : 'additional_fee',
+      additionalFeeType: additionalFeeType,
+      academicYear: academicYear,
+      receiptNumber: receiptNumber,
+      transactionId: transactionId,
+      utrNumber: utrNumber || '',
+      status: 'success',
+      paymentDate: new Date()
+    });
+
+    await paymentRecord.save();
+
+    console.log('✅ Additional fee payment recorded successfully:', {
+      paymentId: paymentRecord._id,
+      studentId,
+      amount,
+      additionalFeeType
+    });
+
+    res.json({
+      success: true,
+      message: `${additionalFeeType} payment recorded successfully`,
+      data: {
+        payment: paymentRecord,
+        receiptNumber: receiptNumber,
+        transactionId: transactionId
+      }
+    });
+  } catch (error) {
+    console.error('Error recording additional fee payment:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Internal server error'
+    });
+  }
+};
+
 export const recordHostelFeePayment = async (req, res) => {
   try {
     const {

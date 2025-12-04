@@ -52,10 +52,10 @@ const paymentSchema = new mongoose.Schema({
     required: function() { return this.status === 'success'; }
   },
   
-  // Payment type to distinguish between electricity and hostel fees
+  // Payment type to distinguish between electricity, hostel fees, and additional fees
   paymentType: {
     type: String,
-    enum: ['electricity', 'hostel_fee'],
+    enum: ['electricity', 'hostel_fee', 'caution_deposit', 'additional_fee'],
     required: true,
     index: true
   },
@@ -101,7 +101,7 @@ const paymentSchema = new mongoose.Schema({
     total: Number
   },
   
-  // Fields for hostel fee payments (optional for electricity)
+  // Fields for hostel fee payments (optional for electricity and additional fees)
   term: {
     type: String,
     required: function() { return this.paymentType === 'hostel_fee' && this.status === 'success'; },
@@ -110,8 +110,14 @@ const paymentSchema = new mongoose.Schema({
   },
   academicYear: {
     type: String,
-    required: function() { return this.paymentType === 'hostel_fee'; },
+    required: function() { return this.paymentType === 'hostel_fee' || this.paymentType === 'caution_deposit' || this.paymentType === 'additional_fee'; },
     match: [/^\d{4}-\d{4}$/, 'Academic year must be in YYYY-YYYY format']
+  },
+  // Field for additional fee type (e.g., 'caution_deposit', 'maintenance_fee', etc.)
+  additionalFeeType: {
+    type: String,
+    required: function() { return this.paymentType === 'caution_deposit' || this.paymentType === 'additional_fee'; },
+    enum: ['caution_deposit'] // Add more types as needed
   },
   receiptNumber: {
     type: String,

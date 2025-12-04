@@ -86,6 +86,18 @@ const feeStructureSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+  // Additional fees that are common for all students per academic year
+  // These fees are stored once per academic year and apply to all students
+  additionalFees: {
+    cautionDeposit: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    // Add more additional fees here as needed
+    // maintenanceFee: { type: Number, default: 0, min: 0 },
+    // securityDeposit: { type: Number, default: 0, min: 0 }
   }
 }, {
   timestamps: true
@@ -145,6 +157,48 @@ feeStructureSchema.statics.getFeeStructuresByCourse = async function(academicYea
     course, 
     isActive: true 
   }).populate('course', 'name duration').sort({ year: 1, category: 1 });
+};
+
+// Static method to get additional fees for an academic year (common for all students)
+feeStructureSchema.statics.getAdditionalFees = async function(academicYear) {
+  const feeStructure = await this.findOne({ 
+    academicYear, 
+    isActive: true 
+  }).select('additionalFees');
+  
+  return feeStructure?.additionalFees || {
+    cautionDeposit: 0
+  };
+};
+
+// Static method to set additional fees for an academic year
+feeStructureSchema.statics.setAdditionalFees = async function(academicYear, additionalFees, adminId) {
+  // Find any fee structure for this academic year to update additional fees
+  const feeStructure = await this.findOne({ academicYear, isActive: true });
+  
+  if (feeStructure) {
+    // Update additional fees on this structure
+    feeStructure.additionalFees = additionalFees;
+    feeStructure.updatedBy = adminId;
+    await feeStructure.save();
+    
+    // Update all other fee structures for this academic year to have the same additional fees
+    await this.updateMany(
+      { academicYear, isActive: true, _id: { $ne: feeStructure._id } },
+      { 
+        $set: { 
+          additionalFees: additionalFees,
+          updatedBy: adminId
+        } 
+      }
+    );
+    
+    return feeStructure;
+  } else {
+    // If no fee structure exists, create a dummy one just for additional fees
+    // This shouldn't happen in normal flow, but handle it gracefully
+    throw new Error('No fee structure found for academic year. Please create fee structures first.');
+  }
 };
 
 // Static method to create or update fee structure

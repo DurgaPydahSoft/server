@@ -16,6 +16,8 @@ import {
   getHostelFeePaymentStats,
   // Electricity payment functions
   recordElectricityPayment,
+  // Additional fee payment functions
+  recordAdditionalFeePayment,
   // All payments function
   getAllPayments
 } from '../controllers/paymentController.js';
@@ -43,6 +45,9 @@ router.get('/hostel-fee/stats', adminAuth, getHostelFeePaymentStats); // Admin g
 
 // Electricity payment routes
 router.post('/electricity', adminAuth, recordElectricityPayment); // Admin records electricity payment
+
+// Additional fee payment routes (caution deposit, etc.)
+router.post('/additional-fee', adminAuth, recordAdditionalFeePayment); // Admin records additional fee payment
 
 // Webhook route (no authentication required)
 router.post('/webhook', processPayment);
