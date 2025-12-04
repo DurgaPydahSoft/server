@@ -3,123 +3,184 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hostel Management System API</title>
+    <title>Hostel Management System API - PYDAHSOFT</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        hostel: {
-                            50: '#f0f9ff',
-                            100: '#e0f2fe',
-                            200: '#bae6fd',
-                            300: '#7dd3fc',
-                            400: '#38bdf8',
-                            500: '#0ea5e9',
-                            600: '#0284c7',
-                            700: '#0369a1',
-                            800: '#075985',
-                            900: '#0c4a6e',
-                        }
-                    }
-                }
-            }
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
         }
-    </script>
-   
+
+        .gradient-bg {
+            background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header-gradient {
+            background: linear-gradient(135deg, #0c4a6e 0%, #0369a1 100%);
+        }
+
+        .shadow-soft {
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+        }
+
+        .hover-lift {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .hover-lift:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 15px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .endpoint-card {
+            border-left: 4px solid #0284c7;
+        }
+
+        .response-card {
+            border-left: 4px solid #10b981;
+        }
+
+        .api-badge {
+            background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+        }
+
+        .status-active {
+            background-color: #10b98115;
+            color: #10b981;
+        }
+
+        .status-inactive {
+            background-color: #ef444415;
+            color: #ef4444;
+        }
+    </style>
 </head>
-<body class="bg-gradient-to-br from-hostel-50 to-hostel-100 min-h-screen flex items-center justify-center p-4">
-    <div class="max-w-4xl w-full bg-white rounded-2xl shadow-xl overflow-hidden">
-        <div class="bg-hostel-800 p-6 text-center">
-            <h1 class="text-3xl font-bold text-white">🏠 Hostel Management System BACKEND</h1>
-            <p class="text-hostel-200 mt-2">API Endpoint Root</p>
-        </div>
-        
-        <div class="p-8 md:p-12">
-            <div class="mb-10">
-                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Welcome to the Hostel Management System API - PYDAHSOFT</h2>
-                <p class="text-lg text-gray-600 mb-6">
-                    This is the root endpoint of our Hostel Management System API. The API provides programmatic access to manage hostel operations, including room allocation, student records, maintenance requests, and billing.
-                </p>
-                
-                <div class="bg-hostel-50 p-6 rounded-lg mb-8">
-                    <h3 class="text-xl font-medium text-hostel-800 mb-4">API Base URL</h3>
-                    <div class="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-sm overflow-x-auto">
-                        https://hostel-complaint-backend.onrender.com/
+
+<body class="gradient-bg min-h-screen flex items-center justify-center p-4 md:p-6">
+    <div class="max-w-6xl w-full">
+        <!-- Header Section -->
+        <div class="header-gradient rounded-2xl shadow-soft overflow-hidden mb-8">
+            <div class="p-8 md:p-10">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+                    <div>
+                        <div class="flex items-center mb-3">
+                            <div class="bg-white/20 p-2 rounded-lg mr-3">
+                                <i class="fas fa-building text-white text-xl"></i>
+                            </div>
+                            <span class="bg-white/20 text-white px-3 py-1 rounded-full text-sm font-medium">PYDAHSOFT</span>
+                        </div>
+                        <h1 class="text-3xl md:text-4xl font-bold text-white">Hostel Management System API</h1>
+                        <p class="text-blue-100 mt-3 max-w-2xl">A comprehensive backend solution for managing hostel
+                            operations including student records, room allocation, maintenance requests, and billing
+                            systems.</p>
+                    </div>
+                    <div class="glass-card rounded-xl p-4 shadow-soft">
+                        <div class="flex items-center mb-2">
+                            <div class="w-3 h-3 rounded-full bg-green-500 mr-2"></div>
+                            <span class="text-sm font-medium text-gray-700">API Status</span>
+                        </div>
+                        <div class="text-xl font-bold text-gray-800">Operational</div>
+                        <div class="text-xs text-gray-500 mt-1">99.9% uptime</div>
                     </div>
                 </div>
             </div>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-                <div class="bg-hostel-50 p-5 rounded-lg">
-                    <h3 class="text-lg font-semibold text-hostel-800 mb-3">Available Endpoints</h3>
-                    <ul class="text-gray-700 space-y-2">
-                        <li class="flex items-start">
-                            <span class="text-hostel-600 mr-2">•</span>
-                            <code class="bg-gray-100 px-1 rounded">GET /students</code> - Retrieve student records
-                        </li>
-                        <li class="flex items-start">
-                            <span class="text-hostel-600 mr-2">•</span>
-                            <code class="bg-gray-100 px-1 rounded">POST /students</code> - Create new student record
-                        </li>
-                        <li class="flex items-start">
-                            <span class="text-hostel-600 mr-2">•</span>
-                            <code class="bg-gray-100 px-1 rounded">GET /rooms</code> - Get room availability
-                        </li>
-                        <li class="flex items-start">
-                            <span class="text-hostel-600 mr-2">•</span>
-                            <code class="bg-gray-100 px-1 rounded">POST /complaints</code> - Submit maintenance request
-                        </li>
-                        <li class="flex items-start">
-                            <span class="text-hostel-600 mr-2">•</span>
-                            <code class="bg-gray-100 px-1 rounded">GET /billing</code> - Retrieve billing information
-                        </li>
-                    </ul>
-                </div>
-                
-                <div class="bg-hostel-50 p-5 rounded-lg">
-                    <h3 class="text-lg font-semibold text-hostel-800 mb-3">API Response Example</h3>
-                    <pre class="bg-gray-800 text-green-400 p-4 rounded-lg text-xs overflow-x-auto">
-{
-  "status": "success",
-  "message": "Welcome to Hostel Management System API",
-  "version": "1.0.0",
-  "endpoints": {
-    "students": "/api/v1/students",
-    "rooms": "/api/v1/rooms",
-    "maintenance": "/api/v1/maintenance",
-    "billing": "/api/v1/billing"
-  },
-  "timestamp": "2023-07-25T10:30:00Z"
-}</pre>
-                </div>
-            </div>
-            
-            <div class="text-center">
-                <div class="flex flex-col sm:flex-row justify-center gap-4 mb-2">
-                    <a href="#" class="bg-hostel-600 hover:bg-hostel-700 text-white font-semibold py-3 px-6 rounded-lg transition duration-300 inline-flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clip-rule="evenodd" />
-                        </svg>
-                        API Documentation
-                    </a>
-                    <a href="#" class="border border-hostel-300 hover:bg-hostel-50 text-hostel-700 font-semibold py-3 px-6 rounded-lg transition duration-300 inline-flex items-center justify-center">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                            <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                            <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
-                        </svg>
-                        View API Status
-                    </a>
-                </div>
-                <p class="text-gray-500 text-sm">Authentication required for most endpoints</p>
-            </div>
         </div>
         
-        <div class="bg-gray-100 p-6 text-center">
-            <p class="text-gray-600 text-sm">© 2023 Hostel Management System API. Version 1.0.0</p>
+        <!-- Developers Section -->
+        <div class="mb-12">
+            <div class="flex items-center mb-6">
+                <div class="bg-blue-100 p-2 rounded-lg mr-3">
+                    <i class="fas fa-code text-blue-600"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-slate-800">Meet the Developers</h2>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <!-- Developer 1 -->
+                <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-100 hover-lift text-center">
+                    <div class="relative w-24 h-24 mx-auto mb-4">
+                        <img src="https://bannu-bkt.s3.us-east-1.amazonaws.com/PROFILE_PIC_CROPPED.png" alt="Durga Prasad Kakileti"
+                            class="rounded-full object-cover w-full h-full border-4 border-blue-50">
+                        <div class="absolute bottom-0 right-0 bg-green-500 w-6 h-6 rounded-full border-2 border-white"
+                            title="Online"></div>
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg">Durga Prasad Kakileti</h3>
+                    <p class="text-blue-600 text-sm font-medium mb-3">Lead Architect</p>
+                    <div class="flex justify-center space-x-3">
+                        <a href="#"
+                            class="text-slate-400 hover:text-slate-600 transition-colors"><i
+                                class="fab fa-github text-lg"></i></a>
+                        <a href="#"
+                            class="text-slate-400 hover:text-blue-600 transition-colors"><i
+                                class="fab fa-linkedin text-lg"></i></a>
+                    </div>
+                </div>
+
+                <!-- Developer 2 -->
+                <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-100 hover-lift text-center">
+                    <div class="relative w-24 h-24 mx-auto mb-4">
+                        <img src="https://bannu-bkt.s3.us-east-1.amazonaws.com/PROFILE_PIC_CROPPED.png" alt="Durga Prasad Kakileti"
+                            class="rounded-full object-cover w-full h-full border-4 border-purple-50">
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg">Durga Prasad Kakileti</h3>
+                    <p class="text-purple-600 text-sm font-medium mb-3">Backend Specialist</p>
+                    <div class="flex justify-center space-x-3">
+                        <a href="#"
+                            class="text-slate-400 hover:text-slate-600 transition-colors"><i
+                                class="fab fa-github text-lg"></i></a>
+                        <a href="#"
+                            class="text-slate-400 hover:text-blue-600 transition-colors"><i
+                                class="fab fa-linkedin text-lg"></i></a>
+                    </div>
+                </div>
+
+                <!-- Developer 3 -->
+                <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-100 hover-lift text-center">
+                    <div class="relative w-24 h-24 mx-auto mb-4">
+                        <img src="https://bannu-bkt.s3.us-east-1.amazonaws.com/PROFILE_PIC_CROPPED.png" alt="Durga Prasad Kakileti"
+                            class="rounded-full object-cover w-full h-full border-4 border-orange-50">
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg">Durga Prasad Kakileti</h3>
+                    <p class="text-orange-600 text-sm font-medium mb-3">Database Engineer</p>
+                    <div class="flex justify-center space-x-3">
+                        <a href="#"
+                            class="text-slate-400 hover:text-slate-600 transition-colors"><i
+                                class="fab fa-github text-lg"></i></a>
+                        <a href="#"
+                            class="text-slate-400 hover:text-blue-600 transition-colors"><i
+                                class="fab fa-linkedin text-lg"></i></a>
+                    </div>
+                </div>
+
+                <!-- Developer 4 -->
+                <div class="bg-white rounded-xl p-6 shadow-sm border border-slate-100 hover-lift text-center">
+                    <div class="relative w-24 h-24 mx-auto mb-4">
+                        <img src="https://bannu-bkt.s3.us-east-1.amazonaws.com/PROFILE_PIC_CROPPED.png" alt="Durga Prasad Kakileti"
+                            class="rounded-full object-cover w-full h-full border-4 border-teal-50">
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg">Durga Prasad Kakileti</h3>
+                    <p class="text-teal-600 text-sm font-medium mb-3">DevOps Engineer</p>
+                    <div class="flex justify-center space-x-3">
+                        <a href="#"
+                            class="text-slate-400 hover:text-slate-600 transition-colors"><i
+                                class="fab fa-github text-lg"></i></a>
+                        <a href="#"
+                            class="text-slate-400 hover:text-blue-600 transition-colors"><i
+                                class="fab fa-linkedin text-lg"></i></a>
+                    </div>
+                </div>
+            </div>
         </div>
+
     </div>
+
 </body>
 </html>
