@@ -79,25 +79,39 @@ export const createOrUpdateMenuForDate = async (req, res, next) => {
              date = req.body.date;
              meals = JSON.parse(req.body.meals);
              
-             // Process uploaded images
+             // Process uploaded images using image flags for correct matching
              for (const mealType of ['breakfast', 'lunch', 'snacks', 'dinner']) {
                if (meals[mealType] && Array.isArray(meals[mealType])) {
                  for (let i = 0; i < meals[mealType].length; i++) {
                    const item = meals[mealType][i];
                    
-                   // Look for uploaded file with the correct field name
-                   const fileKey = `image_${mealType}_${i}`;
-                   const uploadedFile = req.files ? req.files.find(f => f.fieldname === fileKey) : null;
-                   
-                   if (uploadedFile) {
-                     try {
-                       const imageUrl = await uploadToS3(uploadedFile, 'menu');
-                       item.imageUrl = imageUrl;
-                     } catch (error) {
-                       console.error('Error uploading image:', error);
+                   // Use image flags to correctly match files
+                   // hasImage and imageIndex are set by frontend to indicate which items have images
+                   if (item.hasImage && item.imageIndex !== null && item.imageIndex !== undefined) {
+                     const fileKey = `image_${mealType}_${item.imageIndex}`;
+                     const uploadedFile = req.files ? req.files.find(f => f.fieldname === fileKey) : null;
+                     
+                     if (uploadedFile) {
+                       try {
+                         const imageUrl = await uploadToS3(uploadedFile, 'menu');
+                         item.imageUrl = imageUrl;
+                         console.log(`✅ Successfully uploaded image for ${mealType} item "${item.name}": ${imageUrl}`);
+                       } catch (error) {
+                         console.error(`❌ Error uploading image for ${mealType} item "${item.name}":`, error);
+                         // Continue without image if upload fails
+                       }
+                     } else {
+                       console.warn(`⚠️ No file found for ${mealType} item "${item.name}" with key: ${fileKey}`);
                      }
                    }
                    
+                   // Clean up temporary properties used for file matching
+                   if (item.hasImage !== undefined) {
+                     delete item.hasImage;
+                   }
+                   if (item.imageIndex !== undefined) {
+                     delete item.imageIndex;
+                   }
                    // Remove the imageFile property as it's not needed in the database
                    if (item.imageFile) {
                      delete item.imageFile;
