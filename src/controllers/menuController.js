@@ -172,33 +172,38 @@ export const createOrUpdateMenuForDate = async (req, res, next) => {
     }
     console.log('Saved menu document:', menu);
 
-    // Send notification if menu is for today
+    // Send response immediately, don't wait for notifications
+    res.json({ success: true, data: menu });
+
+    // Send notification asynchronously (non-blocking) if menu is for today
     const today = normalizeDate(new Date());
     if (normDate.getTime() === today.getTime()) {
-      try {
-        const students = await User.find({ role: 'student' });
-        
-        if (students.length > 0) {
-          const studentIds = students.map(student => student._id);
+      // Run notification in background, don't block the response
+      // Use process.nextTick to ensure it runs after response is sent
+      process.nextTick(async () => {
+        try {
+          const students = await User.find({ role: 'student' });
           
-          await notificationService.sendToUsers(studentIds, {
-            type: 'menu',
-            title: 'Menu Update',
-            message: '🍽️ check out today\'s menu! Tap to see what\'s cooking.',
-            sender: req.admin ? req.admin._id : null,
-            onModel: 'Menu',
-            relatedId: menu._id
-          });
+          if (students.length > 0) {
+            const studentIds = students.map(student => student._id);
+            
+            await notificationService.sendToUsers(studentIds, {
+              type: 'menu',
+              title: 'Menu Update',
+              message: '🍽️ check out today\'s menu! Tap to see what\'s cooking.',
+              sender: req.admin ? req.admin._id : null,
+              onModel: 'Menu',
+              relatedId: menu._id
+            });
 
-          console.log('🍽️ Menu notification sent to students:', studentIds.length);
+            console.log('🍽️ Menu notification sent to students:', studentIds.length);
+          }
+        } catch (notificationError) {
+          console.error('🍽️ Error sending menu notification:', notificationError);
+          // Don't fail the menu update if notification fails
         }
-      } catch (notificationError) {
-        console.error('🍽️ Error sending menu notification:', notificationError);
-        // Don't fail the menu update if notification fails
-      }
+      });
     }
-
-    res.json({ success: true, data: menu });
   } catch (error) {
     next(error);
   }
