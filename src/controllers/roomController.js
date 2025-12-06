@@ -785,6 +785,35 @@ export const getStudentRoomBills = async (req, res, next) => {
 // Get the current default electricity rate
 export const getDefaultElectricityRate = (req, res) => {
   res.json({ success: true, rate: Room.defaultElectricityRate });
+};
+
+// Set the default electricity rate
+export const setDefaultElectricityRate = (req, res) => {
+  try {
+    const { rate } = req.body;
+    
+    if (!rate || isNaN(Number(rate)) || Number(rate) <= 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid rate. Rate must be a positive number.' 
+      });
+    }
+
+    const newRate = Number(rate);
+    Room.setDefaultElectricityRate(newRate);
+    
+    res.json({ 
+      success: true, 
+      message: 'Default electricity rate updated successfully',
+      rate: newRate 
+    });
+  } catch (error) {
+    console.error('Error setting default electricity rate:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to update default electricity rate' 
+    });
+  }
 }; 
 
 // Get room payment statistics

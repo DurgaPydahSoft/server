@@ -15,6 +15,7 @@ import {
   getElectricityBills,
   getStudentRoomBills,
   getDefaultElectricityRate,
+  setDefaultElectricityRate,
   addBulkElectricityBills,
   getRoomsWithBedAvailability
 } from '../controllers/roomController.js';
@@ -114,6 +115,7 @@ router.post('/bulk-electricity-bills', adminAuth, addBulkElectricityBills);
 router.post('/:roomId/electricity-bill', adminAuth, addOrUpdateElectricityBill);
 router.get('/:roomId/electricity-bill', adminAuth, getElectricityBills);
 router.get('/electricity-default-rate', adminAuth, getDefaultElectricityRate);
+router.post('/electricity-default-rate', adminAuth, setDefaultElectricityRate);
 
 // Warden electricity bill routes - warden only
 router.post('/warden/bulk-electricity-bills', wardenAuth, addBulkElectricityBills);
