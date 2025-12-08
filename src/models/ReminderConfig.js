@@ -54,11 +54,12 @@ const reminderConfigSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
-      daysAfterDue: [{
+      maxDaysAfterDue: {
         type: Number,
         min: 1,
-        max: 365
-      }],
+        max: 365,
+        default: 30
+      },
       template: {
         type: String,
         default: 'post_reminder_email'
@@ -69,11 +70,12 @@ const reminderConfigSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
-      daysAfterDue: [{
+      maxDaysAfterDue: {
         type: Number,
         min: 1,
-        max: 365
-      }],
+        max: 365,
+        default: 30
+      },
       template: {
         type: String,
         default: 'post_reminder_push'
@@ -84,11 +86,12 @@ const reminderConfigSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
-      daysAfterDue: [{
+      maxDaysAfterDue: {
         type: Number,
         min: 1,
-        max: 365
-      }],
+        max: 365,
+        default: 30
+      },
       template: {
         type: String,
         default: 'post_reminder_sms'

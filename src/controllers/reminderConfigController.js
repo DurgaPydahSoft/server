@@ -32,17 +32,17 @@ const getReminderConfig = async (req, res) => {
         postReminders: {
           email: {
             enabled: true,
-            daysAfterDue: [1, 3, 7, 14],
+            maxDaysAfterDue: 30,
             template: 'post_reminder_email'
           },
           push: {
             enabled: true,
-            daysAfterDue: [1, 2, 5, 10],
+            maxDaysAfterDue: 30,
             template: 'post_reminder_push'
           },
           sms: {
             enabled: true,
-            daysAfterDue: [1, 3, 7],
+            maxDaysAfterDue: 30,
             template: 'post_reminder_sms'
           }
         },
@@ -100,6 +100,18 @@ const updateReminderConfig = async (req, res) => {
       });
     }
 
+    // Helper function to handle backward compatibility: if daysAfterDue array exists, use max value; otherwise use maxDaysAfterDue or default
+    const getMaxDaysAfterDue = (reminderConfig) => {
+      if (reminderConfig?.maxDaysAfterDue !== undefined) {
+        return reminderConfig.maxDaysAfterDue;
+      }
+      // Backward compatibility: if daysAfterDue array exists, use the maximum value
+      if (reminderConfig?.daysAfterDue && Array.isArray(reminderConfig.daysAfterDue) && reminderConfig.daysAfterDue.length > 0) {
+        return Math.max(...reminderConfig.daysAfterDue.filter(d => !isNaN(d) && d > 0));
+      }
+      return 30; // Default
+    };
+
     // Find existing configuration or create new one
     let config = await ReminderConfig.findOne();
     
@@ -123,21 +135,21 @@ const updateReminderConfig = async (req, res) => {
           template: preReminders.sms?.template || 'pre_reminder_sms'
         }
       };
-      
+
       config.postReminders = {
         email: {
           enabled: Boolean(postReminders.email?.enabled),
-          daysAfterDue: postReminders.email?.daysAfterDue || [],
+          maxDaysAfterDue: getMaxDaysAfterDue(postReminders.email),
           template: postReminders.email?.template || 'post_reminder_email'
         },
         push: {
           enabled: Boolean(postReminders.push?.enabled),
-          daysAfterDue: postReminders.push?.daysAfterDue || [],
+          maxDaysAfterDue: getMaxDaysAfterDue(postReminders.push),
           template: postReminders.push?.template || 'post_reminder_push'
         },
         sms: {
           enabled: Boolean(postReminders.sms?.enabled),
-          daysAfterDue: postReminders.sms?.daysAfterDue || [],
+          maxDaysAfterDue: getMaxDaysAfterDue(postReminders.sms),
           template: postReminders.sms?.template || 'post_reminder_sms'
         }
       };
@@ -177,17 +189,17 @@ const updateReminderConfig = async (req, res) => {
         postReminders: {
           email: {
             enabled: Boolean(postReminders.email?.enabled),
-            daysAfterDue: postReminders.email?.daysAfterDue || [],
+            maxDaysAfterDue: getMaxDaysAfterDue(postReminders.email),
             template: postReminders.email?.template || 'post_reminder_email'
           },
           push: {
             enabled: Boolean(postReminders.push?.enabled),
-            daysAfterDue: postReminders.push?.daysAfterDue || [],
+            maxDaysAfterDue: getMaxDaysAfterDue(postReminders.push),
             template: postReminders.push?.template || 'post_reminder_push'
           },
           sms: {
             enabled: Boolean(postReminders.sms?.enabled),
-            daysAfterDue: postReminders.sms?.daysAfterDue || [],
+            maxDaysAfterDue: getMaxDaysAfterDue(postReminders.sms),
             template: postReminders.sms?.template || 'post_reminder_sms'
           }
         },
@@ -324,17 +336,17 @@ const resetReminderConfig = async (req, res) => {
       postReminders: {
         email: {
           enabled: true,
-          daysAfterDue: [1, 3, 7, 14],
+          maxDaysAfterDue: 30,
           template: 'post_reminder_email'
         },
         push: {
           enabled: true,
-          daysAfterDue: [1, 2, 5, 10],
+          maxDaysAfterDue: 30,
           template: 'post_reminder_push'
         },
         sms: {
           enabled: true,
-          daysAfterDue: [1, 3, 7],
+          maxDaysAfterDue: 30,
           template: 'post_reminder_sms'
         }
       },
