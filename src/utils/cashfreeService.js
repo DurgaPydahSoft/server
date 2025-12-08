@@ -270,7 +270,20 @@ class CashfreeService {
     console.log('🔧 generateHostelFeeOrderData called with:', paymentData);
 
     // Generate a valid customer_id (alphanumeric with underscores/hyphens only, max 50 chars)
-    const emailPrefix = studentEmail.split('@')[0]; // Get part before @
+    // Handle missing email gracefully
+    let emailPrefix = 'student';
+    if (studentEmail && typeof studentEmail === 'string' && studentEmail.includes('@')) {
+      emailPrefix = studentEmail.split('@')[0];
+    } else {
+      // Use student name or phone as fallback
+      if (studentName && typeof studentName === 'string') {
+        emailPrefix = studentName.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().substring(0, 20);
+      } else if (studentPhone && typeof studentPhone === 'string') {
+        emailPrefix = `phone_${studentPhone.replace(/[^0-9]/g, '').substring(0, 10)}`;
+      } else if (studentId) {
+        emailPrefix = `id_${String(studentId).substring(0, 15)}`;
+      }
+    }
     const shortTimestamp = Date.now().toString().slice(-6); // Last 6 digits
     const validCustomerId = `cust_${emailPrefix}_${shortTimestamp}`;
     
@@ -289,9 +302,9 @@ class CashfreeService {
       order_currency: 'INR',
       customer_details: {
         customer_id: finalCustomerId,
-        customer_name: studentName,
-        customer_email: studentEmail,
-        customer_phone: studentPhone
+        customer_name: studentName || 'Student',
+        customer_email: studentEmail || `${finalCustomerId}@hostel.local`, // Fallback email if missing
+        customer_phone: studentPhone || '9999999999'
       },
       order_meta: {
         return_url: `${cleanFrontendUrl}/student/hostel-fee?payment_success=true&order_id={order_id}`,
@@ -326,7 +339,18 @@ class CashfreeService {
     console.log('🔧 billId value:', billId);
 
     // Generate a valid customer_id (alphanumeric with underscores/hyphens only, max 50 chars)
-    const emailPrefix = studentEmail.split('@')[0]; // Get part before @
+    // Handle missing email gracefully
+    let emailPrefix = 'student';
+    if (studentEmail && typeof studentEmail === 'string' && studentEmail.includes('@')) {
+      emailPrefix = studentEmail.split('@')[0];
+    } else {
+      // Use student name or phone as fallback
+      if (studentName && typeof studentName === 'string') {
+        emailPrefix = studentName.replace(/[^a-zA-Z0-9]/g, '').toLowerCase().substring(0, 20);
+      } else if (studentPhone && typeof studentPhone === 'string') {
+        emailPrefix = `phone_${studentPhone.replace(/[^0-9]/g, '').substring(0, 10)}`;
+      }
+    }
     const shortTimestamp = Date.now().toString().slice(-6); // Last 6 digits
     const validCustomerId = `cust_${emailPrefix}_${shortTimestamp}`;
     
@@ -345,9 +369,9 @@ class CashfreeService {
       order_currency: 'INR',
       customer_details: {
         customer_id: finalCustomerId,
-        customer_name: studentName,
-        customer_email: studentEmail,
-        customer_phone: studentPhone
+        customer_name: studentName || 'Student',
+        customer_email: studentEmail || `${finalCustomerId}@hostel.local`, // Fallback email if missing
+        customer_phone: studentPhone || '9999999999'
       },
       order_meta: {
         return_url: (() => {
@@ -359,10 +383,10 @@ class CashfreeService {
         notify_url: `${cleanBackendUrl}/api/payments/webhook`,
         payment_methods: 'cc,dc,upi,nb,app'
       },
-      order_note: `Electricity bill payment for Room ${roomNumber} - ${billMonth}`,
+      order_note: `Electricity bill payment for Room ${roomNumber || 'N/A'} - ${billMonth || 'Unknown'}`,
       order_tags: {
-        room_number: roomNumber,
-        bill_month: billMonth,
+        room_number: roomNumber || 'N/A',
+        bill_month: billMonth || 'Unknown',
         payment_type: 'electricity_bill'
       }
     };

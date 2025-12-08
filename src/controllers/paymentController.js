@@ -103,6 +103,14 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
+    // Validate required student fields
+    if (!student.name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student name is missing. Please update your profile.'
+      });
+    }
+
     // Calculate student's share
     let studentAmount = 0;
     const studentBill = bill.studentBills?.find(sb => sb.studentId.toString() === studentId.toString());
@@ -130,21 +138,36 @@ export const initiatePayment = async (req, res) => {
       studentAmount = Math.round(bill.total / studentsInRoom);
     }
 
+    // Validate student amount
+    if (!studentAmount || studentAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid student amount calculated. Please contact administrator.'
+      });
+    }
+
     // Generate unique order ID
     const orderId = `ELEC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     console.log('🔧 About to generate order data with billId:', billId);
     console.log('🔧 Bill object:', bill);
+    console.log('🔧 Student details:', {
+      name: student.name,
+      email: student.email || 'Not provided',
+      phone: student.studentPhone || 'Not provided',
+      roomNumber: room.roomNumber
+    });
 
     // Generate order data for Cashfree
+    // Note: email can be undefined/null - cashfreeService will handle it gracefully
     const orderData = cashfreeService.generateOrderData({
       orderId: orderId,
       amount: studentAmount,
-      studentName: student.name,
-      studentEmail: student.email,
-      studentPhone: student.studentPhone || '9999999999',
-      roomNumber: room.roomNumber,
-      billMonth: bill.month,
+      studentName: student.name || 'Student',
+      studentEmail: student.email || null, // Can be null - service will handle
+      studentPhone: student.studentPhone || student.phone || '9999999999',
+      roomNumber: room.roomNumber || 'N/A',
+      billMonth: bill.month || 'Unknown',
       billId: billId
     });
 
