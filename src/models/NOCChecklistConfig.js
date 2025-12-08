@@ -19,22 +19,6 @@ const nocChecklistConfigSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  // Whether this item requires remarks
-  requiresRemarks: {
-    type: Boolean,
-    default: false
-  },
-  // Whether this item requires signature
-  requiresSignature: {
-    type: Boolean,
-    default: false
-  },
-  // Default value hint (e.g., "Clear", "—", "5000/-")
-  defaultValue: {
-    type: String,
-    trim: true,
-    maxLength: [100, 'Default value cannot exceed 100 characters']
-  },
   // Created/Updated by
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,

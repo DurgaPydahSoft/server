@@ -48,7 +48,7 @@ export const getChecklistItem = async (req, res, next) => {
 // Create checklist item
 export const createChecklistItem = async (req, res, next) => {
   try {
-    const { description, order, isActive, requiresRemarks, requiresSignature, defaultValue } = req.body;
+    const { description, order, isActive } = req.body;
     const adminId = req.user.id;
 
     if (!description || !description.trim()) {
@@ -66,9 +66,6 @@ export const createChecklistItem = async (req, res, next) => {
       description: description.trim(),
       order: itemOrder,
       isActive: isActive !== undefined ? isActive : true,
-      requiresRemarks: requiresRemarks || false,
-      requiresSignature: requiresSignature || false,
-      defaultValue: defaultValue ? defaultValue.trim() : '',
       createdBy: adminId,
       updatedBy: adminId
     });
@@ -92,7 +89,7 @@ export const createChecklistItem = async (req, res, next) => {
 export const updateChecklistItem = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { description, order, isActive, requiresRemarks, requiresSignature, defaultValue } = req.body;
+    const { description, order, isActive } = req.body;
     const adminId = req.user.id;
 
     const checklistItem = await NOCChecklistConfig.findById(id);
@@ -113,18 +110,6 @@ export const updateChecklistItem = async (req, res, next) => {
 
     if (isActive !== undefined) {
       checklistItem.isActive = isActive;
-    }
-
-    if (requiresRemarks !== undefined) {
-      checklistItem.requiresRemarks = requiresRemarks;
-    }
-
-    if (requiresSignature !== undefined) {
-      checklistItem.requiresSignature = requiresSignature;
-    }
-
-    if (defaultValue !== undefined) {
-      checklistItem.defaultValue = defaultValue ? defaultValue.trim() : '';
     }
 
     checklistItem.updatedBy = adminId;

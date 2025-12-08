@@ -8,8 +8,25 @@ import Notification from '../models/Notification.js';
 // Student: Create NOC request
 export const createNOCRequest = async (req, res, next) => {
   try {
-    const { reason } = req.body;
+    const { reason, vacatingDate } = req.body;
     const studentId = req.user.id;
+
+    // Validate vacating date
+    if (!vacatingDate) {
+      return next(createError(400, 'Vacating date is required'));
+    }
+
+    const vacatingDateObj = new Date(vacatingDate);
+    if (isNaN(vacatingDateObj.getTime())) {
+      return next(createError(400, 'Invalid vacating date format'));
+    }
+
+    // Ensure vacating date is not in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (vacatingDateObj < today) {
+      return next(createError(400, 'Vacating date cannot be in the past'));
+    }
 
     // Get student details
     const student = await User.findById(studentId).populate('course branch');
@@ -41,7 +58,8 @@ export const createNOCRequest = async (req, res, next) => {
       branch: student.branch._id,
       year: student.year,
       academicYear: student.academicYear,
-      reason: reason.trim()
+      reason: reason.trim(),
+      vacatingDate: vacatingDateObj
     });
 
     await nocRequest.save();
@@ -134,14 +152,31 @@ export const deleteNOCRequest = async (req, res, next) => {
 // Warden: Create NOC request on behalf of student
 export const createNOCForStudent = async (req, res, next) => {
   try {
-    const { studentId, reason } = req.body;
+    const { studentId, reason, vacatingDate } = req.body;
     const wardenId = req.warden._id;
 
-    console.log('📝 Warden creating NOC for student:', { studentId, reason, wardenId });
+    console.log('📝 Warden creating NOC for student:', { studentId, reason, vacatingDate, wardenId });
 
     // Validate required fields
     if (!studentId || !reason) {
       return next(createError(400, 'Student ID and reason are required'));
+    }
+
+    // Validate vacating date
+    if (!vacatingDate) {
+      return next(createError(400, 'Vacating date is required'));
+    }
+
+    const vacatingDateObj = new Date(vacatingDate);
+    if (isNaN(vacatingDateObj.getTime())) {
+      return next(createError(400, 'Invalid vacating date format'));
+    }
+
+    // Ensure vacating date is not in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (vacatingDateObj < today) {
+      return next(createError(400, 'Vacating date cannot be in the past'));
     }
 
     // Validate reason length
@@ -184,6 +219,7 @@ export const createNOCForStudent = async (req, res, next) => {
       year: student.year,
       academicYear: student.academicYear,
       reason: reason.trim(),
+      vacatingDate: vacatingDateObj,
       raisedBy: 'warden',
       raisedByWarden: wardenId
     });
@@ -362,26 +398,17 @@ export const wardenVerifyNOC = async (req, res, next) => {
           return next(createError(400, `Invalid checklist item ID: ${response.checklistItemId}`));
         }
 
-        // Validate required fields
-        if (!response.checkedOut || !response.checkedOut.trim()) {
-          return next(createError(400, `Checked out value is required for: ${checklistItem.description}`));
-        }
-
-        if (checklistItem.requiresRemarks && (!response.remarks || !response.remarks.trim())) {
-          return next(createError(400, `Remarks are required for: ${checklistItem.description}`));
-        }
-
-        if (checklistItem.requiresSignature && (!response.signature || !response.signature.trim())) {
-          return next(createError(400, `Signature is required for: ${checklistItem.description}`));
+        // Validate required fields - amount is required
+        if (!response.amount || !response.amount.trim()) {
+          return next(createError(400, `Amount is required for: ${checklistItem.description}`));
         }
       }
 
       // Save checklist responses
       nocRequest.checklistResponses = checklistResponses.map(response => ({
         checklistItemId: response.checklistItemId,
-        checkedOut: response.checkedOut.trim(),
-        remarks: response.remarks ? response.remarks.trim() : '',
-        signature: response.signature ? response.signature.trim() : ''
+        amount: response.amount.trim(),
+        remarks: response.remarks ? response.remarks.trim() : ''
       }));
     } else {
       // If no checklist responses provided, check if there are active checklist items

@@ -49,6 +49,11 @@ const nocSchema = new mongoose.Schema({
     default: Date.now,
     required: true
   },
+  // Vacating date from hostel
+  vacatingDate: {
+    type: Date,
+    required: true
+  },
   // Track who raised the NOC
   raisedBy: {
     type: String,
@@ -123,19 +128,15 @@ const nocSchema = new mongoose.Schema({
       ref: 'NOCChecklistConfig',
       required: true
     },
-    checkedOut: {
-      type: String,
-      trim: true,
-      maxLength: [100, 'Checked out value cannot exceed 100 characters']
-    },
     remarks: {
       type: String,
       trim: true,
       maxLength: [500, 'Remarks cannot exceed 500 characters']
     },
-    signature: {
+    amount: {
       type: String,
-      trim: true
+      trim: true,
+      maxLength: [100, 'Amount cannot exceed 100 characters']
     }
   }],
   // Admin remarks for corrections
