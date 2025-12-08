@@ -1298,7 +1298,8 @@ export const getAllPayments = async (req, res) => {
         billDetails: payment.billDetails,
         receiptNumber: payment.receiptNumber,
         transactionId: payment.transactionId,
-        cashfreeOrderId: payment.cashfreeOrderId
+        cashfreeOrderId: payment.cashfreeOrderId,
+        additionalFeeType: payment.additionalFeeType // For additional fee payments
       }));
 
     console.log('📋 Found payments:', transformedPayments.length);
