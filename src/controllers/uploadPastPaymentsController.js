@@ -15,14 +15,11 @@ const parseDate = (dateValue) => {
   
   // If it's a number (Excel serial date)
   if (typeof dateValue === 'number') {
-    // Excel serial date: days since January 1, 1900 (where 1 = Jan 1, 1900)
-    // Direct conversion: Excel serial date N = Jan 1, 1900 + (N - 1) days
-    // JavaScript Date(1900, 0, 1) = January 1, 1900
-    const excelEpoch = new Date(1900, 0, 1); // January 1, 1900
-    const date = new Date(excelEpoch.getTime() + (dateValue - 1) * 24 * 60 * 60 * 1000);
+    // Excel serial date: Use local timezone, not UTC
+    const excelEpoch = new Date(1899, 11, 30); // Dec 30, 1899 in local time
+    const date = new Date(excelEpoch.getTime() + Math.round(dateValue) * 24 * 60 * 60 * 1000);
     
-    // Validate the date is reasonable (between 1900 and 2100)
-    if (!isNaN(date.getTime()) && date.getFullYear() >= 1900 && date.getFullYear() <= 2100) {
+    if (!isNaN(date.getTime())) {
       return date;
     }
     return null;
@@ -30,64 +27,39 @@ const parseDate = (dateValue) => {
   
   const dateStr = String(dateValue).trim();
   
-  // Try DD/MM/YYYY format (most common in Indian Excel files)
+  // Try DD/MM/YYYY or DD-MM-YYYY format (Indian format)
   const ddmmyyyyMatch = dateStr.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
   if (ddmmyyyyMatch) {
     const [, day, month, year] = ddmmyyyyMatch;
-    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    if (!isNaN(date.getTime())) {
+    const dayNum = parseInt(day);
+    const monthNum = parseInt(month);
+    const yearNum = parseInt(year);
+    
+    // Create date in LOCAL timezone at noon (12:00) to avoid midnight issues
+    const date = new Date(yearNum, monthNum - 1, dayNum, 12, 0, 0);
+    
+    // Validate the date
+    if (!isNaN(date.getTime()) && 
+        date.getDate() === dayNum && 
+        date.getMonth() === monthNum - 1 &&
+        date.getFullYear() === yearNum) {
       return date;
     }
   }
   
-  // Try MM/DD/YYYY format (US format)
-  const mmddyyyyMatch = dateStr.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})$/);
-  if (mmddyyyyMatch) {
-    const [, month, day, year] = mmddyyyyMatch;
-    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    if (!isNaN(date.getTime())) {
-      return date;
-    }
-  }
-  
-  // Try YYYY-MM-DD format (ISO format)
+  // Try YYYY-MM-DD format (ISO-like)
   const yyyymmddMatch = dateStr.match(/^(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})$/);
   if (yyyymmddMatch) {
     const [, year, month, day] = yyyymmddMatch;
-    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day), 12, 0, 0);
     if (!isNaN(date.getTime())) {
       return date;
     }
   }
   
-  // Try DD-MM-YYYY format (with dashes)
-  const ddmmyyyyDashMatch = dateStr.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (ddmmyyyyDashMatch) {
-    const [, day, month, year] = ddmmyyyyDashMatch;
-    const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-    if (!isNaN(date.getTime())) {
-      return date;
-    }
-  }
-  
-  // Try parsing as number (might be Excel serial date as string)
-  const numericValue = parseFloat(dateStr);
-  if (!isNaN(numericValue) && numericValue > 0 && numericValue < 100000) {
-    // Likely an Excel serial date stored as string
-    const excelEpoch = new Date(1899, 11, 30);
-    const date = new Date(excelEpoch.getTime() + (numericValue + 1) * 24 * 60 * 60 * 1000);
-    if (!isNaN(date.getTime())) {
-      return date;
-    }
-  }
-  
-  // Try standard Date parsing (handles ISO strings and other formats)
-  const date = new Date(dateValue);
-  if (!isNaN(date.getTime())) {
-    return date;
-  }
-  
-  return null;
+  // Try standard Date parsing
+  const date = new Date(dateStr);
+  return !isNaN(date.getTime()) ? date : null;
 };
 
 // Helper function to get UTR number - generate default for online payments if missing
@@ -300,16 +272,13 @@ export const previewPastPayments = async (req, res, next) => {
         if (paymentDateValue) {
           // Infer academic year from payment date
           const paymentYear = paymentDateValue.getFullYear();
-          const paymentMonth = paymentDateValue.getMonth() + 1; // 1-12
           
-          // Academic year typically starts in June/July
-          // If payment is before June, it's for previous academic year
-          if (paymentMonth < 6) {
-            academicYearStr = `${paymentYear - 1}-${paymentYear}`;
-          } else {
-            academicYearStr = `${paymentYear}-${paymentYear + 1}`;
-          }
-          warnings.AcademicYear = `Academic year inferred from payment date: ${academicYearStr}`;
+          // Assuming academic year is paymentYear to paymentYear+1
+          // This is a simplified assumption - you may need to adjust based on your specific logic
+          academicYearStr = `${paymentYear}-${paymentYear + 1}`;
+          
+          // Show warning about inference
+          warnings.AcademicYear = `Academic year inferred from payment date (${paymentDateValue.toLocaleDateString()}): ${academicYearStr}`;
         } else {
           errors.AcademicYear = 'Academic year is required.';
         }
@@ -386,7 +355,7 @@ export const previewPastPayments = async (req, res, next) => {
         rollNumber: RollNumber ? String(RollNumber).trim().toUpperCase() : '',
         amount: Amount ? parseFloat(Amount) : null,
         paymentMethod: normalizedPaymentMethod,
-        paymentDate: paymentDateValue,
+        paymentDate: paymentDateValue ? paymentDateValue.toISOString() : null,
         academicYear: academicYearStr,
         term: Term ? String(Term).trim().toLowerCase().replace(/\s+/g, '') : null,
         receiptNumber: ReceiptNumber ? String(ReceiptNumber).trim() : null,
