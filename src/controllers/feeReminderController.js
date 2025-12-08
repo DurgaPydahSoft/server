@@ -395,9 +395,26 @@ export const processAutomatedReminders = async () => {
   try {
     const now = new Date();
     
-    // Get reminder configuration to check if SMS is enabled
+    // Get reminder configuration to check if reminders are enabled
     const reminderConfig = await ReminderConfig.findOne();
+    
+    // Check if auto reminders are enabled at all
+    if (reminderConfig && reminderConfig.autoReminders?.enabled === false) {
+      console.log('⏸️ Automated reminders are disabled in configuration');
+      return;
+    }
+    
+    // Get enabled flags for each reminder type
+    const isEmailEnabled = reminderConfig?.preReminders?.email?.enabled ?? true; // Default to true if config not found
     const isSMSEnabled = reminderConfig?.preReminders?.sms?.enabled ?? true; // Default to true if config not found
+    const isPushEnabled = reminderConfig?.preReminders?.push?.enabled ?? true; // Default to true if config not found
+    
+    console.log('🔔 Reminder configuration:', {
+      autoReminders: reminderConfig?.autoReminders?.enabled ?? true,
+      email: isEmailEnabled,
+      sms: isSMSEnabled,
+      push: isPushEnabled
+    });
     
     // Find students who need reminders
     const feeReminders = await FeeReminder.find({
@@ -466,10 +483,16 @@ export const processAutomatedReminders = async () => {
           }
         });
         
-        await notification.save();
+        // Create notification only if push notifications are enabled
+        if (isPushEnabled) {
+          await notification.save();
+          console.log(`🔔 Fee reminder ${reminderNumber} push notification created for: ${feeReminder.student.name}`);
+        } else {
+          console.log(`⏸️ Push notifications are disabled, skipping notification creation`);
+        }
         
-        // Send email notification if student has email
-        if (feeReminder.student.email) {
+        // Send email notification if student has email and email reminders are enabled
+        if (isEmailEnabled && feeReminder.student.email) {
           try {
             const dueDates = {
               term1: feeReminder.firstReminderDate,
@@ -492,8 +515,10 @@ export const processAutomatedReminders = async () => {
             console.error(`📧 Failed to send fee reminder ${reminderNumber} email to ${feeReminder.student.email}:`, emailError);
             // Continue processing even if email fails
           }
-        } else {
+        } else if (isEmailEnabled && !feeReminder.student.email) {
           console.log(`📧 No email address for student: ${feeReminder.student.name} (${feeReminder.student.rollNumber})`);
+        } else if (!isEmailEnabled) {
+          console.log(`⏸️ Email reminders are disabled in configuration`);
         }
 
         // Send SMS notification if student has phone number and SMS is enabled
