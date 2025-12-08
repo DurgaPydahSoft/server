@@ -654,6 +654,7 @@ export const getCourseYears = async (req, res) => {
 export const getAdditionalFees = async (req, res) => {
   try {
     const { academicYear } = req.params;
+    const { category } = req.query; // Optional category filter
     
     if (!academicYear) {
       return res.status(400).json({
@@ -662,7 +663,7 @@ export const getAdditionalFees = async (req, res) => {
       });
     }
 
-    const additionalFees = await FeeStructure.getAdditionalFees(academicYear);
+    const additionalFees = await FeeStructure.getAdditionalFees(academicYear, category || null);
 
     res.json({
       success: true,
@@ -697,19 +698,59 @@ export const setAdditionalFees = async (req, res) => {
       });
     }
 
-    // Validate additional fees structure
-    const validAdditionalFees = {
-      cautionDeposit: additionalFees.cautionDeposit || 0
-      // Add more validations as needed
-    };
-
-    // Ensure all values are non-negative numbers
-    if (validAdditionalFees.cautionDeposit < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Caution deposit must be a non-negative number'
-      });
-    }
+    // Validate additional fees structure - support dynamic fee types
+    const validAdditionalFees = {};
+    
+    // Validate each fee type
+    Object.keys(additionalFees).forEach(key => {
+      const feeData = additionalFees[key];
+      
+      // Validate fee key (alphanumeric with underscores, max 50 chars)
+      if (!/^[a-zA-Z0-9_]+$/.test(key) || key.length > 50) {
+        throw new Error(`Invalid fee type name: ${key}. Must be alphanumeric with underscores, max 50 characters.`);
+      }
+      
+      // Handle both object format {amount, description, isActive, categories} and number format (backward compatibility)
+      if (typeof feeData === 'object' && feeData !== null) {
+        if (typeof feeData.amount !== 'number' || feeData.amount < 0) {
+          throw new Error(`Invalid amount for ${key}. Must be a non-negative number.`);
+        }
+        
+        // Validate categories if provided
+        const validCategories = ['A+', 'A', 'B+', 'B'];
+        let categories = feeData.categories;
+        if (Array.isArray(categories) && categories.length > 0) {
+          // Validate each category
+          const invalidCategories = categories.filter(cat => !validCategories.includes(cat));
+          if (invalidCategories.length > 0) {
+            throw new Error(`Invalid categories for ${key}: ${invalidCategories.join(', ')}. Valid categories are: ${validCategories.join(', ')}`);
+          }
+        } else {
+          // Default to all categories if not specified or empty
+          categories = validCategories;
+        }
+        
+        validAdditionalFees[key] = {
+          amount: feeData.amount || 0,
+          description: feeData.description || '',
+          isActive: feeData.isActive !== undefined ? feeData.isActive : true,
+          categories: categories
+        };
+      } else if (typeof feeData === 'number') {
+        // Backward compatibility: if it's just a number
+        if (feeData < 0) {
+          throw new Error(`Invalid amount for ${key}. Must be a non-negative number.`);
+        }
+        validAdditionalFees[key] = {
+          amount: feeData,
+          description: '',
+          isActive: true,
+          categories: ['A+', 'A', 'B+', 'B'] // Default to all categories
+        };
+      } else {
+        throw new Error(`Invalid format for ${key}. Must be a number or object with amount, description, isActive, and categories.`);
+      }
+    });
 
     await FeeStructure.setAdditionalFees(academicYear, validAdditionalFees, adminId);
 

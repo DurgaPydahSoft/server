@@ -87,17 +87,22 @@ const feeStructureSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
-  // Additional fees that are common for all students per academic year
-  // These fees are stored once per academic year and apply to all students
+  // Additional fees that can be category-specific per academic year
+  // Using Map to support dynamic fee types (caution deposit, diesel charges, etc.)
+  // Each fee can apply to specific categories (A+, A, B+, B)
   additionalFees: {
-    cautionDeposit: {
-      type: Number,
-      default: 0,
-      min: 0
+    type: Map,
+    of: {
+      amount: { type: Number, default: 0, min: 0 },
+      description: { type: String, default: '' },
+      isActive: { type: Boolean, default: true },
+      categories: { 
+        type: [String], 
+        default: ['A+', 'A', 'B+', 'B'], // Default to all categories
+        enum: ['A+', 'A', 'B+', 'B']
+      }
     },
-    // Add more additional fees here as needed
-    // maintenanceFee: { type: Number, default: 0, min: 0 },
-    // securityDeposit: { type: Number, default: 0, min: 0 }
+    default: new Map()
   }
 }, {
   timestamps: true
@@ -159,41 +164,126 @@ feeStructureSchema.statics.getFeeStructuresByCourse = async function(academicYea
   }).populate('course', 'name duration').sort({ year: 1, category: 1 });
 };
 
-// Static method to get additional fees for an academic year (common for all students)
-feeStructureSchema.statics.getAdditionalFees = async function(academicYear) {
+// Static method to get additional fees for an academic year
+// If category is provided, only returns fees that apply to that category
+feeStructureSchema.statics.getAdditionalFees = async function(academicYear, category = null) {
   const feeStructure = await this.findOne({ 
     academicYear, 
     isActive: true 
   }).select('additionalFees');
   
-  return feeStructure?.additionalFees || {
-    cautionDeposit: 0
-  };
+  if (!feeStructure || !feeStructure.additionalFees || feeStructure.additionalFees.size === 0) {
+    return {};
+  }
+  
+  // Convert Map to plain object for JSON response
+  const additionalFeesObj = {};
+  feeStructure.additionalFees.forEach((value, key) => {
+    // If category is specified, only include fees that apply to that category
+    if (category) {
+      const feeCategories = value.categories || ['A+', 'A', 'B+', 'B'];
+      if (!feeCategories.includes(category)) {
+        return; // Skip this fee if it doesn't apply to the specified category
+      }
+    }
+    
+    additionalFeesObj[key] = {
+      amount: value.amount || 0,
+      description: value.description || '',
+      isActive: value.isActive !== undefined ? value.isActive : true,
+      categories: value.categories || ['A+', 'A', 'B+', 'B'] // Default to all categories
+    };
+  });
+  
+  return additionalFeesObj;
 };
 
 // Static method to set additional fees for an academic year
 feeStructureSchema.statics.setAdditionalFees = async function(academicYear, additionalFees, adminId) {
-  // Find any fee structure for this academic year to update additional fees
-  const feeStructure = await this.findOne({ academicYear, isActive: true });
+  // Valid categories enum
+  const validCategories = ['A+', 'A', 'B+', 'B'];
+  
+  // Find any fee structure for this academic year with a valid category to update additional fees
+  // Filter out fee structures with invalid categories (like 'C')
+  const feeStructure = await this.findOne({ 
+    academicYear, 
+    isActive: true,
+    category: { $in: validCategories } // Only find fee structures with valid categories
+  });
   
   if (feeStructure) {
-    // Update additional fees on this structure
-    feeStructure.additionalFees = additionalFees;
-    feeStructure.updatedBy = adminId;
-    await feeStructure.save();
+    // Convert plain object to Map
+    const additionalFeesMap = new Map();
+    Object.keys(additionalFees).forEach(key => {
+      const feeData = additionalFees[key];
+      if (typeof feeData === 'object' && feeData !== null) {
+        additionalFeesMap.set(key, {
+          amount: feeData.amount || 0,
+          description: feeData.description || '',
+          isActive: feeData.isActive !== undefined ? feeData.isActive : true,
+          categories: Array.isArray(feeData.categories) && feeData.categories.length > 0 
+            ? feeData.categories 
+            : ['A+', 'A', 'B+', 'B'] // Default to all categories if not specified
+        });
+      } else {
+        // Backward compatibility: if it's just a number, convert to object
+        additionalFeesMap.set(key, {
+          amount: feeData || 0,
+          description: '',
+          isActive: true,
+          categories: ['A+', 'A', 'B+', 'B'] // Default to all categories
+        });
+      }
+    });
     
-    // Update all other fee structures for this academic year to have the same additional fees
-    await this.updateMany(
-      { academicYear, isActive: true, _id: { $ne: feeStructure._id } },
+    // Convert Map to plain object for MongoDB update (to avoid validation issues)
+    const additionalFeesObject = {};
+    additionalFeesMap.forEach((value, key) => {
+      additionalFeesObject[key] = value;
+    });
+    
+    // Update additional fees on this structure using direct MongoDB update to bypass validation
+    // This avoids validation errors if the fee structure has invalid category
+    await this.updateOne(
+      { _id: feeStructure._id },
       { 
         $set: { 
-          additionalFees: additionalFees,
+          additionalFees: additionalFeesObject,
           updatedBy: adminId
         } 
       }
     );
     
-    return feeStructure;
+    // Update all other fee structures for this academic year with valid categories
+    // Only update fee structures with valid categories to avoid validation errors
+    const otherFeeStructures = await this.find({ 
+      academicYear, 
+      isActive: true, 
+      category: { $in: validCategories }, // Only update fee structures with valid categories
+      _id: { $ne: feeStructure._id } 
+    });
+    
+    // Update each fee structure using direct MongoDB update to bypass validation
+    if (otherFeeStructures.length > 0) {
+      await this.updateMany(
+        { 
+          academicYear, 
+          isActive: true, 
+          category: { $in: validCategories },
+          _id: { $ne: feeStructure._id } 
+        },
+        { 
+          $set: { 
+            additionalFees: additionalFeesObject,
+            updatedBy: adminId
+          } 
+        }
+      );
+    }
+    
+    // Return the updated fee structure
+    const updatedFeeStructure = await this.findById(feeStructure._id);
+    return updatedFeeStructure;
   } else {
     // If no fee structure exists, create a dummy one just for additional fees
     // This shouldn't happen in normal flow, but handle it gracefully

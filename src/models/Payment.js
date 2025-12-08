@@ -55,7 +55,7 @@ const paymentSchema = new mongoose.Schema({
   // Payment type to distinguish between electricity, hostel fees, and additional fees
   paymentType: {
     type: String,
-    enum: ['electricity', 'hostel_fee', 'caution_deposit', 'additional_fee'],
+    enum: ['electricity', 'hostel_fee', 'additional_fee'],
     required: true,
     index: true
   },
@@ -110,14 +110,15 @@ const paymentSchema = new mongoose.Schema({
   },
   academicYear: {
     type: String,
-    required: function() { return this.paymentType === 'hostel_fee' || this.paymentType === 'caution_deposit' || this.paymentType === 'additional_fee'; },
+    required: function() { return this.paymentType === 'hostel_fee' || this.paymentType === 'additional_fee'; },
     match: [/^\d{4}-\d{4}$/, 'Academic year must be in YYYY-YYYY format']
   },
-  // Field for additional fee type (e.g., 'caution_deposit', 'maintenance_fee', etc.)
+  // Field for additional fee type (e.g., 'caution_deposit', 'diesel_bill', 'maintenance_fee', etc.)
+  // No enum restriction - allows any string value for dynamic additional fees
   additionalFeeType: {
     type: String,
-    required: function() { return this.paymentType === 'caution_deposit' || this.paymentType === 'additional_fee'; },
-    enum: ['caution_deposit'] // Add more types as needed
+    required: function() { return this.paymentType === 'additional_fee'; },
+    trim: true
   },
   receiptNumber: {
     type: String,

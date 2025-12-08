@@ -1540,7 +1540,7 @@ export const recordAdditionalFeePayment = async (req, res) => {
       notes,
       academicYear,
       utrNumber,
-      additionalFeeType = 'caution_deposit'
+      additionalFeeType
     } = req.body;
     
     const adminId = req.user._id;
@@ -1608,7 +1608,7 @@ export const recordAdditionalFeePayment = async (req, res) => {
     const recentPayment = await Payment.findOne({
       studentId: studentId,
       academicYear: academicYear,
-      paymentType: additionalFeeType === 'caution_deposit' ? 'caution_deposit' : 'additional_fee',
+      paymentType: 'additional_fee',
       additionalFeeType: additionalFeeType,
       status: 'success',
       createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) } // Last 5 minutes
@@ -1623,14 +1623,22 @@ export const recordAdditionalFeePayment = async (req, res) => {
 
     // Get additional fees for this academic year to validate amount
     const FeeStructure = (await import('../models/FeeStructure.js')).default;
-    const additionalFees = await FeeStructure.getAdditionalFees(academicYear);
+    const additionalFees = await FeeStructure.getAdditionalFees(academicYear, student.category);
     
-    // Validate that the fee type exists and amount doesn't exceed configured amount
-    const feeAmount = additionalFees[additionalFeeType] || 0;
-    if (feeAmount > 0 && amount > feeAmount) {
+    // Validate that the fee type exists and is active
+    const feeData = additionalFees[additionalFeeType];
+    if (!feeData || !feeData.isActive) {
       return res.status(400).json({
         success: false,
-        message: `Payment amount (₹${amount}) exceeds configured ${additionalFeeType} amount (₹${feeAmount})`
+        message: `Additional fee type '${additionalFeeType}' is not configured or is inactive for this student's category`
+      });
+    }
+    
+    // Validate that the amount doesn't exceed configured amount (if configured amount > 0)
+    if (feeData.amount > 0 && amount > feeData.amount) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment amount (₹${amount}) exceeds configured ${additionalFeeType} amount (₹${feeData.amount})`
       });
     }
 
@@ -1646,7 +1654,7 @@ export const recordAdditionalFeePayment = async (req, res) => {
       notes: notes || `Payment for ${additionalFeeType}`,
       collectedBy: adminId,
       collectedByName: adminName,
-      paymentType: additionalFeeType === 'caution_deposit' ? 'caution_deposit' : 'additional_fee',
+      paymentType: 'additional_fee',
       additionalFeeType: additionalFeeType,
       academicYear: academicYear,
       receiptNumber: receiptNumber,
