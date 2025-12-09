@@ -1,6 +1,7 @@
 import NOC from '../models/NOC.js';
 import User from '../models/User.js';
 import Admin from '../models/Admin.js';
+import Room from '../models/Room.js';
 import NOCChecklistConfig from '../models/NOCChecklistConfig.js';
 import { createError } from '../utils/error.js';
 import Notification from '../models/Notification.js';
@@ -525,7 +526,7 @@ export const getAllNOCRequests = async (req, res, next) => {
   }
 };
 
-// Super Admin: Approve NOC request
+// Super Admin: Approve NOC request (now sets status to "Admin Approved - Pending Meter Reading")
 export const approveNOCRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -541,20 +542,28 @@ export const approveNOCRequest = async (req, res, next) => {
       return next(createError(400, 'Only warden verified NOC requests can be approved'));
     }
 
-    // Update status to Approved with optional admin remarks
-    await nocRequest.updateStatus('Approved', superAdminId, adminRemarks || '');
+    // Update status to "Admin Approved - Pending Meter Reading" (not final approval yet)
+    await nocRequest.updateStatus('Admin Approved - Pending Meter Reading', superAdminId, adminRemarks || '');
 
-    // Deactivate student and vacate room allocation
-    console.log(`🏠 Deactivating student ${nocRequest.studentName} (${nocRequest.rollNumber}) and vacating room allocation...`);
-    await nocRequest.deactivateStudent();
-    console.log(`✅ Student deactivated and room vacated successfully`);
+    // Create notification for warden to enter meter readings
+    const warden = await Admin.findOne({ role: 'warden', hostelType: nocRequest.student?.gender === 'Male' ? 'boys' : 'girls' });
+    if (warden) {
+      await Notification.create({
+        recipient: warden._id,
+        recipientModel: 'Admin',
+        title: 'Meter Reading Required for NOC',
+        message: `NOC request for ${nocRequest.studentName} (${nocRequest.rollNumber}) has been approved. Please enter meter readings.`,
+        type: 'system',
+        priority: 'high'
+      });
+    }
 
     // Create notification for student
     await Notification.create({
       recipient: nocRequest.student,
       recipientModel: 'User',
-      title: 'NOC Request Approved',
-      message: 'Your NOC request has been approved. Your account has been deactivated.',
+      title: 'NOC Request Approved - Pending Meter Reading',
+      message: 'Your NOC request has been approved by admin. Warden will enter meter readings and finalize the process.',
       type: 'system',
       priority: 'high'
     });
@@ -568,7 +577,7 @@ export const approveNOCRequest = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'NOC request approved and student deactivated successfully',
+      message: 'NOC request approved. Warden needs to enter meter readings.',
       data: updatedNOC
     });
   } catch (error) {
@@ -678,6 +687,227 @@ export const rejectNOCRequest = async (req, res, next) => {
     res.json({
       success: true,
       message: 'NOC request rejected successfully',
+      data: updatedNOC
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Warden: Enter meter readings and calculate electricity bill
+export const enterMeterReadings = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { 
+      meterType, 
+      startUnits, 
+      endUnits, 
+      meter1StartUnits, 
+      meter1EndUnits, 
+      meter2StartUnits, 
+      meter2EndUnits,
+      rate 
+    } = req.body;
+    const wardenId = req.user.id;
+
+    const nocRequest = await NOC.findById(id)
+      .populate('student', 'name rollNumber course branch year academicYear roomNumber');
+    
+    if (!nocRequest) {
+      return next(createError(404, 'NOC request not found'));
+    }
+
+    if (nocRequest.status !== 'Admin Approved - Pending Meter Reading') {
+      return next(createError(400, 'Meter readings can only be entered for admin-approved NOC requests'));
+    }
+
+    // Get student's room
+    const student = await User.findById(nocRequest.student._id || nocRequest.student);
+    if (!student || !student.roomNumber) {
+      return next(createError(400, 'Student does not have a room assigned'));
+    }
+
+    const room = await Room.findOne({ roomNumber: student.roomNumber, gender: student.gender });
+    if (!room) {
+      return next(createError(404, 'Room not found'));
+    }
+
+    // Validate meter readings based on meter type
+    if (meterType === 'dual') {
+      if (!meter1StartUnits || !meter1EndUnits || !meter2StartUnits || !meter2EndUnits) {
+        return next(createError(400, 'All dual meter readings are required'));
+      }
+      if (meter1EndUnits < meter1StartUnits || meter2EndUnits < meter2StartUnits) {
+        return next(createError(400, 'End units must be greater than or equal to start units'));
+      }
+    } else {
+      if (!startUnits || !endUnits) {
+        return next(createError(400, 'Start and end units are required'));
+      }
+      if (endUnits < startUnits) {
+        return next(createError(400, 'End units must be greater than or equal to start units'));
+      }
+    }
+
+    // Get default rate if not provided
+    let electricityRate = rate;
+    if (!electricityRate) {
+      try {
+        const defaultRateResponse = await Room.findOne().select('defaultElectricityRate');
+        electricityRate = defaultRateResponse?.defaultElectricityRate || 5; // Default to 5 if not set
+      } catch (err) {
+        electricityRate = 5; // Fallback default
+      }
+    }
+
+    // Calculate consumption
+    let consumption = 0;
+    if (meterType === 'dual') {
+      const meter1Consumption = meter1EndUnits - meter1StartUnits;
+      const meter2Consumption = meter2EndUnits - meter2StartUnits;
+      consumption = meter1Consumption + meter2Consumption;
+    } else {
+      consumption = endUnits - startUnits;
+    }
+
+    // Get last bill to determine bill period start
+    let billPeriodStart = new Date();
+    if (room.electricityBills && room.electricityBills.length > 0) {
+      const sortedBills = [...room.electricityBills].sort((a, b) => b.month.localeCompare(a.month));
+      const lastBill = sortedBills[0];
+      // Bill period starts from the month after last bill
+      const lastBillDate = new Date(lastBill.month + '-01');
+      lastBillDate.setMonth(lastBillDate.getMonth() + 1);
+      billPeriodStart = lastBillDate;
+    } else {
+      // If no previous bill, start from beginning of current month
+      billPeriodStart = new Date();
+      billPeriodStart.setDate(1);
+      billPeriodStart.setHours(0, 0, 0, 0);
+    }
+
+    // Bill period ends at vacating date
+    const billPeriodEnd = new Date(nocRequest.vacatingDate);
+    billPeriodEnd.setHours(23, 59, 59, 999);
+
+    // Calculate number of days in the period
+    const daysInPeriod = Math.ceil((billPeriodEnd - billPeriodStart) / (1000 * 60 * 60 * 24));
+    const daysInMonth = new Date(billPeriodEnd.getFullYear(), billPeriodEnd.getMonth() + 1, 0).getDate();
+    
+    // Calculate proportional consumption (only for the days until vacating date)
+    // Assuming consumption is for full month, calculate proportional amount
+    const proportionalConsumption = Math.round((consumption * daysInPeriod) / daysInMonth);
+    const total = proportionalConsumption * electricityRate;
+
+    // Update NOC with meter readings and calculated bill
+    nocRequest.meterReadings = {
+      meterType,
+      startUnits: meterType === 'single' ? startUnits : null,
+      endUnits: meterType === 'single' ? endUnits : null,
+      meter1StartUnits: meterType === 'dual' ? meter1StartUnits : null,
+      meter1EndUnits: meterType === 'dual' ? meter1EndUnits : null,
+      meter2StartUnits: meterType === 'dual' ? meter2StartUnits : null,
+      meter2EndUnits: meterType === 'dual' ? meter2EndUnits : null,
+      readingDate: new Date(),
+      enteredBy: wardenId,
+      enteredAt: new Date()
+    };
+
+    nocRequest.calculatedElectricityBill = {
+      consumption: proportionalConsumption,
+      rate: electricityRate,
+      total: total,
+      calculatedAt: new Date(),
+      billPeriodStart: billPeriodStart,
+      billPeriodEnd: billPeriodEnd
+    };
+
+    // Update status to "Ready for Deactivation"
+    await nocRequest.updateStatus('Ready for Deactivation', wardenId, '');
+
+    await nocRequest.save();
+
+    // Create notification for admin
+    await Notification.create({
+      recipient: nocRequest.approvedBy,
+      recipientModel: 'Admin',
+      title: 'NOC Ready for Final Approval',
+      message: `Meter readings entered for ${nocRequest.studentName} (${nocRequest.rollNumber}). NOC is ready for final approval and student deactivation.`,
+      type: 'system',
+      priority: 'high'
+    });
+
+    // Create notification for student
+    await Notification.create({
+      recipient: nocRequest.student._id || nocRequest.student,
+      recipientModel: 'User',
+      title: 'Meter Readings Entered',
+      message: `Meter readings have been entered. Your electricity bill until vacating date has been calculated. Final approval pending.`,
+      type: 'system',
+      priority: 'high'
+    });
+
+    // Populate the updated NOC
+    const updatedNOC = await NOC.findById(id)
+      .populate('student', 'name rollNumber course branch year academicYear roomNumber')
+      .populate('course branch', 'name')
+      .populate('verifiedBy approvedBy rejectedBy sentForCorrectionBy enteredBy', 'username role')
+      .populate('checklistResponses.checklistItemId');
+
+    res.json({
+      success: true,
+      message: 'Meter readings entered and electricity bill calculated successfully',
+      data: updatedNOC
+    });
+  } catch (error) {
+    console.error('❌ Error entering meter readings:', error);
+    next(error);
+  }
+};
+
+// Super Admin: Final approve and deactivate student (after meter readings)
+export const finalApproveNOC = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const superAdminId = req.user.id;
+
+    const nocRequest = await NOC.findById(id);
+    if (!nocRequest) {
+      return next(createError(404, 'NOC request not found'));
+    }
+
+    if (nocRequest.status !== 'Ready for Deactivation') {
+      return next(createError(400, 'NOC must be ready for deactivation (meter readings entered) before final approval'));
+    }
+
+    // Update status to Approved
+    await nocRequest.updateStatus('Approved', superAdminId, '');
+
+    // Deactivate student and vacate room allocation
+    console.log(`🏠 Deactivating student ${nocRequest.studentName} (${nocRequest.rollNumber}) and vacating room allocation...`);
+    await nocRequest.deactivateStudent();
+    console.log(`✅ Student deactivated and room vacated successfully`);
+
+    // Create notification for student
+    await Notification.create({
+      recipient: nocRequest.student,
+      recipientModel: 'User',
+      title: 'NOC Request Finalized',
+      message: 'Your NOC request has been finalized. Your account has been deactivated.',
+      type: 'system',
+      priority: 'high'
+    });
+
+    // Populate the updated NOC
+    const updatedNOC = await NOC.findById(id)
+      .populate('student', 'name rollNumber course branch year academicYear')
+      .populate('course branch', 'name')
+      .populate('verifiedBy approvedBy rejectedBy sentForCorrectionBy', 'username role')
+      .populate('checklistResponses.checklistItemId');
+
+    res.json({
+      success: true,
+      message: 'NOC request finalized and student deactivated successfully',
       data: updatedNOC
     });
   } catch (error) {

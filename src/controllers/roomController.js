@@ -2,6 +2,7 @@ import Room from '../models/Room.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import StaffGuest from '../models/StaffGuest.js';
+import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
 
 // Get all rooms with optional filtering
@@ -717,6 +718,43 @@ export const getStudentRoomBills = async (req, res, next) => {
         // Old bill without studentBills - calculate equal share and check payment status
         studentShare = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : null;
         
+        // Adjust for NOC calculated bill if applicable
+        if (studentShare !== null) {
+          try {
+            // Check if student has a NOC with calculated electricity bill
+            const nocRequest = await NOC.findOne({
+              student: _id,
+              'calculatedElectricityBill.total': { $exists: true, $ne: null },
+              status: { $in: ['Ready for Deactivation', 'Approved'] }
+            }).sort({ 'calculatedElectricityBill.calculatedAt': -1 }); // Get the most recent one
+
+            if (nocRequest && nocRequest.calculatedElectricityBill) {
+              const billMonth = new Date(bill.month + '-01');
+              const billMonthEnd = new Date(billMonth.getFullYear(), billMonth.getMonth() + 1, 0);
+              
+              const nocBillStart = new Date(nocRequest.calculatedElectricityBill.billPeriodStart);
+              const nocBillEnd = new Date(nocRequest.calculatedElectricityBill.billPeriodEnd);
+              
+              // Check if the bill month overlaps with NOC bill period
+              if (billMonth <= nocBillEnd && billMonthEnd >= nocBillStart) {
+                // Calculate the overlap amount
+                // If the bill month is within or overlaps with NOC period, subtract the NOC amount
+                const nocAmount = nocRequest.calculatedElectricityBill.total || 0;
+                
+                // Only subtract if the student hasn't already been adjusted for this NOC
+                // Check if this bill month is before or equal to the NOC vacating date month
+                if (billMonth <= nocBillEnd) {
+                  studentShare = Math.max(0, studentShare - nocAmount);
+                  console.log(`📊 Adjusted student bill for ${_id}: Subtracted NOC amount ₹${nocAmount} from share ₹${studentShare + nocAmount}, new share: ₹${studentShare}`);
+                }
+              }
+            }
+          } catch (nocError) {
+            console.error('Error checking NOC bill adjustment:', nocError);
+            // Continue with original calculation if NOC check fails
+          }
+        }
+        
         // Check if student has paid for this bill by looking at Payment records
         const payment = await Payment.findOne({
           studentId: _id,
@@ -758,6 +796,37 @@ export const getStudentRoomBills = async (req, res, next) => {
         }
       }
       
+      // Check for NOC adjustment even if studentBill exists (in case bill was recalculated)
+      let adjustedShare = studentShare;
+      if (studentShare !== null) {
+        try {
+          const nocRequest = await NOC.findOne({
+            student: _id,
+            'calculatedElectricityBill.total': { $exists: true, $ne: null },
+            status: { $in: ['Ready for Deactivation', 'Approved'] }
+          }).sort({ 'calculatedElectricityBill.calculatedAt': -1 });
+
+          if (nocRequest && nocRequest.calculatedElectricityBill) {
+            const billMonth = new Date(bill.month + '-01');
+            const billMonthEnd = new Date(billMonth.getFullYear(), billMonth.getMonth() + 1, 0);
+            const nocBillStart = new Date(nocRequest.calculatedElectricityBill.billPeriodStart);
+            const nocBillEnd = new Date(nocRequest.calculatedElectricityBill.billPeriodEnd);
+            
+            if (billMonth <= nocBillEnd && billMonthEnd >= nocBillStart) {
+              const nocAmount = nocRequest.calculatedElectricityBill.total || 0;
+              if (billMonth <= nocBillEnd) {
+                adjustedShare = Math.max(0, studentShare - nocAmount);
+                if (adjustedShare !== studentShare) {
+                  console.log(`📊 Adjusted student bill for ${_id} in bill ${bill.month}: Subtracted NOC amount ₹${nocAmount}`);
+                }
+              }
+            }
+          }
+        } catch (nocError) {
+          console.error('Error checking NOC bill adjustment:', nocError);
+        }
+      }
+      
       return {
         _id: bill._id,
         month: bill.month,
@@ -766,10 +835,11 @@ export const getStudentRoomBills = async (req, res, next) => {
         consumption: bill.consumption,
         rate: bill.rate,
         total: bill.total,
-        studentShare: studentShare,
+        studentShare: adjustedShare,
         paymentStatus: paymentStatus,
         paymentId: paymentId,
-        paidAt: paidAt
+        paidAt: paidAt,
+        nocAdjustment: adjustedShare !== studentShare ? (studentShare - adjustedShare) : null
       };
     }));
 

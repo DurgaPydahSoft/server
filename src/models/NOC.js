@@ -44,6 +44,10 @@ const nocSchema = new mongoose.Schema({
     maxLength: [500, 'Reason cannot exceed 500 characters'],
     minLength: [10, 'Reason must be at least 10 characters long']
   },
+  vacatingDate: {
+    type: Date,
+    required: true
+  },
   applicationDate: {
     type: Date,
     default: Date.now,
@@ -60,10 +64,10 @@ const nocSchema = new mongoose.Schema({
     ref: 'Admin',
     default: null
   },
-  // Status flow: Pending → Warden Verified → Sent for Correction → Approved
+  // Status flow: Pending → Warden Verified → Admin Approved - Pending Meter Reading → Ready for Deactivation → Approved
   status: {
     type: String,
-    enum: ['Pending', 'Warden Verified', 'Sent for Correction', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Warden Verified', 'Sent for Correction', 'Admin Approved - Pending Meter Reading', 'Ready for Deactivation', 'Approved', 'Rejected'],
     default: 'Pending',
     index: true
   },
@@ -123,10 +127,10 @@ const nocSchema = new mongoose.Schema({
       ref: 'NOCChecklistConfig',
       required: true
     },
-    checkedOut: {
+    amount: {
       type: String,
       trim: true,
-      maxLength: [100, 'Checked out value cannot exceed 100 characters']
+      maxLength: [100, 'Amount value cannot exceed 100 characters']
     },
     remarks: {
       type: String,
@@ -158,6 +162,91 @@ const nocSchema = new mongoose.Schema({
   resubmittedAt: {
     type: Date,
     default: null
+  },
+  // Electricity meter readings (entered by warden after admin approval)
+  meterReadings: {
+    meterType: {
+      type: String,
+      enum: ['single', 'dual'],
+      default: null
+    },
+    // Single meter readings
+    startUnits: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    endUnits: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    // Dual meter readings
+    meter1StartUnits: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    meter1EndUnits: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    meter2StartUnits: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    meter2EndUnits: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    // Reading date
+    readingDate: {
+      type: Date,
+      default: null
+    },
+    enteredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      default: null
+    },
+    enteredAt: {
+      type: Date,
+      default: null
+    }
+  },
+  // Calculated electricity bill until vacating date
+  calculatedElectricityBill: {
+    consumption: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    rate: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    total: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    calculatedAt: {
+      type: Date,
+      default: null
+    },
+    // Bill period (from last bill to vacating date)
+    billPeriodStart: {
+      type: Date,
+      default: null
+    },
+    billPeriodEnd: {
+      type: Date,
+      default: null
+    }
   }
 }, {
   timestamps: true,
@@ -207,8 +296,10 @@ nocSchema.statics.findByStudent = function(studentId) {
 nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = '') {
   const validTransitions = {
     'Pending': ['Warden Verified', 'Rejected'],
-    'Warden Verified': ['Sent for Correction', 'Approved', 'Rejected'],
+    'Warden Verified': ['Sent for Correction', 'Admin Approved - Pending Meter Reading', 'Rejected'],
     'Sent for Correction': ['Warden Verified', 'Rejected'], // Can be resubmitted or rejected
+    'Admin Approved - Pending Meter Reading': ['Ready for Deactivation', 'Rejected'],
+    'Ready for Deactivation': ['Approved'], // After meter readings entered
     'Approved': [], // Final state
     'Rejected': [] // Final state
   };
@@ -233,12 +324,16 @@ nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = 
     this.sentForCorrectionBy = updatedBy;
     this.sentForCorrectionAt = new Date();
     this.adminRemarks = remarks;
-  } else if (newStatus === 'Approved') {
+  } else if (newStatus === 'Admin Approved - Pending Meter Reading') {
     this.approvedBy = updatedBy;
     this.approvedAt = new Date();
     if (remarks) {
       this.adminRemarks = remarks;
     }
+  } else if (newStatus === 'Ready for Deactivation') {
+    // Status set when meter readings are entered
+  } else if (newStatus === 'Approved') {
+    // Final approval after meter readings and bill calculation
   } else if (newStatus === 'Rejected') {
     this.rejectedBy = updatedBy;
     this.rejectedAt = new Date();
@@ -250,8 +345,8 @@ nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = 
 
 // Instance method to deactivate student
 nocSchema.methods.deactivateStudent = async function() {
-  if (this.status !== 'Approved') {
-    throw new Error('Student can only be deactivated for approved NOC requests');
+  if (this.status !== 'Ready for Deactivation' && this.status !== 'Approved') {
+    throw new Error('Student can only be deactivated when NOC is ready for deactivation or approved');
   }
 
   this.studentDeactivated = true;

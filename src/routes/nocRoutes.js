@@ -10,8 +10,10 @@ import {
   getWardenChecklistItems,
   wardenVerifyNOC,
   wardenRejectNOC,
+  enterMeterReadings,
   getAllNOCRequests,
   approveNOCRequest,
+  finalApproveNOC,
   sendForCorrection,
   rejectNOCRequest,
   getNOCStats
@@ -57,10 +59,12 @@ router.get('/warden/all', wardenAuth, getWardenNOCRequests);
 router.get('/warden/checklist', wardenAuth, getWardenChecklistItems);  // Get active checklist items
 router.post('/warden/:id/verify', wardenAuth, wardenVerifyNOC);
 router.post('/warden/:id/reject', wardenAuth, wardenRejectNOC);
+router.post('/warden/:id/meter-readings', wardenAuth, enterMeterReadings);  // Enter meter readings after admin approval
 
 // Admin routes (requires noc_management permission)
 router.get('/admin/all', nocManagementAuth, getAllNOCRequests);
-router.post('/admin/:id/approve', nocManagementAuth, approveNOCRequest);
+router.post('/admin/:id/approve', nocManagementAuth, approveNOCRequest);  // First approval - sets status to "Admin Approved - Pending Meter Reading"
+router.post('/admin/:id/final-approve', nocManagementAuth, finalApproveNOC);  // Final approval after meter readings - deactivates student
 router.post('/admin/:id/send-for-correction', nocManagementAuth, sendForCorrection);
 router.post('/admin/:id/reject', nocManagementAuth, rejectNOCRequest);
 router.get('/admin/stats', nocManagementAuth, getNOCStats);
