@@ -140,14 +140,9 @@ const userSchema = new mongoose.Schema({
   roomNumber: {
     type: String,
     required: function() { return this.role === 'student'; },
-    validate: {
-      validator: function(v) {
-        if (this.role !== 'student') return true;
-        const validRooms = ROOM_MAPPINGS[this.gender]?.[this.category] || [];
-        return validRooms.includes(v);
-      },
-      message: props => `${props.value} is not a valid room number for the selected gender and category!`
-    }
+    // Note: Room validation is handled in the controller to check against actual Room model
+    // Schema-level validation removed to allow dynamic room management
+    // The controller validates room existence and gender/category matching
   },
   bedNumber: {
     type: String,

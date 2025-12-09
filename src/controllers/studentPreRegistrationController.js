@@ -197,28 +197,7 @@ export const approvePreRegistration = async (req, res, next) => {
       throw createError(400, 'Student with this roll number already exists');
     }
 
-    // Validate room number based on gender and category
-    const ROOM_MAPPINGS = {
-      Male: {
-        'A+': ['302', '309', '310', '311', '312'],
-        'A': ['303', '304', '305', '306', '308', '320', '324', '325'],
-        'B+': ['321'],
-        'B': ['314', '315', '316', '317', '322', '323']
-      },
-      Female: {
-        'A+': ['209', '211', '212', '213', '214', '215'],
-        'A': ['103', '115', '201', '202', '203', '204', '205', '206', '207', '208', '216', '217'],
-        'B': ['101', '102', '104', '105', '106', '108', '109', '111', '112', '114'],
-        'C': ['117']
-      }
-    };
-
-    const validRooms = ROOM_MAPPINGS[preRegistration.gender]?.[category] || [];
-    if (!validRooms.includes(roomNumber)) {
-      throw createError(400, 'Invalid room number for the selected gender and category');
-    }
-
-    // Check bed count limit
+    // Validate room number based on gender and category - check against actual Room model
     const RoomModel = (await import('../models/Room.js')).default;
     const roomDoc = await RoomModel.findOne({ 
       roomNumber, 
@@ -226,7 +205,7 @@ export const approvePreRegistration = async (req, res, next) => {
       category 
     });
     if (!roomDoc) {
-      throw createError(400, 'Room not found');
+      throw createError(400, 'Invalid room number for the selected gender and category');
     }
     
     const studentCount = await User.countDocuments({ 

@@ -100,18 +100,13 @@ export const addStudent = async (req, res, next) => {
       throw createError(400, 'Student with this roll number already exists');
     }
 
-    // Validate room number based on gender and category
-    const validRooms = ROOM_MAPPINGS[gender]?.[category] || [];
-    if (!validRooms.includes(roomNumber)) {
+    // Validate room number based on gender and category - check against actual Room model
+    const roomDoc = await Room.findOne({ roomNumber, gender, category });
+    if (!roomDoc) {
       throw createError(400, 'Invalid room number for the selected gender and category');
     }
 
     // Check bed count limit
-    const RoomModel = (await import('../models/Room.js')).default;
-    const roomDoc = await RoomModel.findOne({ roomNumber, gender, category });
-    if (!roomDoc) {
-      throw createError(400, 'Room not found');
-    }
     const studentCount = await User.countDocuments({ roomNumber, gender, category, role: 'student' });
     if (studentCount >= roomDoc.bedCount) {
       throw createError(400, 'Room is full. Cannot register more students.');
@@ -1370,10 +1365,19 @@ export const updateStudent = async (req, res, next) => {
       }
     }
 
-    // Validate room number based on gender and category
+    // Validate room number based on gender and category - check against actual Room model
     if (roomNumber) {
-      const validRooms = ROOM_MAPPINGS[gender || student.gender]?.[category || student.category] || [];
-      if (!validRooms.includes(roomNumber)) {
+      const roomGender = gender || student.gender;
+      const roomCategory = category || student.category;
+      
+      // Check if room exists in database with matching gender and category
+      const roomDoc = await Room.findOne({ 
+        roomNumber, 
+        gender: roomGender, 
+        category: roomCategory 
+      });
+      
+      if (!roomDoc) {
         throw createError(400, 'Invalid room number for the selected gender and category.');
       }
     }
