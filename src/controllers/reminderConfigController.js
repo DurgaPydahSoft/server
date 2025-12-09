@@ -32,17 +32,23 @@ const getReminderConfig = async (req, res) => {
         postReminders: {
           email: {
             enabled: true,
+            frequencyType: 'daily',
             maxDaysAfterDue: 30,
+            daysAfterDue: [],
             template: 'post_reminder_email'
           },
           push: {
             enabled: true,
+            frequencyType: 'daily',
             maxDaysAfterDue: 30,
+            daysAfterDue: [],
             template: 'post_reminder_push'
           },
           sms: {
             enabled: true,
+            frequencyType: 'daily',
             maxDaysAfterDue: 30,
+            daysAfterDue: [],
             template: 'post_reminder_sms'
           }
         },
@@ -139,17 +145,29 @@ const updateReminderConfig = async (req, res) => {
       config.postReminders = {
         email: {
           enabled: Boolean(postReminders.email?.enabled),
+          frequencyType: postReminders.email?.frequencyType || 
+            (postReminders.email?.daysAfterDue && Array.isArray(postReminders.email.daysAfterDue) && postReminders.email.daysAfterDue.length > 0
+              ? 'custom' : 'daily'),
           maxDaysAfterDue: getMaxDaysAfterDue(postReminders.email),
+          daysAfterDue: Array.isArray(postReminders.email?.daysAfterDue) ? postReminders.email.daysAfterDue : [],
           template: postReminders.email?.template || 'post_reminder_email'
         },
         push: {
           enabled: Boolean(postReminders.push?.enabled),
+          frequencyType: postReminders.push?.frequencyType || 
+            (postReminders.push?.daysAfterDue && Array.isArray(postReminders.push.daysAfterDue) && postReminders.push.daysAfterDue.length > 0
+              ? 'custom' : 'daily'),
           maxDaysAfterDue: getMaxDaysAfterDue(postReminders.push),
+          daysAfterDue: Array.isArray(postReminders.push?.daysAfterDue) ? postReminders.push.daysAfterDue : [],
           template: postReminders.push?.template || 'post_reminder_push'
         },
         sms: {
           enabled: Boolean(postReminders.sms?.enabled),
+          frequencyType: postReminders.sms?.frequencyType || 
+            (postReminders.sms?.daysAfterDue && Array.isArray(postReminders.sms.daysAfterDue) && postReminders.sms.daysAfterDue.length > 0
+              ? 'custom' : 'daily'),
           maxDaysAfterDue: getMaxDaysAfterDue(postReminders.sms),
+          daysAfterDue: Array.isArray(postReminders.sms?.daysAfterDue) ? postReminders.sms.daysAfterDue : [],
           template: postReminders.sms?.template || 'post_reminder_sms'
         }
       };
@@ -189,17 +207,29 @@ const updateReminderConfig = async (req, res) => {
         postReminders: {
           email: {
             enabled: Boolean(postReminders.email?.enabled),
+            frequencyType: postReminders.email?.frequencyType || 
+              (postReminders.email?.daysAfterDue && Array.isArray(postReminders.email.daysAfterDue) && postReminders.email.daysAfterDue.length > 0
+                ? 'custom' : 'daily'),
             maxDaysAfterDue: getMaxDaysAfterDue(postReminders.email),
+            daysAfterDue: Array.isArray(postReminders.email?.daysAfterDue) ? postReminders.email.daysAfterDue : [],
             template: postReminders.email?.template || 'post_reminder_email'
           },
           push: {
             enabled: Boolean(postReminders.push?.enabled),
+            frequencyType: postReminders.push?.frequencyType || 
+              (postReminders.push?.daysAfterDue && Array.isArray(postReminders.push.daysAfterDue) && postReminders.push.daysAfterDue.length > 0
+                ? 'custom' : 'daily'),
             maxDaysAfterDue: getMaxDaysAfterDue(postReminders.push),
+            daysAfterDue: Array.isArray(postReminders.push?.daysAfterDue) ? postReminders.push.daysAfterDue : [],
             template: postReminders.push?.template || 'post_reminder_push'
           },
           sms: {
             enabled: Boolean(postReminders.sms?.enabled),
+            frequencyType: postReminders.sms?.frequencyType || 
+              (postReminders.sms?.daysAfterDue && Array.isArray(postReminders.sms.daysAfterDue) && postReminders.sms.daysAfterDue.length > 0
+                ? 'custom' : 'daily'),
             maxDaysAfterDue: getMaxDaysAfterDue(postReminders.sms),
+            daysAfterDue: Array.isArray(postReminders.sms?.daysAfterDue) ? postReminders.sms.daysAfterDue : [],
             template: postReminders.sms?.template || 'post_reminder_sms'
           }
         },
@@ -336,17 +366,23 @@ const resetReminderConfig = async (req, res) => {
       postReminders: {
         email: {
           enabled: true,
+          frequencyType: 'daily',
           maxDaysAfterDue: 30,
+          daysAfterDue: [],
           template: 'post_reminder_email'
         },
         push: {
           enabled: true,
+          frequencyType: 'daily',
           maxDaysAfterDue: 30,
+          daysAfterDue: [],
           template: 'post_reminder_push'
         },
         sms: {
           enabled: true,
+          frequencyType: 'daily',
           maxDaysAfterDue: 30,
+          daysAfterDue: [],
           template: 'post_reminder_sms'
         }
       },

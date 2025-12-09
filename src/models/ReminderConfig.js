@@ -54,12 +54,22 @@ const reminderConfigSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
+      frequencyType: {
+        type: String,
+        enum: ['daily', 'alternate', 'custom'],
+        default: 'daily'
+      },
       maxDaysAfterDue: {
         type: Number,
         min: 1,
         max: 365,
         default: 30
       },
+      daysAfterDue: [{
+        type: Number,
+        min: 1,
+        max: 365
+      }],
       template: {
         type: String,
         default: 'post_reminder_email'
@@ -70,12 +80,22 @@ const reminderConfigSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
+      frequencyType: {
+        type: String,
+        enum: ['daily', 'alternate', 'custom'],
+        default: 'daily'
+      },
       maxDaysAfterDue: {
         type: Number,
         min: 1,
         max: 365,
         default: 30
       },
+      daysAfterDue: [{
+        type: Number,
+        min: 1,
+        max: 365
+      }],
       template: {
         type: String,
         default: 'post_reminder_push'
@@ -86,12 +106,22 @@ const reminderConfigSchema = new mongoose.Schema({
         type: Boolean,
         default: true
       },
+      frequencyType: {
+        type: String,
+        enum: ['daily', 'alternate', 'custom'],
+        default: 'daily'
+      },
       maxDaysAfterDue: {
         type: Number,
         min: 1,
         max: 365,
         default: 30
       },
+      daysAfterDue: [{
+        type: Number,
+        min: 1,
+        max: 365
+      }],
       template: {
         type: String,
         default: 'post_reminder_sms'
