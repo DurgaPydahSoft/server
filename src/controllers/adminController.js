@@ -6,6 +6,7 @@ import Room from '../models/Room.js';
 import SecuritySettings from '../models/SecuritySettings.js';
 import FeeReminder from '../models/FeeReminder.js';
 import StudentPreRegistration from '../models/StudentPreRegistration.js';
+import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
@@ -1929,17 +1930,121 @@ export const addElectricityBill = async (req, res, next) => {
       throw createError(400, 'No active students found in this room');
     }
 
-    // Calculate individual student amount (divide equally)
-    const individualAmount = Math.round(total / studentsInRoom.length);
+    // Check for approved NOCs that overlap with this billing period
+    // Parse the month to get the bill period
+    const billMonth = new Date(month + '-01');
+    const billMonthEnd = new Date(billMonth.getFullYear(), billMonth.getMonth() + 1, 0);
+    billMonthEnd.setHours(23, 59, 59, 999);
+
+    // Find all approved NOCs for students in this room that overlap with this billing period
+    const studentIds = studentsInRoom.map(s => s._id);
+    const approvedNOCs = await NOC.find({
+      student: { $in: studentIds },
+      status: 'Approved',
+      'calculatedElectricityBill.total': { $exists: true, $ne: null }
+    }).populate('student', 'name rollNumber');
+
+    // Calculate total NOC amount to subtract from the room bill
+    let totalNOCAmount = 0;
+    const nocStudents = new Set(); // Track which students have NOCs
+
+    for (const noc of approvedNOCs) {
+      if (noc.calculatedElectricityBill) {
+        const nocBillStart = new Date(noc.calculatedElectricityBill.billPeriodStart);
+        const nocBillEnd = new Date(noc.calculatedElectricityBill.billPeriodEnd);
+        
+        // Check if NOC bill period overlaps with this monthly bill period
+        if (billMonth <= nocBillEnd && billMonthEnd >= nocBillStart) {
+          // Use studentShare if available (new format), otherwise fall back to total
+          const nocAmount = noc.calculatedElectricityBill.studentShare || noc.calculatedElectricityBill.total || 0;
+          totalNOCAmount += nocAmount;
+          nocStudents.add(noc.student._id.toString());
+          console.log(`📊 NOC Adjustment: Student ${noc.student.name} (${noc.student.rollNumber}) has NOC share of ₹${nocAmount} for this billing period`);
+        }
+      }
+    }
+
+    // Calculate remaining bill amount after subtracting NOC amounts
+    const remainingBillAmount = Math.max(0, total - totalNOCAmount);
+    
+    // Filter out students who have NOCs (they've already been charged)
+    const studentsWithoutNOC = studentsInRoom.filter(
+      student => !nocStudents.has(student._id.toString())
+    );
+
+    if (studentsWithoutNOC.length === 0) {
+      // All students have NOCs, but we still need to create bills with 0 amount
+      const studentBills = studentsInRoom.map(student => {
+        // Find the NOC for this student to get the adjustment amount
+        let nocAdjustment = 0;
+        const studentNOC = approvedNOCs.find(noc => 
+          noc.student._id.toString() === student._id.toString() &&
+          billMonth <= new Date(noc.calculatedElectricityBill.billPeriodEnd) &&
+          billMonthEnd >= new Date(noc.calculatedElectricityBill.billPeriodStart)
+        );
+        if (studentNOC && studentNOC.calculatedElectricityBill) {
+          nocAdjustment = studentNOC.calculatedElectricityBill.studentShare || studentNOC.calculatedElectricityBill.total || 0;
+        }
+
+        return {
+          studentId: student._id,
+          studentName: student.name,
+          studentRollNumber: student.rollNumber,
+          amount: 0,
+          paymentStatus: 'unpaid',
+          nocAdjustment: nocAdjustment
+        };
+      });
+
+      room.electricityBills.push({
+        month,
+        startUnits,
+        endUnits,
+        consumption,
+        rate: billRate,
+        total,
+        totalNOCAdjustment: totalNOCAmount,
+        remainingAmount: remainingBillAmount,
+        studentBills
+      });
+
+      await room.save();
+      return res.json({
+        success: true,
+        data: room.electricityBills[room.electricityBills.length - 1],
+        message: `All students have NOC adjustments. Total NOC amount: ₹${totalNOCAmount}`
+      });
+    }
+
+    // Calculate individual student amount (divide remaining amount equally among students without NOC)
+    const individualAmount = Math.round(remainingBillAmount / studentsWithoutNOC.length);
 
     // Create student bills array
-    const studentBills = studentsInRoom.map(student => ({
-      studentId: student._id,
-      studentName: student.name,
-      studentRollNumber: student.rollNumber,
-      amount: individualAmount,
-      paymentStatus: 'unpaid'
-    }));
+    const studentBills = studentsInRoom.map(student => {
+      const hasNOC = nocStudents.has(student._id.toString());
+      
+      // Find the NOC for this student to get the adjustment amount
+      let nocAdjustment = 0;
+      if (hasNOC) {
+        const studentNOC = approvedNOCs.find(noc => 
+          noc.student._id.toString() === student._id.toString() &&
+          billMonth <= new Date(noc.calculatedElectricityBill.billPeriodEnd) &&
+          billMonthEnd >= new Date(noc.calculatedElectricityBill.billPeriodStart)
+        );
+        if (studentNOC && studentNOC.calculatedElectricityBill) {
+          nocAdjustment = studentNOC.calculatedElectricityBill.studentShare || studentNOC.calculatedElectricityBill.total || 0;
+        }
+      }
+
+      return {
+        studentId: student._id,
+        studentName: student.name,
+        studentRollNumber: student.rollNumber,
+        amount: hasNOC ? 0 : individualAmount, // Students with NOC pay 0 (already charged), others pay their share
+        paymentStatus: 'unpaid',
+        nocAdjustment: hasNOC ? nocAdjustment : 0
+      };
+    });
 
     // Add new bill with student breakdown
     room.electricityBills.push({
@@ -1949,8 +2054,17 @@ export const addElectricityBill = async (req, res, next) => {
       consumption,
       rate: billRate,
       total,
+      totalNOCAdjustment: totalNOCAmount, // Total amount already charged via NOC
+      remainingAmount: remainingBillAmount, // Amount to be shared among remaining students
       studentBills
     });
+
+    console.log(`📊 Bill Calculation Summary for ${month}:`);
+    console.log(`   Total Room Bill: ₹${total}`);
+    console.log(`   NOC Adjustments: ₹${totalNOCAmount} (${nocStudents.size} students)`);
+    console.log(`   Remaining Amount: ₹${remainingBillAmount}`);
+    console.log(`   Students without NOC: ${studentsWithoutNOC.length}`);
+    console.log(`   Amount per remaining student: ₹${individualAmount}`);
 
     await room.save();
 

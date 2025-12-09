@@ -771,14 +771,30 @@ export const enterMeterReadings = async (req, res, next) => {
     }
 
     // Get last bill to determine bill period start
+    // The startUnits should match the endUnits from the last bill (if exists)
     let billPeriodStart = new Date();
+    let lastBillEndUnits = null;
+    
     if (room.electricityBills && room.electricityBills.length > 0) {
       const sortedBills = [...room.electricityBills].sort((a, b) => b.month.localeCompare(a.month));
       const lastBill = sortedBills[0];
-      // Bill period starts from the month after last bill
+      
+      // Get the end units from last bill to verify startUnits match
+      if (meterType === 'dual') {
+        lastBillEndUnits = {
+          meter1: lastBill.meter1EndUnits || lastBill.endUnits,
+          meter2: lastBill.meter2EndUnits || 0
+        };
+      } else {
+        lastBillEndUnits = lastBill.endUnits;
+      }
+      
+      // Bill period starts from the 1st day of the month after last bill
       const lastBillDate = new Date(lastBill.month + '-01');
       lastBillDate.setMonth(lastBillDate.getMonth() + 1);
       billPeriodStart = lastBillDate;
+      billPeriodStart.setDate(1);
+      billPeriodStart.setHours(0, 0, 0, 0);
     } else {
       // If no previous bill, start from beginning of current month
       billPeriodStart = new Date();
@@ -790,14 +806,33 @@ export const enterMeterReadings = async (req, res, next) => {
     const billPeriodEnd = new Date(nocRequest.vacatingDate);
     billPeriodEnd.setHours(23, 59, 59, 999);
 
-    // Calculate number of days in the period
+    // Calculate number of days in the billing period (from billPeriodStart to vacatingDate)
     const daysInPeriod = Math.ceil((billPeriodEnd - billPeriodStart) / (1000 * 60 * 60 * 24));
-    const daysInMonth = new Date(billPeriodEnd.getFullYear(), billPeriodEnd.getMonth() + 1, 0).getDate();
     
-    // Calculate proportional consumption (only for the days until vacating date)
-    // Assuming consumption is for full month, calculate proportional amount
-    const proportionalConsumption = Math.round((consumption * daysInPeriod) / daysInMonth);
-    const total = proportionalConsumption * electricityRate;
+    // Count number of students in the room during the billing period
+    // Include the vacating student since they were in the room for the entire period until vacating date
+    const studentsInRoom = await User.countDocuments({
+      roomNumber: student.roomNumber,
+      gender: student.gender,
+      category: student.category,
+      role: 'student',
+      hostelStatus: 'Active'
+    });
+    
+    // IMPORTANT: The consumption calculated from meter readings (endUnits - startUnits)
+    // represents the ACTUAL consumption from billPeriodStart to vacatingDate.
+    // We use this consumption directly - no need for proportional calculation.
+    // 
+    // Example:
+    // - Last bill ended on: 2024-01-31 (endUnits: 1000)
+    // - Student vacating date: 2024-02-15
+    // - Meter reading on 2024-02-15: 1050 units
+    // - Consumption = 1050 - 1000 = 50 units (for 15 days)
+    // - Total Room Bill = 50 units × rate = ₹250
+    // - Number of students in room: 3
+    // - Student's Share = ₹250 / 3 = ₹83.33 ≈ ₹83
+    const totalRoomBill = consumption * electricityRate;
+    const studentShare = studentsInRoom > 0 ? Math.round(totalRoomBill / studentsInRoom) : totalRoomBill;
 
     // Update NOC with meter readings and calculated bill
     nocRequest.meterReadings = {
@@ -814,12 +849,16 @@ export const enterMeterReadings = async (req, res, next) => {
     };
 
     nocRequest.calculatedElectricityBill = {
-      consumption: proportionalConsumption,
+      consumption: consumption, // Actual consumption from meter readings
       rate: electricityRate,
-      total: total,
+      totalRoomBill: totalRoomBill, // Total bill for the room
+      studentShare: studentShare, // Student's share (divided by number of students)
+      numberOfStudents: studentsInRoom, // Number of students sharing the room
+      total: studentShare, // For backward compatibility, store student's share as total
       calculatedAt: new Date(),
       billPeriodStart: billPeriodStart,
-      billPeriodEnd: billPeriodEnd
+      billPeriodEnd: billPeriodEnd,
+      daysInPeriod: daysInPeriod // Store for reference
     };
 
     // Update status to "Ready for Deactivation"

@@ -229,6 +229,21 @@ const nocSchema = new mongoose.Schema({
       min: 0,
       default: null
     },
+    totalRoomBill: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    studentShare: {
+      type: Number,
+      min: 0,
+      default: null
+    },
+    numberOfStudents: {
+      type: Number,
+      min: 1,
+      default: null
+    },
     total: {
       type: Number,
       min: 0,
@@ -245,6 +260,11 @@ const nocSchema = new mongoose.Schema({
     },
     billPeriodEnd: {
       type: Date,
+      default: null
+    },
+    daysInPeriod: {
+      type: Number,
+      min: 0,
       default: null
     }
   }

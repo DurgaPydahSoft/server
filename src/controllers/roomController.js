@@ -739,7 +739,8 @@ export const getStudentRoomBills = async (req, res, next) => {
               if (billMonth <= nocBillEnd && billMonthEnd >= nocBillStart) {
                 // Calculate the overlap amount
                 // If the bill month is within or overlaps with NOC period, subtract the NOC amount
-                const nocAmount = nocRequest.calculatedElectricityBill.total || 0;
+                // Use studentShare if available (new format), otherwise fall back to total (backward compatibility)
+                const nocAmount = nocRequest.calculatedElectricityBill.studentShare || nocRequest.calculatedElectricityBill.total || 0;
                 
                 // Only subtract if the student hasn't already been adjusted for this NOC
                 // Check if this bill month is before or equal to the NOC vacating date month
@@ -813,7 +814,8 @@ export const getStudentRoomBills = async (req, res, next) => {
             const nocBillEnd = new Date(nocRequest.calculatedElectricityBill.billPeriodEnd);
             
             if (billMonth <= nocBillEnd && billMonthEnd >= nocBillStart) {
-              const nocAmount = nocRequest.calculatedElectricityBill.total || 0;
+              // Use studentShare if available (new format), otherwise fall back to total (backward compatibility)
+              const nocAmount = nocRequest.calculatedElectricityBill.studentShare || nocRequest.calculatedElectricityBill.total || 0;
               if (billMonth <= nocBillEnd) {
                 adjustedShare = Math.max(0, studentShare - nocAmount);
                 if (adjustedShare !== studentShare) {
