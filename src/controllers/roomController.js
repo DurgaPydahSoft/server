@@ -1112,6 +1112,24 @@ export const getPreviousMonthPayments = async (req, res) => {
 }; 
 
 // Get rooms with bed availability for student registration
+// Get all distinct categories from rooms
+export const getCategories = async (req, res, next) => {
+  try {
+    const categories = await Room.distinct('category', { isActive: true });
+    
+    res.json({
+      success: true,
+      data: categories.sort()
+    });
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch categories'
+    });
+  }
+};
+
 export const getRoomsWithBedAvailability = async (req, res, next) => {
   try {
     const { gender, category } = req.query;

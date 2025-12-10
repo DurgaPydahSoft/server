@@ -716,8 +716,8 @@ export const setAdditionalFees = async (req, res) => {
           throw new Error(`Invalid amount for ${key}. Must be a non-negative number.`);
         }
         
-        // Validate categories if provided
-        const validCategories = ['A+', 'A', 'B+', 'B'];
+        // Validate categories if provided (include C for Female categories)
+        const validCategories = ['A+', 'A', 'B+', 'B', 'C'];
         let categories = feeData.categories;
         if (Array.isArray(categories) && categories.length > 0) {
           // Validate each category
@@ -730,11 +730,35 @@ export const setAdditionalFees = async (req, res) => {
           categories = validCategories;
         }
         
+        // Handle categoryAmounts if provided
+        let categoryAmounts = {};
+        if (feeData.categoryAmounts && typeof feeData.categoryAmounts === 'object') {
+          // Validate category amounts
+          Object.entries(feeData.categoryAmounts).forEach(([cat, amount]) => {
+            if (validCategories.includes(cat)) {
+              const numAmount = Number(amount);
+              if (isNaN(numAmount) || numAmount < 0) {
+                throw new Error(`Invalid amount for category ${cat} in ${key}. Must be a non-negative number.`);
+              }
+              categoryAmounts[cat] = numAmount;
+            }
+          });
+        }
+        
+        // Calculate amount from categoryAmounts if not provided directly
+        let calculatedAmount = feeData.amount || 0;
+        if (Object.keys(categoryAmounts).length > 0 && !feeData.amount) {
+          // Use average from categoryAmounts as fallback
+          const amounts = Object.values(categoryAmounts);
+          calculatedAmount = amounts.reduce((sum, amt) => sum + amt, 0) / amounts.length;
+        }
+        
         validAdditionalFees[key] = {
-          amount: feeData.amount || 0,
+          amount: calculatedAmount, // Keep for backward compatibility
           description: feeData.description || '',
           isActive: feeData.isActive !== undefined ? feeData.isActive : true,
-          categories: categories
+          categories: categories,
+          categoryAmounts: Object.keys(categoryAmounts).length > 0 ? categoryAmounts : undefined
         };
       } else if (typeof feeData === 'number') {
         // Backward compatibility: if it's just a number

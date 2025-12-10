@@ -89,17 +89,23 @@ const feeStructureSchema = new mongoose.Schema({
   },
   // Additional fees that can be category-specific per academic year
   // Using Map to support dynamic fee types (caution deposit, diesel charges, etc.)
-  // Each fee can apply to specific categories (A+, A, B+, B)
+  // Each fee can apply to specific categories with category-specific amounts
   additionalFees: {
     type: Map,
     of: {
-      amount: { type: Number, default: 0, min: 0 },
+      amount: { type: Number, default: 0, min: 0 }, // Keep for backward compatibility
       description: { type: String, default: '' },
       isActive: { type: Boolean, default: true },
       categories: { 
         type: [String], 
         default: ['A+', 'A', 'B+', 'B'], // Default to all categories
-        enum: ['A+', 'A', 'B+', 'B']
+        enum: ['A+', 'A', 'B+', 'B', 'C'] // Include C for Female categories
+      },
+      // Category-specific amounts (e.g., { 'A+': 1000, 'A': 1000, 'B': 2000 })
+      categoryAmounts: {
+        type: Map,
+        of: { type: Number, min: 0 },
+        default: new Map()
       }
     },
     default: new Map()
@@ -187,11 +193,23 @@ feeStructureSchema.statics.getAdditionalFees = async function(academicYear, cate
       }
     }
     
+    // Convert categoryAmounts Map to object if it exists
+    const categoryAmountsObj = {};
+    if (value.categoryAmounts && value.categoryAmounts instanceof Map) {
+      value.categoryAmounts.forEach((amount, cat) => {
+        categoryAmountsObj[cat] = amount;
+      });
+    } else if (value.categoryAmounts && typeof value.categoryAmounts === 'object') {
+      // Already an object
+      Object.assign(categoryAmountsObj, value.categoryAmounts);
+    }
+    
     additionalFeesObj[key] = {
-      amount: value.amount || 0,
+      amount: value.amount || 0, // Keep for backward compatibility
       description: value.description || '',
       isActive: value.isActive !== undefined ? value.isActive : true,
-      categories: value.categories || ['A+', 'A', 'B+', 'B'] // Default to all categories
+      categories: value.categories || ['A+', 'A', 'B+', 'B'], // Default to all categories
+      categoryAmounts: Object.keys(categoryAmountsObj).length > 0 ? categoryAmountsObj : undefined
     };
   });
   
@@ -201,7 +219,7 @@ feeStructureSchema.statics.getAdditionalFees = async function(academicYear, cate
 // Static method to set additional fees for an academic year
 feeStructureSchema.statics.setAdditionalFees = async function(academicYear, additionalFees, adminId) {
   // Valid categories enum
-  const validCategories = ['A+', 'A', 'B+', 'B'];
+  const validCategories = ['A+', 'A', 'B+', 'B', 'C']; // Include C for Female categories
   
   // Find any fee structure for this academic year with a valid category to update additional fees
   // Filter out fee structures with invalid categories (like 'C')
@@ -217,13 +235,30 @@ feeStructureSchema.statics.setAdditionalFees = async function(academicYear, addi
     Object.keys(additionalFees).forEach(key => {
       const feeData = additionalFees[key];
       if (typeof feeData === 'object' && feeData !== null) {
+        // Convert categoryAmounts object to Map if provided
+        const categoryAmountsMap = new Map();
+        if (feeData.categoryAmounts && typeof feeData.categoryAmounts === 'object') {
+          Object.entries(feeData.categoryAmounts).forEach(([cat, amount]) => {
+            categoryAmountsMap.set(cat, Number(amount) || 0);
+          });
+        }
+        
+        // Calculate amount from categoryAmounts if not provided directly
+        let calculatedAmount = feeData.amount || 0;
+        if (categoryAmountsMap.size > 0 && !feeData.amount) {
+          // Use average or max from categoryAmounts as fallback
+          const amounts = Array.from(categoryAmountsMap.values());
+          calculatedAmount = amounts.reduce((sum, amt) => sum + amt, 0) / amounts.length;
+        }
+        
         additionalFeesMap.set(key, {
-          amount: feeData.amount || 0,
+          amount: calculatedAmount, // Keep for backward compatibility
           description: feeData.description || '',
           isActive: feeData.isActive !== undefined ? feeData.isActive : true,
           categories: Array.isArray(feeData.categories) && feeData.categories.length > 0 
             ? feeData.categories 
-            : ['A+', 'A', 'B+', 'B'] // Default to all categories if not specified
+            : ['A+', 'A', 'B+', 'B'], // Default to all categories if not specified
+          categoryAmounts: categoryAmountsMap.size > 0 ? categoryAmountsMap : undefined
         });
       } else {
         // Backward compatibility: if it's just a number, convert to object
