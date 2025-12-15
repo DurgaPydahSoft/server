@@ -3,6 +3,8 @@ import TempStudent from '../models/TempStudent.js';
 import Complaint from '../models/Complaint.js';
 import Leave from '../models/Leave.js';
 import Room from '../models/Room.js';
+import Hostel from '../models/Hostel.js';
+import HostelCategory from '../models/HostelCategory.js';
 import SecuritySettings from '../models/SecuritySettings.js';
 import FeeReminder from '../models/FeeReminder.js';
 import StudentPreRegistration from '../models/StudentPreRegistration.js';
@@ -1398,7 +1400,7 @@ export const getStudentById = async (req, res, next) => {
 // Update student
 export const updateStudent = async (req, res, next) => {
   try {
-    const { 
+  const { 
       name, 
       rollNumber,
       course, 
@@ -1406,6 +1408,9 @@ export const updateStudent = async (req, res, next) => {
       branch, 
       gender,
       category,
+      hostel,
+      hostelCategory,
+      room,
       mealType,
       parentPermissionForOuting,
       roomNumber, 
@@ -1441,20 +1446,48 @@ export const updateStudent = async (req, res, next) => {
       }
     }
 
-    // Validate room number based on gender and category - check against actual Room model
+    // Resolve hostel/category for room validation under new hierarchy
+    const targetHostelId = hostel || student.hostel;
+    let targetCategoryId = hostelCategory || student.hostelCategory;
+
+    // If category is provided as a name, try to resolve to HostelCategory _id within the target hostel
+    if (!targetCategoryId && category) {
+      if (!targetHostelId) {
+        throw createError(400, 'Hostel is required to resolve category.');
+      }
+      const categoryDoc = await HostelCategory.findOne({ hostel: targetHostelId, name: category.trim() });
+      if (!categoryDoc) {
+        throw createError(400, `Category "${category}" not found for the selected hostel.`);
+      }
+      targetCategoryId = categoryDoc._id;
+    }
+
+    // Validate hostel exists if provided
+    if (targetHostelId) {
+      const hostelExists = await Hostel.exists({ _id: targetHostelId });
+      if (!hostelExists) {
+        throw createError(400, 'Invalid hostel.');
+      }
+    }
+
+    // Validate category exists within hostel if provided
+    if (targetCategoryId) {
+      const categoryExists = await HostelCategory.exists({ _id: targetCategoryId, hostel: targetHostelId });
+      if (!categoryExists) {
+        throw createError(400, 'Invalid category for the selected hostel.');
+      }
+    }
+
+    // Validate room number against Room model using hostel+category hierarchy
+    let roomDoc = null;
     if (roomNumber) {
-      const roomGender = gender || student.gender;
-      const roomCategory = category || student.category;
-      
-      // Check if room exists in database with matching gender and category
-      const roomDoc = await Room.findOne({ 
-        roomNumber, 
-        gender: roomGender, 
-        category: roomCategory 
-      });
-      
+      const roomQuery = { roomNumber };
+      if (targetHostelId) roomQuery.hostel = targetHostelId;
+      if (targetCategoryId) roomQuery.category = targetCategoryId;
+
+      roomDoc = await Room.findOne(roomQuery);
       if (!roomDoc) {
-        throw createError(400, 'Invalid room number for the selected gender and category.');
+        throw createError(400, 'Invalid room number for the selected hostel/category.');
       }
     }
 
@@ -1594,7 +1627,14 @@ export const updateStudent = async (req, res, next) => {
       student.parentPermissionForOuting = Boolean(parentPermissionForOuting);
       console.log('🔧 Updated student.parentPermissionForOuting to:', student.parentPermissionForOuting);
     }
-    if (roomNumber) student.roomNumber = roomNumber;
+    if (roomNumber) {
+      student.roomNumber = roomNumber;
+      if (roomDoc?._id) {
+        student.room = roomDoc._id;
+      }
+    }
+    if (targetHostelId) student.hostel = targetHostelId;
+    if (targetCategoryId) student.hostelCategory = targetCategoryId;
     if (bedNumber !== undefined) student.bedNumber = bedNumber;
     if (lockerNumber !== undefined) student.lockerNumber = lockerNumber;
     if (studentPhone !== undefined) student.studentPhone = studentPhone;
@@ -2530,10 +2570,10 @@ export const searchStudentByRollNumber = async (req, res, next) => {
       return next(createError(400, 'Roll number is required.'));
     }
 
+    // Note: course and branch are now stored as strings, not ObjectId references
     const student = await User.findOne({ rollNumber: new RegExp(`^${rollNumber}$`, 'i'), role: 'student' })
-      .select('-password')
-      .populate('course', 'name code')
-      .populate('branch', 'name code');
+      .select('-password');
+      // Removed populate for course and branch - they are now strings
 
     if (!student) {
       return next(createError(404, 'Student with this roll number not found.'));

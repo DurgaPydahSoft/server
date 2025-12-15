@@ -1356,16 +1356,14 @@ export const getApprovedLeaves = async (req, res, next) => {
     const { page = 1, limit = 10 } = req.query;
     
     // Include both 'Approved' and 'Warden Verified' statuses
+    // Note: course and branch are now stored as strings, not ObjectId references
     const leaves = await Leave.find({ 
       status: { $in: ['Approved', 'Warden Verified'] } 
     })
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
+        // Removed populate for course and branch - they are now strings
       })
       .populate('approvedBy', 'name')
       .populate('verifiedBy', 'name') // Populate warden who verified
