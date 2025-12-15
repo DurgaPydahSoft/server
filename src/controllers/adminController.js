@@ -82,6 +82,9 @@ export const addStudent = async (req, res, next) => {
       year,
       branch,
       category,
+      hostel,
+      hostelCategory,
+      room,
       mealType,
       parentPermissionForOuting,
       roomNumber,
@@ -140,14 +143,38 @@ export const addStudent = async (req, res, next) => {
       throw createError(500, 'Error validating student in SQL database', error.message);
     }
 
-    // Validate room number based on gender and category - check against actual Room model
-    const roomDoc = await Room.findOne({ roomNumber, gender, category });
-    if (!roomDoc) {
-      throw createError(400, 'Invalid room number for the selected gender and category');
+    // Hostel / category (hostelCategory) validation under new hierarchy
+    if (!hostel) {
+      throw createError(400, 'Hostel is required');
+    }
+    if (!hostelCategory) {
+      throw createError(400, 'Hostel category is required');
     }
 
-    // Check bed count limit
-    const studentCount = await User.countDocuments({ roomNumber, gender, category, role: 'student' });
+    const hostelExists = await Hostel.exists({ _id: hostel });
+    if (!hostelExists) {
+      throw createError(400, 'Invalid hostel.');
+    }
+
+    const hostelCategoryDoc = await HostelCategory.findOne({ _id: hostelCategory, hostel });
+    if (!hostelCategoryDoc) {
+      throw createError(400, 'Invalid category for the selected hostel.');
+    }
+    const finalCategoryName = category?.trim() || hostelCategoryDoc.name;
+
+    // Validate room using hostel + hostelCategory + roomNumber
+    const roomQuery = { hostel, category: hostelCategory, roomNumber };
+    const roomDoc = await Room.findOne(roomQuery);
+    if (!roomDoc) {
+      throw createError(400, 'Invalid room number for the selected hostel/category.');
+    }
+
+    // Check bed count limit (by room reference)
+    const studentCount = await User.countDocuments({
+      room: roomDoc._id,
+      role: 'student',
+      hostelStatus: 'Active'
+    });
     if (studentCount >= roomDoc.bedCount) {
       throw createError(400, 'Room is full. Cannot register more students.');
     }
@@ -202,7 +229,13 @@ export const addStudent = async (req, res, next) => {
     try {
       // Fetch fee structure for the category and academic year
       const FeeStructure = (await import('../models/FeeStructure.js')).default;
-      const feeStructure = await FeeStructure.getFeeStructure(academicYear, course, branch, year, category);
+      const feeStructure = await FeeStructure.getFeeStructure(
+        academicYear,
+        finalCourseName,
+        finalBranchName,
+        year,
+        finalCategoryName
+      );
       
       if (feeStructure) {
         console.log('📊 Fee structure found:', feeStructure);
@@ -311,24 +344,41 @@ export const addStudent = async (req, res, next) => {
     sqlCourseId = sqlIds.sqlCourseId;
     sqlBranchId = sqlIds.sqlBranchId;
     
-    // If course is from SQL, ensure MongoDB document exists
+    // Resolve course/branch names (we store strings in User.course/branch)
+    let finalCourseName = course; // fallback to incoming value
+    let finalBranchName = branch; // fallback to incoming value
+
+    // If course is from SQL, ensure MongoDB document exists AND capture course name
     if (sqlCourseId) {
       const mongoCourseId = await ensureMongoDBCourse(sqlCourseId);
       if (mongoCourseId) {
         finalCourseId = mongoCourseId;
+        const mongoCourse = await Course.findById(mongoCourseId).lean();
+        if (mongoCourse?.name) finalCourseName = mongoCourse.name;
       } else {
         throw createError(400, `Failed to resolve course from SQL database`);
       }
+    } else if (finalCourseId && /^[0-9a-fA-F]{24}$/.test(String(finalCourseId))) {
+      // Course provided as Mongo ObjectId; use its name
+      const mongoCourse = await Course.findById(finalCourseId).lean();
+      if (mongoCourse?.name) finalCourseName = mongoCourse.name;
     }
     
-    // If branch is from SQL, ensure MongoDB document exists
+    // If branch is from SQL, ensure MongoDB document exists AND capture branch name
     if (sqlBranchId) {
       const mongoBranchId = await ensureMongoDBBranch(sqlBranchId, sqlCourseId || (course && course.toString().startsWith('sql_') ? parseInt(course.toString().replace('sql_', '')) : null));
       if (mongoBranchId) {
         finalBranchId = mongoBranchId;
+        const mongoBranch = await Branch.findById(mongoBranchId).lean();
+        if (mongoBranch?.name) finalBranchName = mongoBranch.name;
       } else {
-        throw createError(400, `Failed to resolve branch from SQL database`);
+        console.warn(`⚠️ Failed to resolve branch from SQL database for sqlBranchId=${sqlBranchId}. Falling back to provided branch value.`);
+        finalBranchId = branch; // fall back to incoming value (string) to avoid hard failure
       }
+    } else if (finalBranchId && /^[0-9a-fA-F]{24}$/.test(String(finalBranchId))) {
+      // Branch provided as Mongo ObjectId; use its name
+      const mongoBranch = await Branch.findById(finalBranchId).lean();
+      if (mongoBranch?.name) finalBranchName = mongoBranch.name;
     }
     
     // If concession is set, track who requested it
@@ -352,16 +402,18 @@ export const addStudent = async (req, res, next) => {
       password: generatedPassword,
       role: 'student',
       gender,
-      course: finalCourseId,
+      // Store course/branch as strings per schema
+      course: finalCourseName,
       year,
-      branch: finalBranchId,
+      branch: finalBranchName,
       // Store SQL IDs for reference
       ...(sqlCourseId && { sqlCourseId }),
       ...(sqlBranchId && { sqlBranchId }),
-      category,
+      category: finalCategoryName,
       mealType,
       parentPermissionForOuting: parentPermissionForOuting !== undefined ? parentPermissionForOuting : true,
       roomNumber,
+      room: roomDoc._id,
       bedNumber,
       lockerNumber,
       studentPhone,
@@ -374,6 +426,8 @@ export const addStudent = async (req, res, next) => {
       academicYear,
       email: finalEmail,
       hostelId,
+      hostel,
+      hostelCategory,
       isPasswordChanged: false,
       studentPhoto: studentPhotoUrl,
       guardianPhoto1: guardianPhoto1Url,
@@ -1431,24 +1485,10 @@ export const updateStudent = async (req, res, next) => {
       throw createError(404, 'Student not found');
     }
 
-    // Validate gender if provided
-    if (gender && !['Male', 'Female'].includes(gender)) {
-      throw createError(400, 'Invalid gender. Must be Male or Female.');
-    }
-
-    // Validate category based on gender
-    if (category) {
-      const validCategories = (gender || student.gender) === 'Male' 
-        ? ['A+', 'A', 'B+', 'B'] 
-        : ['A+', 'A', 'B', 'C'];
-      if (!validCategories.includes(category)) {
-        throw createError(400, 'Invalid category for the selected gender.');
-      }
-    }
-
     // Resolve hostel/category for room validation under new hierarchy
     const targetHostelId = hostel || student.hostel;
     let targetCategoryId = hostelCategory || student.hostelCategory;
+    let targetCategoryName = category || student.category;
 
     // If category is provided as a name, try to resolve to HostelCategory _id within the target hostel
     if (!targetCategoryId && category) {
@@ -1460,6 +1500,15 @@ export const updateStudent = async (req, res, next) => {
         throw createError(400, `Category "${category}" not found for the selected hostel.`);
       }
       targetCategoryId = categoryDoc._id;
+      targetCategoryName = categoryDoc.name;
+    }
+
+    // If category not provided, derive from hostelCategory document
+    if (!category && targetCategoryId && !targetCategoryName) {
+      const catDoc = await HostelCategory.findById(targetCategoryId);
+      if (catDoc) {
+        targetCategoryName = catDoc.name;
+      }
     }
 
     // Validate hostel exists if provided
@@ -1620,7 +1669,8 @@ export const updateStudent = async (req, res, next) => {
     if (year) student.year = year;
     if (branch) student.branch = branch;
     if (gender) student.gender = gender;
-    if (category) student.category = category;
+    // Set category string from provided value or derived hostelCategory name
+    if (category || targetCategoryName) student.category = category || targetCategoryName;
     if (mealType) student.mealType = mealType;
     if (parentPermissionForOuting !== undefined) {
       console.log('🔧 Updating parentPermissionForOuting:', parentPermissionForOuting, 'type:', typeof parentPermissionForOuting);

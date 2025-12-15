@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import Room from '../models/Room.js';
 import Hostel from '../models/Hostel.js';
 import HostelCategory from '../models/HostelCategory.js';
@@ -7,14 +8,26 @@ import StaffGuest from '../models/StaffGuest.js';
 import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
 
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
 // Get all rooms with optional filtering
 export const getRooms = async (req, res, next) => {
   try {
     const { hostel, category, includeLastBill } = req.query;
     const query = {};
 
-    if (hostel) query.hostel = hostel;
-    if (category) query.category = category;
+    if (hostel) {
+      if (!isValidObjectId(hostel)) {
+        return res.status(400).json({ success: false, message: 'Invalid hostel id' });
+      }
+      query.hostel = hostel;
+    }
+    if (category) {
+      if (!isValidObjectId(category)) {
+        return res.status(400).json({ success: false, message: 'Invalid category id' });
+      }
+      query.category = category;
+    }
 
     const rooms = await Room.find(query)
       .populate('hostel', 'name')
@@ -68,8 +81,18 @@ export const getWardenRooms = async (req, res, next) => {
     const { hostel, category, includeLastBill } = req.query;
     const query = {};
     
-    if (hostel) query.hostel = hostel;
-    if (category) query.category = category;
+    if (hostel) {
+      if (!isValidObjectId(hostel)) {
+        return res.status(400).json({ success: false, message: 'Invalid hostel id' });
+      }
+      query.hostel = hostel;
+    }
+    if (category) {
+      if (!isValidObjectId(category)) {
+        return res.status(400).json({ success: false, message: 'Invalid category id' });
+      }
+      query.category = category;
+    }
 
     const rooms = await Room.find(query)
       .populate('hostel', 'name')
@@ -1138,8 +1161,18 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
     const { hostel, category } = req.query;
     const query = {};
 
-    if (hostel) query.hostel = hostel;
-    if (category) query.category = category;
+    if (hostel) {
+      if (!isValidObjectId(hostel)) {
+        return res.status(400).json({ success: false, message: 'Invalid hostel id' });
+      }
+      query.hostel = hostel;
+    }
+    if (category) {
+      if (!isValidObjectId(category)) {
+        return res.status(400).json({ success: false, message: 'Invalid category id' });
+      }
+      query.category = category;
+    }
 
     const rooms = await Room.find(query)
       .populate('hostel', 'name')
