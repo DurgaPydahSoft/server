@@ -1032,14 +1032,25 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
 
     console.log('🔍 Backend: Searching for fee structure:', { academicYear, course, branch, year, category });
     
-    const feeStructure = await FeeStructure.findOne({ 
-      academicYear, 
-      course, 
-      branch,
-      year: parseInt(year), 
-      category, 
-      isActive: true 
-    });
+    const baseQuery = {
+      academicYear,
+      course,
+      year: parseInt(year),
+      category,
+      isActive: true,
+    };
+
+    /**
+     * We originally stored hostel fee rules without a branch (null/undefined) in the new
+     * hostel/category-aligned schema. The StudentRegistrationSQL page now sends a branch
+     * name (resolved from SQL), which caused lookups to miss the stored documents and
+     * return zero. To be backwards compatible, try an exact branch match first, then
+     * gracefully fall back to records where branch is null/undefined.
+     */
+    const feeStructure =
+      await FeeStructure.findOne({ ...baseQuery, branch }) ||
+      await FeeStructure.findOne({ ...baseQuery, branch: null }) ||
+      await FeeStructure.findOne({ ...baseQuery, branch: undefined });
 
     console.log('🔍 Backend: Found fee structure:', feeStructure);
 
