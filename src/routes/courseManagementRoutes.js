@@ -3,6 +3,7 @@ import Course from '../models/Course.js';
 import Branch from '../models/Branch.js';
 import AcademicCalendar from '../models/AcademicCalendar.js';
 import { superAdminAuth, protect, adminAuth, checkPermission } from '../middleware/authMiddleware.js';
+import { getCoursesFromSQL, getBranchesFromSQL, getBranchesByCourseFromSQL } from '../utils/courseBranchMapper.js';
 
 const router = express.Router();
 
@@ -56,48 +57,80 @@ const courseManagementWriteAuth = [adminAuth, (req, res, next) => {
 
 // ==================== COURSE ROUTES ====================
 
-// Get all courses (public access for dropdowns)
+// Get all courses (public access for dropdowns) - Now fetches from SQL
 router.get('/courses', async (req, res) => {
   try {
-    const courses = await Course.find({ isActive: true })
-      .select('name code description duration durationUnit')
-      .sort({ name: 1 });
+    // Fetch from SQL database
+    const courses = await getCoursesFromSQL();
+    
+    // Map to expected format (already done in mapper, but ensure compatibility)
+    const formattedCourses = courses.map(course => ({
+      _id: course._id,
+      sqlId: course.sqlId,
+      name: course.name,
+      code: course.code,
+      description: course.description || '',
+      duration: course.duration,
+      durationUnit: course.durationUnit || 'years',
+      isActive: course.isActive
+    }));
     
     res.json({
       success: true,
-      data: courses
+      data: formattedCourses
     });
   } catch (error) {
     console.error('Error fetching courses:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch courses'
+      message: 'Failed to fetch courses',
+      error: error.message
     });
   }
 });
 
-// Get all courses (admin view with inactive courses)
+// Get all courses (admin view with inactive courses) - Now fetches from SQL
 router.get('/courses/all', courseManagementAuth, async (req, res) => {
   try {
-    const courses = await Course.find()
-      .populate('createdBy', 'username')
-      .sort({ createdAt: -1 });
+    // Fetch all courses from SQL (including inactive)
+    const { fetchCoursesFromSQL } = await import('../utils/sqlService.js');
+    const result = await fetchCoursesFromSQL();
+    
+    if (!result.success) {
+      // Fallback to MongoDB
+      const courses = await Course.find().populate('createdBy', 'username').sort({ createdAt: -1 });
+      return res.json({
+        success: true,
+        data: courses,
+        source: 'mongodb'
+      });
+    }
+    
+    // Map SQL courses to MongoDB format
+    const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
+    const courses = await getCoursesFromSQL();
     
     res.json({
       success: true,
-      data: courses
+      data: courses,
+      source: 'sql'
     });
   } catch (error) {
     console.error('Error fetching all courses:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch courses'
+      message: 'Failed to fetch courses',
+      error: error.message
     });
   }
 });
 
-// Create new course
+// Create new course - DISABLED (courses now managed in SQL database)
 router.post('/courses', courseManagementWriteAuth, async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Course creation is disabled. Courses are now managed in the central SQL database. Please add courses through the SQL database.'
+  });
   try {
     const { name, code, description, duration, durationUnit } = req.body;
     
@@ -143,8 +176,12 @@ router.post('/courses', courseManagementWriteAuth, async (req, res) => {
   }
 });
 
-// Update course
+// Update course - DISABLED (courses now managed in SQL database)
 router.put('/courses/:id', courseManagementWriteAuth, async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Course updates are disabled. Courses are now managed in the central SQL database. Please update courses through the SQL database.'
+  });
   try {
     const { name, code, description, duration, durationUnit, isActive } = req.body;
     const courseId = req.params.id;
@@ -200,8 +237,12 @@ router.put('/courses/:id', courseManagementWriteAuth, async (req, res) => {
   }
 });
 
-// Delete course (hard delete)
+// Delete course - DISABLED (courses now managed in SQL database)
 router.delete('/courses/:id', courseManagementWriteAuth, async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Course deletion is disabled. Courses are now managed in the central SQL database. Please deactivate courses through the SQL database.'
+  });
   try {
     const courseId = req.params.id;
     
@@ -243,72 +284,118 @@ router.delete('/courses/:id', courseManagementWriteAuth, async (req, res) => {
 
 // ==================== BRANCH ROUTES ====================
 
-// Get branches by course (public access for dropdowns)
+// Get branches by course (public access for dropdowns) - Now fetches from SQL
 router.get('/branches/:courseId', async (req, res) => {
   try {
     const { courseId } = req.params;
-    const branches = await Branch.find({ 
-      course: courseId, 
-      isActive: true 
-    })
-    .select('name code description isActive')
-    .sort({ name: 1 });
+    
+    // Fetch from SQL database
+    const branches = await getBranchesByCourseFromSQL(courseId);
+    
+    // Map to expected format
+    const formattedBranches = branches.map(branch => ({
+      _id: branch._id,
+      sqlId: branch.sqlId,
+      name: branch.name,
+      code: branch.code,
+      description: branch.description || '',
+      course: branch.course,
+      isActive: branch.isActive
+    }));
+    
     res.json({
       success: true,
-      data: branches
+      data: formattedBranches
     });
   } catch (error) {
     console.error('Error fetching branches:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch branches'
+      message: 'Failed to fetch branches',
+      error: error.message
     });
   }
 });
 
-// Get all branches (public access for dropdowns)
+// Get all branches (public access for dropdowns) - Now fetches from SQL
 router.get('/branches', async (req, res) => {
   try {
-    const branches = await Branch.find({ isActive: true })
-      .populate('course', 'name code')
-      .select('name code description course isActive')
-      .sort({ name: 1 });
+    // Fetch from SQL database
+    const branches = await getBranchesFromSQL();
+    
+    // Map to expected format with course info
+    const formattedBranches = branches.map(branch => ({
+      _id: branch._id,
+      sqlId: branch.sqlId,
+      name: branch.name,
+      code: branch.code,
+      description: branch.description || '',
+      course: branch.course ? {
+        _id: branch.course,
+        name: branch.courseName,
+        code: branch.courseCode
+      } : null,
+      isActive: branch.isActive
+    }));
+    
     res.json({
       success: true,
-      data: branches
+      data: formattedBranches
     });
   } catch (error) {
     console.error('Error fetching branches:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch branches'
+      message: 'Failed to fetch branches',
+      error: error.message
     });
   }
 });
 
-// Get all branches (admin view with inactive branches)
+// Get all branches (admin view with inactive branches) - Now fetches from SQL
 router.get('/branches/all', courseManagementAuth, async (req, res) => {
   try {
-    const branches = await Branch.find()
-      .populate('course', 'name code')
-      .populate('createdBy', 'username')
-      .select('name code description course isActive createdBy')
-      .sort({ createdAt: -1 });
+    // Fetch all branches from SQL
+    const branches = await getBranchesFromSQL();
+    
+    // Map to expected format
+    const formattedBranches = branches.map(branch => ({
+      _id: branch._id,
+      sqlId: branch.sqlId,
+      name: branch.name,
+      code: branch.code,
+      description: branch.description || '',
+      course: branch.course ? {
+        _id: branch.course,
+        name: branch.courseName,
+        code: branch.courseCode
+      } : null,
+      isActive: branch.isActive,
+      createdAt: branch.createdAt,
+      updatedAt: branch.updatedAt
+    }));
+    
     res.json({
       success: true,
-      data: branches
+      data: formattedBranches,
+      source: 'sql'
     });
   } catch (error) {
     console.error('Error fetching all branches:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch branches'
+      message: 'Failed to fetch branches',
+      error: error.message
     });
   }
 });
 
-// Create new branch
+// Create new branch - DISABLED (branches now managed in SQL database)
 router.post('/branches', courseManagementWriteAuth, async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Branch creation is disabled. Branches are now managed in the central SQL database. Please add branches through the SQL database.'
+  });
   try {
     const { name, code, courseId, description } = req.body;
     
@@ -368,8 +455,12 @@ router.post('/branches', courseManagementWriteAuth, async (req, res) => {
   }
 });
 
-// Update branch
+// Update branch - DISABLED (branches now managed in SQL database)
 router.put('/branches/:id', courseManagementWriteAuth, async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Branch updates are disabled. Branches are now managed in the central SQL database. Please update branches through the SQL database.'
+  });
   try {
     const { name, code, description, isActive } = req.body;
     const branchId = req.params.id;
@@ -424,8 +515,12 @@ router.put('/branches/:id', courseManagementWriteAuth, async (req, res) => {
   }
 });
 
-// Delete branch (soft delete)
+// Delete branch - DISABLED (branches now managed in SQL database)
 router.delete('/branches/:id', courseManagementWriteAuth, async (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Branch deletion is disabled. Branches are now managed in the central SQL database. Please deactivate branches through the SQL database.'
+  });
   try {
     const branchId = req.params.id;
     
@@ -467,27 +562,39 @@ router.delete('/branches/:id', courseManagementWriteAuth, async (req, res) => {
 
 // ==================== UTILITY ROUTES ====================
 
-// Get courses with their branches
+// Get courses with their branches - Now fetches from SQL
 router.get('/courses-with-branches', protect, async (req, res) => {
   try {
-    const courses = await Course.find({ isActive: true })
-      .populate({
-        path: 'branches',
-        match: { isActive: true },
-        select: 'name code'
-      })
-      .select('name code description duration durationUnit')
-      .sort({ name: 1 });
+    // Fetch courses and branches from SQL
+    const courses = await getCoursesFromSQL();
+    const allBranches = await getBranchesFromSQL();
+    
+    // Group branches by course
+    const coursesWithBranches = courses.map(course => {
+      const courseBranches = allBranches
+        .filter(branch => branch.sqlCourseId === course.sqlId)
+        .map(branch => ({
+          _id: branch._id,
+          name: branch.name,
+          code: branch.code
+        }));
+      
+      return {
+        ...course,
+        branches: courseBranches
+      };
+    });
     
     res.json({
       success: true,
-      data: courses
+      data: coursesWithBranches
     });
   } catch (error) {
     console.error('Error fetching courses with branches:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch courses with branches'
+      message: 'Failed to fetch courses with branches',
+      error: error.message
     });
   }
 });

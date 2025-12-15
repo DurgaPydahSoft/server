@@ -50,8 +50,8 @@ const customRoleSchema = new mongoose.Schema({
     default: 'all'
   },
   assignedCourses: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course'
+    type: String,
+    trim: true
   }],
   isActive: {
     type: Boolean,
@@ -85,12 +85,12 @@ customRoleSchema.methods.getAccessLevel = function(permission) {
   return this.permissionAccessLevels.get(permission) || 'view';
 };
 
-// Method to check if role can access specific course
-customRoleSchema.methods.canAccessCourse = function(courseId) {
+// Method to check if role can access specific course (now uses course names)
+customRoleSchema.methods.canAccessCourse = function(courseName) {
   if (this.courseAssignment === 'all') {
     return true;
   }
-  return this.assignedCourses.includes(courseId);
+  return this.assignedCourses.includes(courseName);
 };
 
 const CustomRole = mongoose.model('CustomRole', customRoleSchema);

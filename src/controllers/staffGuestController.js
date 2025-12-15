@@ -32,27 +32,24 @@ const fetchImageAsBase64 = async (imageUrl) => {
   }
 };
 
-// Helper function to check room availability
-const checkRoomAvailability = async (roomNumber, gender, category) => {
-  const room = await Room.findOne({ roomNumber, gender, category });
+// Helper function to check room availability (using roomId)
+const checkRoomAvailability = async (roomId) => {
+  const room = await Room.findById(roomId).populate('hostel', 'name').populate('category', 'name');
   if (!room) {
     throw createError(404, 'Room not found');
   }
 
-  // Count students in the room
+  // Count students in the room (using room reference)
   const studentCount = await User.countDocuments({
-    gender,
-    category,
-    roomNumber,
+    room: roomId,
     role: 'student',
     hostelStatus: 'Active'
   });
 
-  // Count staff in the room
+  // Count staff in the room (using roomId)
   const staffCount = await StaffGuest.countDocuments({
     type: 'staff',
-    gender,
-    roomNumber,
+    roomId: roomId,
     isActive: true
   });
 
@@ -85,9 +82,14 @@ export const addStaffGuest = async (req, res, next) => {
       checkoutDate,
       stayType,
       selectedMonth,
-      roomNumber,
+      hostelId,
+      categoryId,
+      roomId,
+      roomNumber, // Legacy support
       bedNumber,
-      dailyRate
+      dailyRate,
+      chargeType,
+      monthlyFixedAmount
     } = req.body;
 
     // Validate required fields
@@ -140,34 +142,58 @@ export const addStaffGuest = async (req, res, next) => {
       throw createError(400, `A ${type} with the same phone number or name already exists. Please check existing records.`);
     }
 
-    // Handle room allocation for staff
+    // Handle room allocation for staff using new hierarchy
     let roomAllocation = null;
-    if (type === 'staff' && roomNumber) {
-      // For staff, we need category - but staff might not have category
-      // We'll need to find rooms that match gender only, or add category to staff
-      // For now, let's check if room exists and matches gender
-      const room = await Room.findOne({ roomNumber, gender });
-      if (!room) {
-        throw createError(404, `Room ${roomNumber} not found for ${gender} gender`);
+    let selectedRoom = null;
+    let finalHostelId = null;
+    let finalCategoryId = null;
+    let finalRoomId = null;
+
+    if (type === 'staff' && (roomId || roomNumber)) {
+      // New hierarchy: use roomId if provided
+      if (roomId) {
+        selectedRoom = await Room.findById(roomId).populate('hostel', 'name').populate('category', 'name');
+        if (!selectedRoom) {
+          throw createError(404, `Room not found with ID: ${roomId}`);
+        }
+        finalHostelId = selectedRoom.hostel._id;
+        finalCategoryId = selectedRoom.category._id;
+        finalRoomId = roomId;
+      } 
+      // Legacy support: find room by roomNumber + gender
+      else if (roomNumber) {
+        // Try to find room using legacy method (for backward compatibility)
+        const rooms = await Room.find({ roomNumber }).populate('hostel', 'name').populate('category', 'name');
+        if (rooms.length === 0) {
+          throw createError(404, `Room ${roomNumber} not found`);
+        }
+        // If multiple rooms with same number, prefer one that matches gender-based hostel
+        // For now, just take the first one (migration should handle this)
+        selectedRoom = rooms[0];
+        finalHostelId = selectedRoom.hostel._id;
+        finalCategoryId = selectedRoom.category._id;
+        finalRoomId = selectedRoom._id;
       }
 
-      // Check room availability (including staff occupancy)
-      roomAllocation = await checkRoomAvailability(roomNumber, gender, room.category);
-      if (!roomAllocation.isAvailable) {
-        throw createError(400, `Room ${roomNumber} is fully occupied. Available beds: ${roomAllocation.availableBeds}`);
-      }
+      if (selectedRoom) {
+        // Check room availability (using roomId)
+        roomAllocation = await checkRoomAvailability(finalRoomId);
+        if (!roomAllocation.isAvailable) {
+          throw createError(400, `Room ${selectedRoom.roomNumber} is fully occupied. Available beds: ${roomAllocation.availableBeds}`);
+        }
 
-      // Check if bed number is already taken in this room
-      if (bedNumber) {
-        const bedOccupied = await StaffGuest.findOne({
-          type: 'staff',
-          roomNumber,
-          bedNumber,
-          isActive: true,
-          _id: { $ne: req.body._id }
-        });
-        if (bedOccupied) {
-          throw createError(400, `Bed ${bedNumber} in room ${roomNumber} is already occupied`);
+        // Check if bed number is already taken in this room
+        if (bedNumber) {
+          const bedOccupied = await StaffGuest.findOne({
+            type: 'staff',
+            roomId: finalRoomId,
+            bedNumber,
+            isActive: true,
+            _id: { $ne: req.body._id }
+          });
+          if (bedOccupied) {
+            throw createError(400, `Bed ${bedNumber} in room ${selectedRoom.roomNumber} is already occupied`);
+          }
         }
       }
     }
@@ -232,7 +258,12 @@ export const addStaffGuest = async (req, res, next) => {
       checkoutDate: stayType === 'daily' && checkoutDate ? new Date(checkoutDate) : null,
       stayType: type === 'staff' ? stayType : 'daily',
       selectedMonth: type === 'staff' && stayType === 'monthly' ? selectedMonth : null,
-      roomNumber: type === 'staff' && roomNumber ? roomNumber.trim() : null,
+      // New hierarchy fields
+      hostelId: type === 'staff' ? finalHostelId : null,
+      categoryId: type === 'staff' ? finalCategoryId : null,
+      roomId: type === 'staff' ? finalRoomId : null,
+      // Legacy fields (for backward compatibility)
+      roomNumber: type === 'staff' ? (selectedRoom ? selectedRoom.roomNumber : (roomNumber ? roomNumber.trim() : null)) : null,
       bedNumber: type === 'staff' && bedNumber ? bedNumber.trim() : null,
       dailyRate: dailyRate ? parseFloat(dailyRate) : null,
       chargeType: (type === 'staff' && stayType === 'monthly') ? (chargeType || 'per_day') : 'per_day',
@@ -444,7 +475,10 @@ export const updateStaffGuest = async (req, res, next) => {
       checkoutDate,
       stayType,
       selectedMonth,
-      roomNumber,
+      hostelId,
+      categoryId,
+      roomId,
+      roomNumber, // Legacy support
       bedNumber,
       dailyRate,
       chargeType,
@@ -521,28 +555,67 @@ export const updateStaffGuest = async (req, res, next) => {
       }
     }
 
-    // Handle room allocation for staff
-    const currentGender = gender || staffGuest.gender;
-    if (currentType === 'staff' && roomNumber !== undefined) {
-      if (roomNumber) {
-        // Find room to get category
-        const room = await Room.findOne({ roomNumber, gender: currentGender });
-        if (!room) {
-          throw createError(404, `Room ${roomNumber} not found for ${currentGender} gender`);
-        }
+    // Handle room allocation for staff using new hierarchy
+    let selectedRoom = null;
+    let finalHostelId = null;
+    let finalCategoryId = null;
+    let finalRoomId = null;
 
+    if (currentType === 'staff' && (roomId !== undefined || roomNumber !== undefined || hostelId !== undefined)) {
+      // New hierarchy: use roomId if provided
+      if (roomId !== undefined) {
+        if (roomId) {
+          selectedRoom = await Room.findById(roomId).populate('hostel', 'name').populate('category', 'name');
+          if (!selectedRoom) {
+            throw createError(404, `Room not found with ID: ${roomId}`);
+          }
+          finalHostelId = selectedRoom.hostel._id;
+          finalCategoryId = selectedRoom.category._id;
+          finalRoomId = roomId;
+        } else {
+          // Clearing room assignment
+          finalHostelId = null;
+          finalCategoryId = null;
+          finalRoomId = null;
+        }
+      }
+      // Legacy support: find room by roomNumber
+      else if (roomNumber !== undefined && roomNumber) {
+        const rooms = await Room.find({ roomNumber }).populate('hostel', 'name').populate('category', 'name');
+        if (rooms.length === 0) {
+          throw createError(404, `Room ${roomNumber} not found`);
+        }
+        selectedRoom = rooms[0];
+        finalHostelId = selectedRoom.hostel._id;
+        finalCategoryId = selectedRoom.category._id;
+        finalRoomId = selectedRoom._id;
+      }
+      // If only hostelId/categoryId provided, we need roomId to be provided too
+      else if (hostelId !== undefined && categoryId !== undefined) {
+        // This case requires roomId to be explicitly provided
+        if (!roomId) {
+          throw createError(400, 'roomId is required when hostelId and categoryId are provided');
+        }
+      }
+
+      if (selectedRoom || finalRoomId) {
+        const targetRoomId = finalRoomId || selectedRoom._id;
+        
         // Check room availability (excluding current staff member)
-        const roomAllocation = await checkRoomAvailability(roomNumber, currentGender, room.category);
+        const roomAllocation = await checkRoomAvailability(targetRoomId);
         
         // If changing room, check if new room has availability
-        if (staffGuest.roomNumber !== roomNumber) {
+        const currentRoomId = staffGuest.roomId ? staffGuest.roomId.toString() : null;
+        const newRoomId = targetRoomId.toString();
+        
+        if (currentRoomId !== newRoomId) {
           if (!roomAllocation.isAvailable) {
-            throw createError(400, `Room ${roomNumber} is fully occupied. Available beds: ${roomAllocation.availableBeds}`);
+            throw createError(400, `Room ${selectedRoom.roomNumber} is fully occupied. Available beds: ${roomAllocation.availableBeds}`);
           }
         } else {
           // Same room, check if still available (might have been at capacity)
-          if (roomAllocation.totalOccupancy >= room.bedCount) {
-            throw createError(400, `Room ${roomNumber} is fully occupied`);
+          if (roomAllocation.totalOccupancy >= selectedRoom.bedCount) {
+            throw createError(400, `Room ${selectedRoom.roomNumber} is fully occupied`);
           }
         }
 
@@ -550,13 +623,13 @@ export const updateStaffGuest = async (req, res, next) => {
         if (bedNumber) {
           const bedOccupied = await StaffGuest.findOne({
             type: 'staff',
-            roomNumber,
+            roomId: targetRoomId,
             bedNumber,
             isActive: true,
             _id: { $ne: id }
           });
           if (bedOccupied) {
-            throw createError(400, `Bed ${bedNumber} in room ${roomNumber} is already occupied`);
+            throw createError(400, `Bed ${bedNumber} in room ${selectedRoom.roomNumber} is already occupied`);
           }
         }
       }
@@ -601,7 +674,18 @@ export const updateStaffGuest = async (req, res, next) => {
         if (checkoutDate !== undefined) staffGuest.checkoutDate = checkoutDate ? new Date(checkoutDate) : null;
         staffGuest.selectedMonth = null;
       }
-      if (roomNumber !== undefined) staffGuest.roomNumber = roomNumber ? roomNumber.trim() : null;
+      // Update new hierarchy fields
+      if (hostelId !== undefined) staffGuest.hostelId = hostelId || null;
+      if (categoryId !== undefined) staffGuest.categoryId = categoryId || null;
+      if (roomId !== undefined) staffGuest.roomId = roomId || null;
+      // Update legacy fields for backward compatibility
+      if (roomNumber !== undefined) {
+        if (selectedRoom) {
+          staffGuest.roomNumber = selectedRoom.roomNumber;
+        } else {
+          staffGuest.roomNumber = roomNumber ? roomNumber.trim() : null;
+        }
+      }
       if (bedNumber !== undefined) staffGuest.bedNumber = bedNumber ? bedNumber.trim() : null;
     } else {
       if (checkinDate !== undefined) staffGuest.checkinDate = checkinDate ? new Date(checkinDate) : null;
@@ -723,7 +807,7 @@ export const checkInOutStaffGuest = async (req, res, next) => {
 export const renewMonthlyStaff = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { selectedMonth, roomNumber, bedNumber } = req.body;
+    const { selectedMonth, hostelId, categoryId, roomId, roomNumber, bedNumber } = req.body;
 
     if (!selectedMonth) {
       throw createError(400, 'Selected month is required for renewal');
@@ -758,35 +842,49 @@ export const renewMonthlyStaff = async (req, res, next) => {
       throw createError(400, 'Cannot renew for a past month. Please select a current or future month.');
     }
 
-    // Handle room allocation if provided
-    if (roomNumber) {
-      const room = await Room.findOne({ roomNumber, gender: staffGuest.gender });
-      if (!room) {
-        throw createError(404, `Room ${roomNumber} not found for ${staffGuest.gender} gender`);
-      }
-
-      // Check room availability (including staff occupancy)
-      const roomAllocation = await checkRoomAvailability(roomNumber, staffGuest.gender, room.category);
-      if (!roomAllocation.isAvailable) {
-        throw createError(400, `Room ${roomNumber} is fully occupied. Available beds: ${roomAllocation.availableBeds}`);
-      }
-
-      // Check if bed number is already taken in this room (excluding current staff)
-      if (bedNumber) {
-        const bedOccupied = await StaffGuest.findOne({
-          type: 'staff',
-          roomNumber,
-          bedNumber,
-          isActive: true,
-          _id: { $ne: id }
-        });
-        if (bedOccupied) {
-          throw createError(400, `Bed ${bedNumber} in room ${roomNumber} is already occupied`);
+    // Handle room allocation if provided (using new hierarchy)
+    let selectedRoom = null;
+    if (roomId || roomNumber) {
+      if (roomId) {
+        selectedRoom = await Room.findById(roomId).populate('hostel', 'name').populate('category', 'name');
+        if (!selectedRoom) {
+          throw createError(404, `Room not found with ID: ${roomId}`);
         }
+      } else if (roomNumber) {
+        const rooms = await Room.find({ roomNumber }).populate('hostel', 'name').populate('category', 'name');
+        if (rooms.length === 0) {
+          throw createError(404, `Room ${roomNumber} not found`);
+        }
+        selectedRoom = rooms[0];
       }
 
-      staffGuest.roomNumber = roomNumber.trim();
-      staffGuest.bedNumber = bedNumber ? bedNumber.trim() : null;
+      if (selectedRoom) {
+        // Check room availability (using roomId)
+        const roomAllocation = await checkRoomAvailability(selectedRoom._id);
+        if (!roomAllocation.isAvailable) {
+          throw createError(400, `Room ${selectedRoom.roomNumber} is fully occupied. Available beds: ${roomAllocation.availableBeds}`);
+        }
+
+        // Check if bed number is already taken in this room (excluding current staff)
+        if (bedNumber) {
+          const bedOccupied = await StaffGuest.findOne({
+            type: 'staff',
+            roomId: selectedRoom._id,
+            bedNumber,
+            isActive: true,
+            _id: { $ne: id }
+          });
+          if (bedOccupied) {
+            throw createError(400, `Bed ${bedNumber} in room ${selectedRoom.roomNumber} is already occupied`);
+          }
+        }
+
+        staffGuest.hostelId = selectedRoom.hostel._id;
+        staffGuest.categoryId = selectedRoom.category._id;
+        staffGuest.roomId = selectedRoom._id;
+        staffGuest.roomNumber = selectedRoom.roomNumber; // Legacy field
+        staffGuest.bedNumber = bedNumber ? bedNumber.trim() : null;
+      }
     }
 
     // Update selected month and reactivate

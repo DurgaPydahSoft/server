@@ -1,4 +1,6 @@
 import Room from '../models/Room.js';
+import Hostel from '../models/Hostel.js';
+import HostelCategory from '../models/HostelCategory.js';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import StaffGuest from '../models/StaffGuest.js';
@@ -8,19 +10,20 @@ import { createError } from '../utils/error.js';
 // Get all rooms with optional filtering
 export const getRooms = async (req, res, next) => {
   try {
-    const { gender, category, includeLastBill } = req.query;
+    const { hostel, category, includeLastBill } = req.query;
     const query = {};
 
-    if (gender) query.gender = gender;
+    if (hostel) query.hostel = hostel;
     if (category) query.category = category;
 
-    const rooms = await Room.find(query).sort({ roomNumber: 1 });
+    const rooms = await Room.find(query)
+      .populate('hostel', 'name')
+      .populate('category', 'name hostel')
+      .sort({ roomNumber: 1 });
     
     // Get student count and staff count for each room and optionally the last bill
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
       const studentCount = await User.countDocuments({
-        gender: room.gender,
-        category: room.category,
         roomNumber: room.roomNumber,
         role: 'student',
         hostelStatus: 'Active'
@@ -29,7 +32,6 @@ export const getRooms = async (req, res, next) => {
       // Count staff in the room
       const staffCount = await StaffGuest.countDocuments({
         type: 'staff',
-        gender: room.gender,
         roomNumber: room.roomNumber,
         isActive: true
       });
@@ -63,32 +65,20 @@ export const getRooms = async (req, res, next) => {
 // Get rooms for warden with hostel type filtering
 export const getWardenRooms = async (req, res, next) => {
   try {
-    const { gender, category, includeLastBill } = req.query;
-    const warden = req.warden;
-    
-    // Filter rooms based on warden's hostel type
+    const { hostel, category, includeLastBill } = req.query;
     const query = {};
     
-    // Map hostel type to gender
-    if (warden.hostelType) {
-      const hostelType = warden.hostelType.toLowerCase();
-      if (hostelType === 'boys') {
-        query.gender = 'Male';
-      } else if (hostelType === 'girls') {
-        query.gender = 'Female';
-      }
-    }
-    
-    if (gender) query.gender = gender;
+    if (hostel) query.hostel = hostel;
     if (category) query.category = category;
 
-    const rooms = await Room.find(query).sort({ roomNumber: 1 });
+    const rooms = await Room.find(query)
+      .populate('hostel', 'name')
+      .populate('category', 'name hostel')
+      .sort({ roomNumber: 1 });
     
     // Get student count and staff count for each room and optionally the last bill
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
       const studentCount = await User.countDocuments({
-        gender: room.gender,
-        category: room.category,
         roomNumber: room.roomNumber,
         role: 'student',
         hostelStatus: 'Active'
@@ -97,7 +87,6 @@ export const getWardenRooms = async (req, res, next) => {
       // Count staff in the room
       const staffCount = await StaffGuest.countDocuments({
         type: 'staff',
-        gender: room.gender,
         roomNumber: room.roomNumber,
         isActive: true
       });
@@ -131,16 +120,30 @@ export const getWardenRooms = async (req, res, next) => {
 // Add a new room
 export const addRoom = async (req, res, next) => {
   try {
-    const { gender, category, roomNumber, bedCount, meterType } = req.body;
+    const { hostel, category, roomNumber, bedCount, meterType } = req.body;
 
-    // Check if room already exists
-    const existingRoom = await Room.findOne({ roomNumber });
+    if (!hostel || !category || !roomNumber) {
+      throw createError(400, 'Hostel, category, and room number are required');
+    }
+
+    // Validate hostel/category existence
+    const hostelDoc = await Hostel.findById(hostel);
+    if (!hostelDoc) {
+      throw createError(400, 'Invalid hostel');
+    }
+    const categoryDoc = await HostelCategory.findOne({ _id: category, hostel });
+    if (!categoryDoc) {
+      throw createError(400, 'Invalid category for this hostel');
+    }
+
+    // Check if room already exists within hostel+category
+    const existingRoom = await Room.findOne({ hostel, category, roomNumber });
     if (existingRoom) {
-      throw createError(400, 'Room number already exists');
+      throw createError(400, 'Room number already exists in this hostel/category');
     }
 
     const room = new Room({
-      gender,
+      hostel,
       category,
       roomNumber,
       bedCount: bedCount || 1,
@@ -158,24 +161,36 @@ export const addRoom = async (req, res, next) => {
 export const updateRoom = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { gender, category, roomNumber, isActive, bedCount, meterType } = req.body;
+    const { hostel, category, roomNumber, isActive, bedCount, meterType } = req.body;
 
     const room = await Room.findById(id);
     if (!room) {
       throw createError(404, 'Room not found');
     }
 
-    // If room number is being changed, check for duplicates
-    if (roomNumber && roomNumber !== room.roomNumber) {
-      const existingRoom = await Room.findOne({ roomNumber });
+    const targetHostel = hostel || room.hostel;
+    const targetCategory = category || room.category;
+
+    // Validate hostel/category if provided
+    if (hostel && !(await Hostel.exists({ _id: hostel }))) {
+      throw createError(400, 'Invalid hostel');
+    }
+    if (category && !(await HostelCategory.exists({ _id: category, hostel: targetHostel }))) {
+      throw createError(400, 'Invalid category for this hostel');
+    }
+
+    // If room number or hostels change, check for duplicates within scope
+    const newRoomNumber = roomNumber || room.roomNumber;
+    if (newRoomNumber !== room.roomNumber || targetHostel.toString() !== room.hostel.toString() || targetCategory.toString() !== room.category.toString()) {
+      const existingRoom = await Room.findOne({ hostel: targetHostel, category: targetCategory, roomNumber: newRoomNumber, _id: { $ne: id } });
       if (existingRoom) {
-        throw createError(400, 'Room number already exists');
+        throw createError(400, 'Room number already exists in this hostel/category');
       }
     }
 
     // Update fields
-    if (gender) room.gender = gender;
-    if (category) room.category = category;
+    room.hostel = targetHostel;
+    room.category = targetCategory;
     if (roomNumber) room.roomNumber = roomNumber;
     if (typeof isActive === 'boolean') room.isActive = isActive;
     if (typeof bedCount === 'number' && bedCount > 0) room.bedCount = bedCount;
@@ -200,8 +215,6 @@ export const deleteRoom = async (req, res, next) => {
     }
 
     const studentCount = await User.countDocuments({
-      gender: room.gender,
-      category: room.category,
       roomNumber: room.roomNumber,
       role: 'student'
     });
@@ -220,106 +233,97 @@ export const deleteRoom = async (req, res, next) => {
 // Get room statistics
 export const getRoomStats = async (req, res, next) => {
   try {
-    // Get room statistics with bed counts
-    const roomStats = await Room.aggregate([
-      {
-        $group: {
-          _id: {
-            gender: '$gender',
-            category: '$category'
-          },
-          totalRooms: { $sum: 1 },
-          activeRooms: {
-            $sum: { $cond: ['$isActive', 1, 0] }
-          },
-          totalBeds: { $sum: '$bedCount' }
-        }
-      },
-      {
-        $group: {
-          _id: '$_id.gender',
-          categories: {
-            $push: {
-              category: '$_id.category',
-              totalRooms: '$totalRooms',
-              activeRooms: '$activeRooms',
-              totalBeds: '$totalBeds'
-            }
-          },
-          totalRooms: { $sum: '$totalRooms' },
-          activeRooms: { $sum: '$activeRooms' },
-          totalBeds: { $sum: '$totalBeds' }
-        }
-      }
-    ]);
+    const rooms = await Room.find({})
+      .populate('hostel', 'name')
+      .populate('category', 'name hostel');
 
-    // Get student counts (filled beds) by gender and category
-    const studentStats = await User.aggregate([
-      {
-        $match: { role: 'student' }
-      },
-      {
-        $group: {
-          _id: {
-            gender: '$gender',
-            category: '$category'
-          },
-          filledBeds: { $sum: 1 }
-        }
-      },
-      {
-        $group: {
-          _id: '$_id.gender',
-          categories: {
-            $push: {
-              category: '$_id.category',
-              filledBeds: '$filledBeds'
-            }
-          },
-          filledBeds: { $sum: '$filledBeds' }
-        }
-      }
-    ]);
+    // Map stats by hostel
+    const statsByHostel = new Map();
 
-    // Combine room and student stats
-    const combinedStats = roomStats.map(roomStat => {
-      const studentStat = studentStats.find(s => s._id === roomStat._id);
-      
-      // Merge category stats
-      const mergedCategories = roomStat.categories.map(roomCategory => {
-        const studentCategory = studentStat?.categories.find(s => s.category === roomCategory.category);
-        return {
-          ...roomCategory,
-          filledBeds: studentCategory?.filledBeds || 0,
-          availableBeds: roomCategory.totalBeds - (studentCategory?.filledBeds || 0)
-        };
+    for (const room of rooms) {
+      const hostelId = room.hostel?._id?.toString() || 'unassigned';
+      const hostelName = room.hostel?.name || 'Unassigned';
+      const categoryId = room.category?._id?.toString() || 'uncategorized';
+      const categoryName = room.category?.name || 'Uncategorized';
+
+      // Get occupancy
+      const studentCount = await User.countDocuments({
+        roomNumber: room.roomNumber,
+        role: 'student',
+        hostelStatus: 'Active'
       });
+      const staffCount = await StaffGuest.countDocuments({
+        type: 'staff',
+        roomNumber: room.roomNumber,
+        isActive: true
+      });
+      const filledBeds = studentCount + staffCount;
 
-      return {
-        gender: roomStat._id,
-        totalRooms: roomStat.totalRooms,
-        activeRooms: roomStat.activeRooms,
-        totalBeds: roomStat.totalBeds,
-        filledBeds: studentStat?.filledBeds || 0,
-        availableBeds: roomStat.totalBeds - (studentStat?.filledBeds || 0),
-        categories: mergedCategories
-      };
-    });
+      if (!statsByHostel.has(hostelId)) {
+        statsByHostel.set(hostelId, {
+          hostelId,
+          hostelName,
+          totalRooms: 0,
+          activeRooms: 0,
+          totalBeds: 0,
+          filledBeds: 0,
+          categories: new Map()
+        });
+      }
+      const hostelEntry = statsByHostel.get(hostelId);
+      hostelEntry.totalRooms += 1;
+      hostelEntry.activeRooms += room.isActive ? 1 : 0;
+      hostelEntry.totalBeds += room.bedCount || 0;
+      hostelEntry.filledBeds += filledBeds;
 
-    // Calculate overall totals
-    const overallStats = {
-      totalRooms: combinedStats.reduce((sum, stat) => sum + stat.totalRooms, 0),
-      activeRooms: combinedStats.reduce((sum, stat) => sum + stat.activeRooms, 0),
-      totalBeds: combinedStats.reduce((sum, stat) => sum + stat.totalBeds, 0),
-      filledBeds: combinedStats.reduce((sum, stat) => sum + stat.filledBeds, 0),
-      availableBeds: combinedStats.reduce((sum, stat) => sum + stat.availableBeds, 0)
-    };
+      if (!hostelEntry.categories.has(categoryId)) {
+        hostelEntry.categories.set(categoryId, {
+          categoryId,
+          categoryName,
+          totalRooms: 0,
+          activeRooms: 0,
+          totalBeds: 0,
+          filledBeds: 0
+        });
+      }
+      const catEntry = hostelEntry.categories.get(categoryId);
+      catEntry.totalRooms += 1;
+      catEntry.activeRooms += room.isActive ? 1 : 0;
+      catEntry.totalBeds += room.bedCount || 0;
+      catEntry.filledBeds += filledBeds;
+    }
+
+    const combinedStats = Array.from(statsByHostel.values()).map(h => ({
+      hostelId: h.hostelId,
+      hostelName: h.hostelName,
+      totalRooms: h.totalRooms,
+      activeRooms: h.activeRooms,
+      totalBeds: h.totalBeds,
+      filledBeds: h.filledBeds,
+      availableBeds: h.totalBeds - h.filledBeds,
+      categories: Array.from(h.categories.values()).map(c => ({
+        ...c,
+        availableBeds: c.totalBeds - c.filledBeds
+      }))
+    }));
+
+    const overallStats = combinedStats.reduce(
+      (acc, h) => {
+        acc.totalRooms += h.totalRooms;
+        acc.activeRooms += h.activeRooms;
+        acc.totalBeds += h.totalBeds;
+        acc.filledBeds += h.filledBeds;
+        acc.availableBeds += h.availableBeds;
+        return acc;
+      },
+      { totalRooms: 0, activeRooms: 0, totalBeds: 0, filledBeds: 0, availableBeds: 0 }
+    );
 
     res.json({
       success: true,
       data: {
         overall: overallStats,
-        byGender: combinedStats
+        byHostel: combinedStats
       }
     });
   } catch (error) {
@@ -343,8 +347,6 @@ export const getRoomStudents = async (req, res) => {
 
     // Find all students in this room
     const students = await User.find({
-      gender: room.gender,
-      category: room.category,
       roomNumber: room.roomNumber,
       role: 'student',
       hostelStatus: 'Active'
@@ -357,7 +359,6 @@ export const getRoomStudents = async (req, res) => {
     const StaffGuest = (await import('../models/StaffGuest.js')).default;
     const staff = await StaffGuest.find({
       type: 'staff',
-      gender: room.gender,
       roomNumber: room.roomNumber,
       isActive: true
     })
@@ -671,10 +672,18 @@ export const getElectricityBills = async (req, res, next) => {
 // Get electricity bills for a student's room
 export const getStudentRoomBills = async (req, res, next) => {
   try {
-    const { _id, roomNumber, gender, category } = req.user;
+    const { _id, room: roomId, roomNumber } = req.user;
 
-    // Find the room
-    const room = await Room.findOne({ roomNumber, gender, category });
+    // Prefer the new room reference; fall back to legacy roomNumber if still present
+    const roomQuery = roomId ? { _id: roomId } : roomNumber ? { roomNumber } : null;
+    if (!roomQuery) {
+      return res.status(404).json({
+        success: false,
+        message: 'Room not found for this student'
+      });
+    }
+
+    const room = await Room.findOne(roomQuery);
     if (!room) {
       return res.status(404).json({ 
         success: false, 
@@ -685,11 +694,9 @@ export const getStudentRoomBills = async (req, res, next) => {
     // Sort bills by month in descending order
     const sortedBills = room.electricityBills.sort((a, b) => b.month.localeCompare(a.month));
 
-    // Get current student count for the room
+    // Get current student count for the room (new room reference)
     const studentsInRoom = await User.countDocuments({
-      roomNumber: room.roomNumber,
-      gender: room.gender,
-      category: room.category,
+      room: room._id,
       role: 'student',
       hostelStatus: 'Active'
     });
@@ -907,9 +914,7 @@ export const getRoomPaymentStats = async (req, res) => {
       {
         $group: {
           _id: {
-            roomNumber: '$roomNumber',
-            gender: '$gender',
-            category: '$category'
+            roomNumber: '$roomNumber'
           },
           paymentStatus: { $first: '$electricityBills.paymentStatus' },
           billAmount: { $first: '$electricityBills.total' },
@@ -943,9 +948,7 @@ export const getRoomPaymentStats = async (req, res) => {
       {
         $group: {
           _id: {
-            roomNumber: '$roomNumber',
-            gender: '$gender',
-            category: '$category'
+            roomNumber: '$roomNumber'
           },
           paymentStatus: { $first: '$electricityBills.paymentStatus' },
           billAmount: { $first: '$electricityBills.total' },
@@ -1026,9 +1029,7 @@ export const getCurrentMonthPayments = async (req, res) => {
       {
         $group: {
           _id: {
-            roomNumber: '$roomNumber',
-            gender: '$gender',
-            category: '$category'
+            roomNumber: '$roomNumber'
           },
           paymentStatus: { $first: '$electricityBills.paymentStatus' },
           billAmount: { $first: '$electricityBills.total' },
@@ -1078,9 +1079,7 @@ export const getPreviousMonthPayments = async (req, res) => {
       {
         $group: {
           _id: {
-            roomNumber: '$roomNumber',
-            gender: '$gender',
-            category: '$category'
+            roomNumber: '$roomNumber'
           },
           paymentStatus: { $first: '$electricityBills.paymentStatus' },
           billAmount: { $first: '$electricityBills.total' },
@@ -1112,14 +1111,18 @@ export const getPreviousMonthPayments = async (req, res) => {
 }; 
 
 // Get rooms with bed availability for student registration
-// Get all distinct categories from rooms
+// Get categories by hostel
 export const getCategories = async (req, res, next) => {
   try {
-    const categories = await Room.distinct('category', { isActive: true });
+    const { hostel } = req.query;
+    if (!hostel) {
+      return res.status(400).json({ success: false, message: 'Hostel is required' });
+    }
+    const categories = await HostelCategory.find({ hostel, isActive: true }).sort({ name: 1 });
     
     res.json({
       success: true,
-      data: categories.sort()
+      data: categories
     });
   } catch (error) {
     console.error('Error fetching categories:', error);
@@ -1132,19 +1135,20 @@ export const getCategories = async (req, res, next) => {
 
 export const getRoomsWithBedAvailability = async (req, res, next) => {
   try {
-    const { gender, category } = req.query;
+    const { hostel, category } = req.query;
     const query = {};
 
-    if (gender) query.gender = gender;
+    if (hostel) query.hostel = hostel;
     if (category) query.category = category;
 
-    const rooms = await Room.find(query).sort({ roomNumber: 1 });
+    const rooms = await Room.find(query)
+      .populate('hostel', 'name')
+      .populate('category', 'name hostel')
+      .sort({ roomNumber: 1 });
     
     // Get student count and staff count for each room
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
       const studentCount = await User.countDocuments({
-        gender: room.gender,
-        category: room.category,
         roomNumber: room.roomNumber,
         role: 'student',
         hostelStatus: 'Active'
@@ -1153,7 +1157,6 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
       // Count staff in the room (staff can be in any category room, but must match gender)
       const staffCount = await StaffGuest.countDocuments({
         type: 'staff',
-        gender: room.gender,
         roomNumber: room.roomNumber,
         isActive: true
       });

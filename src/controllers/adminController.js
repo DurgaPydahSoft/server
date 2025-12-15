@@ -16,6 +16,8 @@ import Branch from '../models/Branch.js';
 import Course from '../models/Course.js';
 import Counter from '../models/Counter.js';
 import axios from 'axios';
+import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
+import { extractSQLIds, ensureMongoDBCourse, ensureMongoDBBranch } from '../utils/courseBranchResolver.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -95,10 +97,45 @@ export const addStudent = async (req, res, next) => {
       concession = 0
     } = req.body;
 
-    // Check if student already exists
+    // Check if student already exists in MongoDB
     const existingStudent = await User.findOne({ rollNumber });
     if (existingStudent) {
       throw createError(400, 'Student with this roll number already exists');
+    }
+
+    // Validate student exists in SQL database
+    try {
+      // Test SQL connection first
+      const connectionTest = await testSQLConnection();
+      if (!connectionTest.success) {
+        throw createError(503, 'SQL database connection failed. Cannot proceed with registration.', connectionTest.error);
+      }
+
+      // Fetch student from SQL using rollNumber (PIN) or admission number
+      const sqlResult = await fetchStudentByIdentifier(rollNumber);
+      
+      if (!sqlResult.success) {
+        // Also try with admission number if provided in request
+        const admissionNumber = req.body.admissionNumber;
+        if (admissionNumber && admissionNumber !== rollNumber) {
+          const sqlResultAdmission = await fetchStudentByIdentifier(admissionNumber);
+          if (!sqlResultAdmission.success) {
+            throw createError(404, 'Student not found in central database. Please verify the PIN number or Admission number.');
+          }
+        } else {
+          throw createError(404, 'Student not found in central database. Please verify the PIN number or Admission number.');
+        }
+      }
+      
+      console.log('✅ Student validated in SQL database');
+    } catch (error) {
+      // If it's already a createError, re-throw it
+      if (error.statusCode) {
+        throw error;
+      }
+      // Otherwise, wrap it
+      console.error('❌ SQL validation error:', error);
+      throw createError(500, 'Error validating student in SQL database', error.message);
     }
 
     // Validate room number based on gender and category - check against actual Room model
@@ -163,7 +200,7 @@ export const addStudent = async (req, res, next) => {
     try {
       // Fetch fee structure for the category and academic year
       const FeeStructure = (await import('../models/FeeStructure.js')).default;
-      const feeStructure = await FeeStructure.getFeeStructure(academicYear, course, year, category);
+      const feeStructure = await FeeStructure.getFeeStructure(academicYear, course, branch, year, category);
       
       if (feeStructure) {
         console.log('📊 Fee structure found:', feeStructure);
@@ -261,6 +298,37 @@ export const addStudent = async (req, res, next) => {
       concessionRequestedAt: null
     };
     
+    // Handle SQL course/branch IDs - ensure MongoDB documents exist
+    let finalCourseId = course;
+    let finalBranchId = branch;
+    let sqlCourseId = null;
+    let sqlBranchId = null;
+    
+    // Extract SQL IDs if course/branch are from SQL
+    const sqlIds = extractSQLIds(course, branch);
+    sqlCourseId = sqlIds.sqlCourseId;
+    sqlBranchId = sqlIds.sqlBranchId;
+    
+    // If course is from SQL, ensure MongoDB document exists
+    if (sqlCourseId) {
+      const mongoCourseId = await ensureMongoDBCourse(sqlCourseId);
+      if (mongoCourseId) {
+        finalCourseId = mongoCourseId;
+      } else {
+        throw createError(400, `Failed to resolve course from SQL database`);
+      }
+    }
+    
+    // If branch is from SQL, ensure MongoDB document exists
+    if (sqlBranchId) {
+      const mongoBranchId = await ensureMongoDBBranch(sqlBranchId, sqlCourseId || (course && course.toString().startsWith('sql_') ? parseInt(course.toString().replace('sql_', '')) : null));
+      if (mongoBranchId) {
+        finalBranchId = mongoBranchId;
+      } else {
+        throw createError(400, `Failed to resolve branch from SQL database`);
+      }
+    }
+    
     // If concession is set, track who requested it
     if (concessionAmount > 0 && req.admin) {
       concessionData.concessionRequestedBy = req.admin._id;
@@ -282,9 +350,12 @@ export const addStudent = async (req, res, next) => {
       password: generatedPassword,
       role: 'student',
       gender,
-      course,
+      course: finalCourseId,
       year,
-      branch,
+      branch: finalBranchId,
+      // Store SQL IDs for reference
+      ...(sqlCourseId && { sqlCourseId }),
+      ...(sqlBranchId && { sqlBranchId }),
       category,
       mealType,
       parentPermissionForOuting: parentPermissionForOuting !== undefined ? parentPermissionForOuting : true,
@@ -1250,7 +1321,7 @@ export const bulkAddStudents = async (req, res, next) => {
 // Get all students with pagination and filters
 export const getStudents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus } = req.query;
+    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel } = req.query;
     const query = { role: 'student' };
 
     // Add filters if provided
@@ -1263,6 +1334,7 @@ export const getStudents = async (req, res, next) => {
     if (academicYear) query.academicYear = academicYear;
     if (year) query.year = parseInt(year); // Convert to number for proper filtering
     if (hostelStatus) query.hostelStatus = hostelStatus;
+    if (hostel) query.hostel = hostel; // Filter by hostel ObjectId
 
     // Add search functionality if search term is provided
     if (search) {
@@ -1275,10 +1347,13 @@ export const getStudents = async (req, res, next) => {
 
     console.log('Query:', query); // Debug log
 
+    // Note: After SQL migration, course and branch are stored as strings (names), not ObjectId references
+    // So we don't populate them - they're already strings
+    // However, we DO need to populate hostel and hostelCategory for fee structure matching
     const students = await User.find(query)
       .select('-password')
-      .populate('course', 'name code')
-      .populate('branch', 'name code')
+      .populate('hostel', '_id name') // Populate hostel for fee structure matching
+      .populate('hostelCategory', '_id name') // Populate hostelCategory for fee structure matching
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
@@ -1567,6 +1642,7 @@ export const updateStudent = async (req, res, next) => {
             const feeStructure = await FeeStructure.getFeeStructure(
               student.academicYear,
               student.course,
+              student.branch,
               student.year,
               student.category
             );
@@ -1597,6 +1673,7 @@ export const updateStudent = async (req, res, next) => {
             const feeStructure = await FeeStructure.getFeeStructure(
               student.academicYear,
               student.course,
+              student.branch,
               student.year,
               student.category
             );
@@ -2226,6 +2303,7 @@ export const renewBatches = async (req, res, next) => {
           const feeStructure = await FeeStructure.getFeeStructure(
             toAcademicYear,
             student.course,
+            student.branch,
             newYear,
             student.category
           );
@@ -2576,11 +2654,16 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
       filters: req.query
     });
 
-    // Build query based on principal's assigned course
+    // Build query based on principal's assigned course (now a string)
     const query = {
-      course: principal.course,
+      course: principal.course, // Direct string comparison
       role: 'student'
     };
+    
+    // Add branch filter if principal has a specific branch assigned
+    if (principal.branch) {
+      query.branch = principal.branch;
+    }
 
     // Add search filter
     if (search) {
@@ -2606,10 +2689,8 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
     const totalStudents = await User.countDocuments(query);
     const totalPages = Math.ceil(totalStudents / parseInt(limit));
 
-    // Fetch students with pagination and population
+    // Fetch students with pagination (no population needed - course/branch are now strings)
     const students = await User.find(query)
-      .populate('course', 'name code')
-      .populate('branch', 'name code')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
@@ -3277,11 +3358,10 @@ export const getApprovedConcessions = async (req, res, next) => {
     };
     
     // Get all students with approved concessions
+    // Note: After SQL migration, course and branch are stored as strings, not ObjectId references
     let students;
     try {
       students = await User.find(query)
-        .populate('course', 'name')
-        .populate('branch', 'name')
         .populate('concessionApprovedBy', 'username name')
         .populate('concessionRequestedBy', 'username name')
         .populate('concessionHistory.performedBy', 'username name')
@@ -3297,14 +3377,18 @@ export const getApprovedConcessions = async (req, res, next) => {
     const FeeStructure = (await import('../models/FeeStructure.js')).default;
     const studentsWithFeeInfo = await Promise.allSettled(students.map(async (student) => {
       let originalTotalFee = 0;
-      const courseId = student.course?._id || student.course || null;
-      const courseName = student.course?.name || 'N/A';
+      // After SQL migration: course is stored as string (course name), not ObjectId
+      const courseName = typeof student.course === 'string' ? student.course : (student.course?.name || student.course || 'N/A');
       
       try {
-        if (student.academicYear && courseId && student.year && student.category) {
+        // After SQL migration: courseName is the course name (string)
+        // FeeStructure.getFeeStructure expects: academicYear, course (name), branch, year, category
+        const branchName = typeof student.branch === 'string' ? student.branch : (student.branch?.name || student.branch || null);
+        if (student.academicYear && courseName && courseName !== 'N/A' && student.year && student.category) {
           const feeStructure = await FeeStructure.getFeeStructure(
             student.academicYear,
-            courseId,
+            courseName, // Course name (string)
+            branchName, // Branch name (string) or null
             student.year,
             student.category
           );
@@ -3318,8 +3402,7 @@ export const getApprovedConcessions = async (req, res, next) => {
       
       return {
         ...student,
-        courseId: courseId,
-        course: courseName,
+        course: courseName, // Return course as string (course name)
         originalTotalFee,
         afterConcessionFee: student.totalCalculatedFee || (originalTotalFee > 0 ? originalTotalFee - (student.concession || 0) : 0)
       };
@@ -3360,11 +3443,10 @@ export const getConcessionApprovals = async (req, res, next) => {
     };
     
     // Get all students with pending concessions (no pagination for now, can add later if needed)
+    // Note: After SQL migration, course and branch are stored as strings, not ObjectId references
     let students;
     try {
       students = await User.find(query)
-        .populate('course', 'name')
-        .populate('branch', 'name')
         .populate('concessionRequestedBy', 'username name')
         .populate('concessionHistory.performedBy', 'username name')
         .sort({ concessionRequestedAt: -1, createdAt: -1 })
@@ -3381,14 +3463,18 @@ export const getConcessionApprovals = async (req, res, next) => {
     const FeeStructure = (await import('../models/FeeStructure.js')).default;
     const studentsWithFeeInfo = await Promise.allSettled(students.map(async (student) => {
       let originalTotalFee = 0;
-      const courseId = student.course?._id || student.course || null;
-      const courseName = student.course?.name || 'N/A';
+      // After SQL migration: course is stored as string (course name), not ObjectId
+      const courseName = typeof student.course === 'string' ? student.course : (student.course?.name || student.course || 'N/A');
       
       try {
-        if (student.academicYear && courseId && student.year && student.category) {
+        // After SQL migration: courseName is the course name (string)
+        // FeeStructure.getFeeStructure expects: academicYear, course (name), branch, year, category
+        const branchName = typeof student.branch === 'string' ? student.branch : (student.branch?.name || student.branch || null);
+        if (student.academicYear && courseName && courseName !== 'N/A' && student.year && student.category) {
           const feeStructure = await FeeStructure.getFeeStructure(
             student.academicYear,
-            courseId,
+            courseName, // Course name (string)
+            branchName, // Branch name (string) or null
             student.year,
             student.category
           );
@@ -3402,8 +3488,7 @@ export const getConcessionApprovals = async (req, res, next) => {
       
       return {
         ...student,
-        courseId: courseId,
-        course: courseName,
+        course: courseName, // Return course as string (course name)
         originalTotalFee,
         afterConcessionFee: student.totalCalculatedFee || (originalTotalFee > 0 ? originalTotalFee - (student.concession || 0) : 0)
       };
@@ -3487,6 +3572,7 @@ export const approveConcession = async (req, res, next) => {
         const feeStructure = await FeeStructure.getFeeStructure(
           student.academicYear,
           student.course,
+          student.branch,
           student.year,
           student.category
         );
@@ -3588,6 +3674,7 @@ export const rejectConcession = async (req, res, next) => {
           const feeStructure = await FeeStructure.getFeeStructure(
             student.academicYear,
             student.course,
+            student.branch,
             student.year,
             student.category
           );
@@ -3626,6 +3713,7 @@ export const rejectConcession = async (req, res, next) => {
           const feeStructure = await FeeStructure.getFeeStructure(
             student.academicYear,
             student.course,
+            student.branch,
             student.year,
             student.category
           );
@@ -3669,6 +3757,7 @@ export const rejectConcession = async (req, res, next) => {
         const feeStructure = await FeeStructure.getFeeStructure(
           student.academicYear,
           student.course,
+          student.branch,
           student.year,
           student.category
         );

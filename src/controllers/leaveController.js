@@ -1501,11 +1501,16 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       principalCourseName: principal.course?.name
     });
 
-    // First, get all students who belong to the principal's course
-    const studentsInCourse = await User.find({ 
-      course: principal.course._id || principal.course,
+    // First, get all students who belong to the principal's course (now uses string comparison)
+    const studentQuery = { 
+      course: principal.course, // Direct string comparison
       role: 'student'
-    }).select('_id');
+    };
+    // Add branch filter if principal has a specific branch assigned
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
+    const studentsInCourse = await User.find(studentQuery).select('_id');
 
     const studentIds = studentsInCourse.map(s => s._id);
     console.log(`🎓 Found ${studentIds.length} students in principal's course`);
@@ -1892,7 +1897,7 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     const principalId = req.principal._id;
     
     // Get principal's assigned course
-    const principal = await Admin.findById(principalId).select('course').populate('course', 'name code');
+    const principal = await Admin.findById(principalId).select('course branch');
     console.log('🔍 Raw principal data:', principal);
     
     if (!principal) {
@@ -1903,14 +1908,10 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       throw createError(400, 'Principal is not assigned to any course');
     }
     
-    // Debug: Let's also check what courses exist in the system
-    const allCourses = await Course.find({}).select('_id name code');
-    console.log('🔍 All courses in system:', allCourses);
-    
     console.log('🔍 Principal details:', {
       id: principal._id,
-      course: principal.course,
-      courseId: principal.course._id || principal.course
+      course: principal.course, // Now a string (course name)
+      branch: principal.branch // Optional branch filter
     });
     
     const query = {};
@@ -1971,15 +1972,21 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       });
     }
 
-    // Filter leaves to only show students from principal's assigned course
-    const principalCourseId = principal.course._id || principal.course;
+    // Filter leaves to only show students from principal's assigned course (now uses string comparison)
     const filteredLeaves = allLeaves.filter(leave => {
-      const studentCourseId = leave.student?.course?._id || leave.student?.course;
-      const matches = studentCourseId && studentCourseId.toString() === principalCourseId.toString();
+      // Extract student course name (could be object or string)
+      const studentCourse = leave.student?.course?.name || leave.student?.course;
+      const matches = studentCourse === principal.course; // Direct string comparison
+      
+      // Also check branch if principal has a specific branch assigned
+      if (matches && principal.branch) {
+        const studentBranch = leave.student?.branch?.name || leave.student?.branch;
+        return studentBranch === principal.branch;
+      }
       
       // Only log first few for debugging
       if (allLeaves.indexOf(leave) < 3) {
-        console.log(`🔍 Leave ${leave._id}: Student course ${studentCourseId} vs Principal course ${principalCourseId} = ${matches}`);
+        console.log(`🔍 Leave ${leave._id}: Student course ${studentCourse} vs Principal course ${principal.course} = ${matches}`);
       }
       
       return matches;
@@ -2003,7 +2010,7 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
         totalRequests: filteredLeaves.length,
         debug: {
           principalCourse: principal.course,
-          principalCourseId: principalCourseId,
+          principalBranch: principal.branch,
           totalLeavesFound: allLeaves.length,
           filteredLeavesCount: filteredLeaves.length,
           paginatedLeavesCount: paginatedLeaves.length
@@ -2026,7 +2033,7 @@ export const principalApproveLeave = async (req, res, next) => {
     console.log('Request body:', req.body);
 
     // Get principal's assigned course
-    const principal = await Admin.findById(principalId).select('course').populate('course', 'name code');
+    const principal = await Admin.findById(principalId).select('course branch');
     if (!principal || !principal.course) {
       throw createError(400, 'Principal is not assigned to any course');
     }
@@ -2034,11 +2041,7 @@ export const principalApproveLeave = async (req, res, next) => {
     const leave = await Leave.findById(leaveId)
       .populate({
         path: 'student',
-        select: 'name parentPhone gender course',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: 'name parentPhone gender course branch'
       });
       
     if (!leave) {
@@ -2050,26 +2053,29 @@ export const principalApproveLeave = async (req, res, next) => {
       status: leave.status,
       applicationType: leave.applicationType,
       studentName: leave.student?.name,
-      studentCourse: leave.student?.course?._id || leave.student?.course,
+      studentCourse: leave.student?.course,
       principalCourse: principal.course
     });
 
-    // Check if principal is assigned to the student's course
-    const studentCourseId = leave.student.course._id || leave.student.course;
-    const principalCourseId = principal.course._id || principal.course;
+    // Check if principal is assigned to the student's course (now uses string comparison)
+    const studentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
     
     console.log('🔍 Course comparison:', {
-      studentCourseId: studentCourseId,
-      studentCourseIdType: typeof studentCourseId,
-      principalCourseId: principalCourseId,
-      principalCourseIdType: typeof principalCourseId,
-      studentCourseIdString: studentCourseId?.toString(),
-      principalCourseIdString: principalCourseId?.toString(),
-      matches: studentCourseId?.toString() === principalCourseId?.toString()
+      studentCourse: studentCourse,
+      principalCourse: principal.course,
+      matches: studentCourse === principal.course
     });
     
-    if (studentCourseId?.toString() !== principalCourseId?.toString()) {
+    if (studentCourse !== principal.course) {
       throw createError(403, 'You are not authorized to approve leave requests for this student\'s course');
+    }
+    
+    // Also check branch if principal has a specific branch assigned
+    if (principal.branch) {
+      const studentBranch = typeof leave.student.branch === 'object' ? leave.student.branch.name : leave.student.branch;
+      if (studentBranch !== principal.branch) {
+        throw createError(403, 'You are not authorized to approve leave requests for this student\'s branch');
+      }
     }
 
     if (leave.applicationType === 'Stay in Hostel') {
@@ -2138,7 +2144,7 @@ export const principalRejectLeave = async (req, res, next) => {
     const principalId = req.principal._id;
 
     // Get principal's assigned course
-    const principal = await Admin.findById(principalId).select('course').populate('course', 'name code');
+    const principal = await Admin.findById(principalId).select('course branch');
     if (!principal || !principal.course) {
       throw createError(400, 'Principal is not assigned to any course');
     }
@@ -2146,33 +2152,32 @@ export const principalRejectLeave = async (req, res, next) => {
     const leave = await Leave.findById(leaveId)
       .populate({
         path: 'student',
-        select: 'name parentPhone gender course',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: 'name parentPhone gender course branch'
       });
       
     if (!leave) {
       throw createError(404, 'Leave request not found');
     }
 
-    // Check if principal is assigned to the student's course
-    const studentCourseId = leave.student.course._id || leave.student.course;
-    const principalCourseId = principal.course._id || principal.course;
+    // Check if principal is assigned to the student's course (now uses string comparison)
+    const studentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
     
     console.log('🔍 Course comparison in reject:', {
-      studentCourseId: studentCourseId,
-      studentCourseIdType: typeof studentCourseId,
-      principalCourseId: principalCourseId,
-      principalCourseIdType: typeof principalCourseId,
-      studentCourseIdString: studentCourseId?.toString(),
-      principalCourseIdString: principalCourseId?.toString(),
-      matches: studentCourseId?.toString() === principalCourseId?.toString()
+      studentCourse: studentCourse,
+      principalCourse: principal.course,
+      matches: studentCourse === principal.course
     });
     
-    if (studentCourseId?.toString() !== principalCourseId?.toString()) {
+    if (studentCourse !== principal.course) {
       throw createError(403, 'You are not authorized to reject leave requests for this student\'s course');
+    }
+    
+    // Also check branch if principal has a specific branch assigned
+    if (principal.branch) {
+      const studentBranch = typeof leave.student.branch === 'object' ? leave.student.branch.name : leave.student.branch;
+      if (studentBranch !== principal.branch) {
+        throw createError(403, 'You are not authorized to reject leave requests for this student\'s branch');
+      }
     }
 
     if (leave.applicationType === 'Stay in Hostel') {
@@ -2240,7 +2245,7 @@ export const principalDecision = async (req, res, next) => {
     const principalId = req.principal._id || req.user.id;
 
     // Get principal details
-    const principal = await Admin.findById(principalId).populate('course', 'name');
+    const principal = await Admin.findById(principalId).select('course branch');
     if (!principal) {
       throw createError(404, 'Principal not found');
     }
@@ -2248,8 +2253,7 @@ export const principalDecision = async (req, res, next) => {
     // Find the stay in hostel request
     const request = await Leave.findById(actualLeaveId).populate({
       path: 'student',
-      select: 'name rollNumber course',
-      populate: { path: 'course', select: 'name' }
+      select: 'name rollNumber course branch'
     });
     
     if (!request) {
@@ -2261,12 +2265,19 @@ export const principalDecision = async (req, res, next) => {
       throw createError(400, 'Invalid request type');
     }
 
-    // Verify the student belongs to the principal's course
-    const studentCourseId = request.student?.course?._id || request.student?.course;
-    const principalCourseId = principal.course?._id || principal.course;
+    // Verify the student belongs to the principal's course (now uses string comparison)
+    const studentCourse = typeof request.student?.course === 'object' ? request.student.course.name : request.student?.course;
     
-    if (studentCourseId && principalCourseId && studentCourseId.toString() !== principalCourseId.toString()) {
+    if (studentCourse && principal.course && studentCourse !== principal.course) {
       throw createError(403, 'You can only make decisions for students in your assigned course');
+    }
+    
+    // Also check branch if principal has a specific branch assigned
+    if (principal.branch) {
+      const studentBranch = typeof request.student?.branch === 'object' ? request.student.branch.name : request.student?.branch;
+      if (studentBranch && studentBranch !== principal.branch) {
+        throw createError(403, 'You can only make decisions for students in your assigned branch');
+      }
     }
 
     // Verify the request is in a status that allows principal decision

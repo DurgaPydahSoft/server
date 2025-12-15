@@ -41,7 +41,7 @@ const migrateConcessionLogic = async () => {
         console.log(`   Current calculated fees: T1: ₹${student.calculatedTerm1Fee}, T2: ₹${student.calculatedTerm2Fee}, T3: ₹${student.calculatedTerm3Fee}`);
         
         // Get fee structure for the student
-        const feeStructure = await FeeStructure.getFeeStructure(student.academicYear, student.course, student.year, student.category);
+        const feeStructure = await FeeStructure.getFeeStructure(student.academicYear, student.course, student.branch, student.year, student.category);
         
         if (!feeStructure) {
           console.log(`   ⚠️ No fee structure found for category: ${student.category}, academic year: ${student.academicYear}`);

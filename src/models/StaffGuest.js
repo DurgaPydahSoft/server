@@ -71,9 +71,29 @@ const staffGuestSchema = new mongoose.Schema({
     type: String, // Format: YYYY-MM (e.g., "2024-03")
     default: null // Only applicable when stayType is 'monthly' and type is 'staff'
   },
+  // New hostel hierarchy fields
+  hostelId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Hostel',
+    default: null,
+    index: true
+  },
+  categoryId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostelCategory',
+    default: null,
+    index: true
+  },
+  roomId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room',
+    default: null,
+    index: true
+  },
+  // Legacy fields (kept for backward compatibility)
   roomNumber: {
     type: String,
-    default: null // Room allocation for staff
+    default: null // Room allocation for staff (deprecated, use roomId)
   },
   bedNumber: {
     type: String,
@@ -131,8 +151,10 @@ staffGuestSchema.index({ type: 1 });
 staffGuestSchema.index({ phoneNumber: 1 });
 staffGuestSchema.index({ isActive: 1 });
 staffGuestSchema.index({ createdAt: -1 });
-staffGuestSchema.index({ roomNumber: 1 });
-staffGuestSchema.index({ type: 1, roomNumber: 1 });
+staffGuestSchema.index({ roomNumber: 1 }); // Legacy index
+staffGuestSchema.index({ type: 1, roomNumber: 1 }); // Legacy index
+staffGuestSchema.index({ hostelId: 1, categoryId: 1, roomId: 1 });
+staffGuestSchema.index({ roomId: 1, isActive: 1 });
 
 // Virtual for full name with type
 staffGuestSchema.virtual('displayName').get(function() {

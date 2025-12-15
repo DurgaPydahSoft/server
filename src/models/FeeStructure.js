@@ -5,126 +5,90 @@ const feeStructureSchema = new mongoose.Schema({
     type: String,
     required: true,
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         // Validate academic year format (e.g., 2022-2023)
         if (!/^\d{4}-\d{4}$/.test(v)) return false;
         const [start, end] = v.split('-').map(Number);
         return end === start + 1;
       },
-      message: props => `${props.value} is not a valid academic year format! Use format YYYY-YYYY with a 1-year difference (e.g., 2022-2023)`
-    }
+      message: (props) =>
+        `${props.value} is not a valid academic year format! Use format YYYY-YYYY with a 1-year difference (e.g., 2022-2023)`,
+    },
   },
-  course: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
-    required: true
-  },
-  year: {
-    type: Number,
-    required: true,
-    min: 1,
-    max: 10,
-    validate: {
-      validator: async function(v) {
-        if (!this.course) return true;
-        const Course = mongoose.model('Course');
-        const course = await Course.findById(this.course);
-        if (!course) return false;
-        return v >= 1 && v <= course.duration;
-      },
-      message: 'Year of study must be within the course duration'
-    }
-  },
+
+  // SQL course and branch names (strings)
+  course: { type: String, required: true, trim: true },
+  branch: { type: String, trim: true }, // optional branch
+  year: { type: Number, required: true, min: 1, max: 10 },
+
+  // New scope: hostel/category selectors (optional)
+  hostelId: { type: mongoose.Schema.Types.ObjectId, ref: 'Hostel', default: null },
+  categoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'HostelCategory', default: null },
+
+  // New fee rule shape
+  feeType: { type: String, required: true, trim: true },
+  amount: { type: Number, required: true, min: 0 },
+
+  // Legacy fields for backward compatibility (term fees + legacy category enum)
   category: {
-    type: String,
-    required: true,
-    enum: ['A+', 'A', 'B+', 'B']
+    type: String, // legacy category kept for backward compatibility; no enum restriction
   },
-  term1Fee: {
-    type: Number,
-    required: true,
-    min: 0,
-    validate: {
-      validator: function(v) {
-        return v >= 0;
-      },
-      message: 'Term 1 fee must be a positive number'
-    }
-  },
-  term2Fee: {
-    type: Number,
-    required: true,
-    min: 0,
-    validate: {
-      validator: function(v) {
-        return v >= 0;
-      },
-      message: 'Term 2 fee must be a positive number'
-    }
-  },
-  term3Fee: {
-    type: Number,
-    required: true,
-    min: 0,
-    validate: {
-      validator: function(v) {
-        return v >= 0;
-      },
-      message: 'Term 3 fee must be a positive number'
-    }
-  },
-  createdBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin',
-    required: true
-  },
-  updatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin',
-    default: null
-  },
-  isActive: {
-    type: Boolean,
-    default: true
-  },
-  // Additional fees that can be category-specific per academic year
-  // Using Map to support dynamic fee types (caution deposit, diesel charges, etc.)
-  // Each fee can apply to specific categories with category-specific amounts
+  term1Fee: { type: Number, min: 0 },
+  term2Fee: { type: Number, min: 0 },
+  term3Fee: { type: Number, min: 0 },
+
+  // Metadata
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', required: true },
+  updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin', default: null },
+  isActive: { type: Boolean, default: true },
+
+  // Additional fees map (legacy, kept for compatibility)
   additionalFees: {
     type: Map,
     of: {
-      amount: { type: Number, default: 0, min: 0 }, // Keep for backward compatibility
+      amount: { type: Number, default: 0, min: 0 },
       description: { type: String, default: '' },
       isActive: { type: Boolean, default: true },
-      categories: { 
-        type: [String], 
-        default: ['A+', 'A', 'B+', 'B'], // Default to all categories
-        enum: ['A+', 'A', 'B+', 'B', 'C'] // Include C for Female categories
+      categories: {
+        type: [String],
+        default: [], // no hardcoded enum; empty means applies to all
       },
-      // Category-specific amounts (e.g., { 'A+': 1000, 'A': 1000, 'B': 2000 })
       categoryAmounts: {
         type: Map,
         of: { type: Number, min: 0 },
-        default: new Map()
-      }
+        default: new Map(),
+      },
     },
-    default: new Map()
-  }
+    default: new Map(),
+  },
 }, {
-  timestamps: true
+  timestamps: true,
 });
 
-// Compound unique index for academic year, course, year, and category
-feeStructureSchema.index({ academicYear: 1, course: 1, year: 1, category: 1 }, { unique: true });
+// New uniqueness: academicYear + course + branch + year + hostel/category + feeType
+feeStructureSchema.index(
+  { academicYear: 1, course: 1, branch: 1, year: 1, hostelId: 1, categoryId: 1, feeType: 1 },
+  { unique: true, partialFilterExpression: { isActive: true } },
+);
+
+// Legacy uniqueness (kept for old records)
+feeStructureSchema.index(
+  { academicYear: 1, course: 1, branch: 1, year: 1, category: 1 },
+  { unique: false },
+);
 
 // Index for efficient querying
 feeStructureSchema.index({ academicYear: 1, isActive: 1 });
-feeStructureSchema.index({ course: 1, isActive: 1 });
+feeStructureSchema.index({ course: 1, branch: 1, isActive: 1 });
 feeStructureSchema.index({ year: 1, isActive: 1 });
-feeStructureSchema.index({ category: 1, isActive: 1 });
+feeStructureSchema.index({ hostelId: 1, categoryId: 1, isActive: 1 });
+feeStructureSchema.index({ category: 1, isActive: 1 }); // legacy
 
-// Virtual for total fee
-feeStructureSchema.virtual('totalFee').get(function() {
+// Virtual for total fee (legacy)
+feeStructureSchema.virtual('totalFee').get(function () {
+  if (this.term1Fee == null || this.term2Fee == null || this.term3Fee == null) {
+    return undefined;
+  }
   return this.term1Fee + this.term2Fee + this.term3Fee;
 });
 
@@ -133,8 +97,8 @@ feeStructureSchema.set('toJSON', { virtuals: true });
 feeStructureSchema.set('toObject', { virtuals: true });
 
 // Method to get fee for specific term
-feeStructureSchema.methods.getTermFee = function(termNumber) {
-  switch(termNumber) {
+feeStructureSchema.methods.getTermFee = function (termNumber) {
+  switch (termNumber) {
     case 1: return this.term1Fee;
     case 2: return this.term2Fee;
     case 3: return this.term3Fee;
@@ -143,90 +107,97 @@ feeStructureSchema.methods.getTermFee = function(termNumber) {
 };
 
 // Static method to get fee structure for academic year, course, year, and category
-feeStructureSchema.statics.getFeeStructure = async function(academicYear, course, year, category) {
-  return await this.findOne({ 
-    academicYear, 
-    course, 
-    year, 
-    category, 
-    isActive: true 
-  }).populate('course', 'name duration');
+feeStructureSchema.statics.getFeeStructure = async function (academicYear, course, branch, year, category) {
+  const query = {
+    academicYear,
+    course,
+    year,
+    category,
+    isActive: true,
+  };
+  if (branch) {
+    query.branch = branch;
+  }
+  return await this.findOne(query);
+};
+
+feeStructureSchema.statics.getFeeStructureStrict = async function (academicYear, course, branch, year, category) {
+  return await this.findOne({
+    academicYear,
+    course,
+    branch,
+    year,
+    category,
+    isActive: true,
+  });
 };
 
 // Static method to get all fee structures for an academic year
-feeStructureSchema.statics.getFeeStructuresByYear = async function(academicYear) {
-  return await this.find({ 
-    academicYear, 
-    isActive: true 
-  }).populate('course', 'name duration').sort({ 'course.name': 1, year: 1, category: 1 });
+feeStructureSchema.statics.getFeeStructuresByYear = async function (academicYear) {
+  return await this.find({
+    academicYear,
+    isActive: true,
+  }).sort({ course: 1, branch: 1, year: 1, category: 1 });
 };
 
 // Static method to get fee structures for a specific course and academic year
-feeStructureSchema.statics.getFeeStructuresByCourse = async function(academicYear, course) {
-  return await this.find({ 
-    academicYear, 
-    course, 
-    isActive: true 
-  }).populate('course', 'name duration').sort({ year: 1, category: 1 });
+feeStructureSchema.statics.getFeeStructuresByCourse = async function (academicYear, course, branch = null) {
+  return await this.find({
+    academicYear,
+    course,
+    ...(branch ? { branch } : {}),
+    isActive: true,
+  }).sort({ branch: 1, year: 1, category: 1 });
 };
 
 // Static method to get additional fees for an academic year
 // If category is provided, only returns fees that apply to that category
-feeStructureSchema.statics.getAdditionalFees = async function(academicYear, category = null) {
-  const feeStructure = await this.findOne({ 
-    academicYear, 
-    isActive: true 
+feeStructureSchema.statics.getAdditionalFees = async function (academicYear, category = null) {
+  const feeStructure = await this.findOne({
+    academicYear,
+    isActive: true,
   }).select('additionalFees');
-  
+
   if (!feeStructure || !feeStructure.additionalFees || feeStructure.additionalFees.size === 0) {
     return {};
   }
-  
-  // Convert Map to plain object for JSON response
+
   const additionalFeesObj = {};
   feeStructure.additionalFees.forEach((value, key) => {
-    // If category is specified, only include fees that apply to that category
     if (category) {
-      const feeCategories = value.categories || ['A+', 'A', 'B+', 'B'];
-      if (!feeCategories.includes(category)) {
-        return; // Skip this fee if it doesn't apply to the specified category
+      const feeCategories = Array.isArray(value.categories) ? value.categories : [];
+      if (feeCategories.length > 0 && !feeCategories.includes(category)) {
+        return;
       }
     }
-    
-    // Convert categoryAmounts Map to object if it exists
+
     const categoryAmountsObj = {};
     if (value.categoryAmounts && value.categoryAmounts instanceof Map) {
       value.categoryAmounts.forEach((amount, cat) => {
         categoryAmountsObj[cat] = amount;
       });
     } else if (value.categoryAmounts && typeof value.categoryAmounts === 'object') {
-      // Already an object
       Object.assign(categoryAmountsObj, value.categoryAmounts);
     }
-    
+
     additionalFeesObj[key] = {
-      amount: value.amount || 0, // Keep for backward compatibility
+      amount: value.amount || 0,
       description: value.description || '',
       isActive: value.isActive !== undefined ? value.isActive : true,
-      categories: value.categories || ['A+', 'A', 'B+', 'B'], // Default to all categories
-      categoryAmounts: Object.keys(categoryAmountsObj).length > 0 ? categoryAmountsObj : undefined
+      categories: Array.isArray(value.categories) ? value.categories : [],
+      categoryAmounts: Object.keys(categoryAmountsObj).length > 0 ? categoryAmountsObj : undefined,
     };
   });
-  
+
   return additionalFeesObj;
 };
 
 // Static method to set additional fees for an academic year
-feeStructureSchema.statics.setAdditionalFees = async function(academicYear, additionalFees, adminId) {
-  // Valid categories enum
-  const validCategories = ['A+', 'A', 'B+', 'B', 'C']; // Include C for Female categories
-  
-  // Find any fee structure for this academic year with a valid category to update additional fees
-  // Filter out fee structures with invalid categories (like 'C')
+feeStructureSchema.statics.setAdditionalFees = async function (academicYear, additionalFees, adminId) {
+  // Find any fee structure for this academic year to update additional fees
   const feeStructure = await this.findOne({ 
     academicYear, 
     isActive: true,
-    category: { $in: validCategories } // Only find fee structures with valid categories
   });
   
   if (feeStructure) {
@@ -255,9 +226,7 @@ feeStructureSchema.statics.setAdditionalFees = async function(academicYear, addi
           amount: calculatedAmount, // Keep for backward compatibility
           description: feeData.description || '',
           isActive: feeData.isActive !== undefined ? feeData.isActive : true,
-          categories: Array.isArray(feeData.categories) && feeData.categories.length > 0 
-            ? feeData.categories 
-            : ['A+', 'A', 'B+', 'B'], // Default to all categories if not specified
+          categories: Array.isArray(feeData.categories) ? feeData.categories : [],
           categoryAmounts: categoryAmountsMap.size > 0 ? categoryAmountsMap : undefined
         });
       } else {
@@ -266,7 +235,7 @@ feeStructureSchema.statics.setAdditionalFees = async function(academicYear, addi
           amount: feeData || 0,
           description: '',
           isActive: true,
-          categories: ['A+', 'A', 'B+', 'B'] // Default to all categories
+          categories: []
         });
       }
     });
@@ -289,24 +258,17 @@ feeStructureSchema.statics.setAdditionalFees = async function(academicYear, addi
       }
     );
     
-    // Update all other fee structures for this academic year with valid categories
-    // Only update fee structures with valid categories to avoid validation errors
+    // Update all other fee structures for this academic year
     const otherFeeStructures = await this.find({ 
       academicYear, 
       isActive: true, 
-      category: { $in: validCategories }, // Only update fee structures with valid categories
       _id: { $ne: feeStructure._id } 
     });
     
     // Update each fee structure using direct MongoDB update to bypass validation
     if (otherFeeStructures.length > 0) {
       await this.updateMany(
-        { 
-          academicYear, 
-          isActive: true, 
-          category: { $in: validCategories },
-          _id: { $ne: feeStructure._id } 
-        },
+        { academicYear, isActive: true, _id: { $ne: feeStructure._id } },
         { 
           $set: { 
             additionalFees: additionalFeesObject,
@@ -328,11 +290,11 @@ feeStructureSchema.statics.setAdditionalFees = async function(academicYear, addi
 
 // Static method to create or update fee structure
 feeStructureSchema.statics.createOrUpdateFeeStructure = async function(data) {
-  const { academicYear, course, year, category, term1Fee, term2Fee, term3Fee, createdBy, updatedBy } = data;
+  const { academicYear, course, branch, year, category, term1Fee, term2Fee, term3Fee, createdBy, updatedBy } = data;
   
   console.log('🔍 Model: createOrUpdateFeeStructure called with data:', data);
   
-  const existing = await this.findOne({ academicYear, course, year, category });
+  const existing = await this.findOne({ academicYear, course, branch, year, category });
   
   if (existing) {
     console.log('🔍 Model: Updating existing fee structure');
@@ -351,6 +313,7 @@ feeStructureSchema.statics.createOrUpdateFeeStructure = async function(data) {
     const created = await this.create({
       academicYear,
       course,
+      branch,
       year,
       category,
       term1Fee,

@@ -1505,7 +1505,7 @@ export const listPrincipalComplaints = async (req, res) => {
     });
 
     // Get principal's course - principals are in Admin model, not User model
-    const principal = await Admin.findById(principalId).populate('course');
+    const principal = await Admin.findById(principalId);
     if (!principal || !principal.course) {
       console.log('🎓 Principal or course not found:', { principal: !!principal, course: !!principal?.course });
       return res.status(400).json({
@@ -1514,14 +1514,18 @@ export const listPrincipalComplaints = async (req, res) => {
       });
     }
 
-    const courseId = principal.course._id || principal.course;
-    console.log('🎓 Principal course ID:', courseId);
+    console.log('🎓 Principal course:', principal.course);
 
     // Build query
     let query = {};
     
-    // Filter by course - get complaints from students in this course
-    const courseStudents = await User.find({ course: courseId, role: 'student' }).distinct('_id');
+    // Filter by course - get complaints from students in this course (now uses string comparison)
+    const studentQuery = { course: principal.course, role: 'student' };
+    // Add branch filter if principal has a specific branch assigned
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
+    const courseStudents = await User.find(studentQuery).distinct('_id');
     console.log('🎓 Course students count:', courseStudents.length);
     console.log('🎓 Course students:', courseStudents);
     
@@ -1579,7 +1583,7 @@ export const principalGetTimeline = async (req, res) => {
     console.log('🎓 Principal timeline request:', { complaintId: id, principalId });
 
     // Verify principal has access to this complaint - principals are in Admin model
-    const principal = await Admin.findById(principalId).populate('course');
+    const principal = await Admin.findById(principalId);
     if (!principal || !principal.course) {
       console.log('🎓 Principal or course not found:', { principal: !!principal, course: !!principal?.course });
       return res.status(400).json({
@@ -1588,10 +1592,14 @@ export const principalGetTimeline = async (req, res) => {
       });
     }
 
-    const courseId = principal.course._id || principal.course;
-    console.log('🎓 Principal course ID:', courseId);
+    console.log('🎓 Principal course:', principal.course);
 
-    const courseStudents = await User.find({ course: courseId, role: 'student' }).distinct('_id');
+    // Build student query (now uses string comparison)
+    const studentQuery = { course: principal.course, role: 'student' };
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
+    const courseStudents = await User.find(studentQuery).distinct('_id');
     console.log('🎓 Course students count:', courseStudents.length);
     console.log('🎓 Course students:', courseStudents);
 
@@ -1658,7 +1666,7 @@ export const principalGetComplaintDetails = async (req, res) => {
     console.log('🎓 Principal complaint details request:', { complaintId: id, principalId });
 
     // Verify principal has access to this complaint - principals are in Admin model
-    const principal = await Admin.findById(principalId).populate('course');
+    const principal = await Admin.findById(principalId);
     if (!principal || !principal.course) {
       return res.status(400).json({
         success: false,
@@ -1666,8 +1674,12 @@ export const principalGetComplaintDetails = async (req, res) => {
       });
     }
 
-    const courseId = principal.course._id || principal.course;
-    const courseStudents = await User.find({ course: courseId, role: 'student' }).distinct('_id');
+    // Build student query (now uses string comparison)
+    const studentQuery = { course: principal.course, role: 'student' };
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
+    const courseStudents = await User.find(studentQuery).distinct('_id');
 
     const complaint = await Complaint.findById(id)
       .populate('student', 'name rollNumber roomNumber course branch year')

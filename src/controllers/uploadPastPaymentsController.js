@@ -317,13 +317,14 @@ export const previewPastPayments = async (req, res, next) => {
 
       // Check if fee structure exists for student - use cache
       if (student && !errors.AcademicYear && academicYearStr) {
-        const cacheKey = `${academicYearStr}_${student.course}_${student.year}_${student.category}`;
+        const cacheKey = `${academicYearStr}_${student.course}_${student.branch}_${student.year}_${student.category}`;
         let feeStructure = feeStructureCache.get(cacheKey);
         
         if (!feeStructure) {
           feeStructure = await FeeStructure.getFeeStructure(
             academicYearStr,
             student.course,
+            student.branch,
             student.year,
             student.category
           );
@@ -514,6 +515,7 @@ export const uploadPastPayments = async (req, res, next) => {
         const feeStructure = await FeeStructure.getFeeStructure(
           academicYearStr,
           student.course,
+          student.branch,
           student.year,
           student.category
         );

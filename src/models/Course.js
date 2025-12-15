@@ -36,6 +36,13 @@ const courseSchema = new mongoose.Schema({
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin'
+  },
+  // SQL database reference (for hybrid approach)
+  sqlId: {
+    type: Number,
+    required: false,
+    unique: true,
+    sparse: true
   }
 }, {
   timestamps: true

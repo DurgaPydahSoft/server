@@ -1,7 +1,8 @@
 import FeeStructure from '../models/FeeStructure.js';
 import Course from '../models/Course.js';
 import { createError } from '../utils/error.js';
-import mongoose from 'mongoose';
+import Hostel from '../models/Hostel.js';
+import HostelCategory from '../models/HostelCategory.js';
 
 // Test endpoint to verify fee structure routes are working
 export const testFeeStructure = async (req, res) => {
@@ -34,6 +35,8 @@ export const createSampleFeeStructures = async (req, res) => {
     const sampleStructures = [
       {
         academicYear: '2024-2025',
+        course: 'B.Tech',
+        branch: 'CSE',
         category: 'A+',
         term1Fee: 18000,
         term2Fee: 18000,
@@ -45,6 +48,8 @@ export const createSampleFeeStructures = async (req, res) => {
       },
       {
         academicYear: '2024-2025',
+        course: 'B.Tech',
+        branch: 'CSE',
         category: 'A',
         term1Fee: 15000,
         term2Fee: 15000,
@@ -56,6 +61,8 @@ export const createSampleFeeStructures = async (req, res) => {
       },
       {
         academicYear: '2024-2025',
+        course: 'B.Tech',
+        branch: 'CSE',
         category: 'B+',
         term1Fee: 12000,
         term2Fee: 12000,
@@ -67,6 +74,8 @@ export const createSampleFeeStructures = async (req, res) => {
       },
       {
         academicYear: '2024-2025',
+        course: 'B.Tech',
+        branch: 'CSE',
         category: 'B',
         term1Fee: 10000,
         term2Fee: 10000,
@@ -78,6 +87,8 @@ export const createSampleFeeStructures = async (req, res) => {
       },
       {
         academicYear: '2024-2025',
+        course: 'B.Tech',
+        branch: 'CSE',
         category: 'C',
         term1Fee: 8000,
         term2Fee: 8000,
@@ -122,13 +133,235 @@ export const createSampleFeeStructures = async (req, res) => {
   }
 };
 
+// =============== NEW ADMIN FEE RULE ENDPOINTS (SQL-aligned, hostel/category-aware) ===============
+
+// GET /api/admin/fee-structures
+export const listAdminFeeStructures = async (req, res) => {
+  try {
+    const {
+      academicYear,
+      course,
+      branch,
+      year,
+      hostelId,
+      categoryId,
+      feeType,
+      isActive,
+    } = req.query;
+
+    const query = {};
+    if (academicYear) query.academicYear = academicYear;
+    if (course) query.course = course;
+    if (branch) query.branch = branch;
+    if (year) query.year = parseInt(year, 10);
+    if (hostelId) query.hostelId = hostelId;
+    if (categoryId) query.categoryId = categoryId;
+    if (feeType) query.feeType = feeType;
+    if (isActive !== undefined) query.isActive = isActive === 'true';
+
+    const data = await FeeStructure.find(query)
+      .populate('hostelId', 'name')
+      .populate('categoryId', 'name hostel')
+      .sort({ academicYear: -1, course: 1, branch: 1, year: 1, feeType: 1 });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error listing fee structures:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch fee structures', error: error.message });
+  }
+};
+
+// POST /api/admin/fee-structures
+export const createAdminFeeStructure = async (req, res, next) => {
+  try {
+    const {
+      academicYear,
+      course,
+      branch,
+      year,
+      hostelId,
+      categoryId,
+      feeType,
+      amount,
+    } = req.body;
+
+    if (!academicYear || !course || !year || !feeType || amount === undefined) {
+      throw createError(400, 'academicYear, course, year, feeType, and amount are required');
+    }
+
+    // Validate hostel/category if provided
+    let hostelDoc = null;
+    let categoryDoc = null;
+    if (hostelId) {
+      hostelDoc = await Hostel.findById(hostelId);
+      if (!hostelDoc) throw createError(400, 'Invalid hostel');
+    }
+    if (categoryId) {
+      categoryDoc = await HostelCategory.findById(categoryId);
+      if (!categoryDoc) throw createError(400, 'Invalid hostel category');
+      if (hostelDoc && categoryDoc.hostel.toString() !== hostelDoc._id.toString()) {
+        throw createError(400, 'Category does not belong to selected hostel');
+      }
+    }
+
+    // Duplicate guard
+    const existing = await FeeStructure.findOne({
+      academicYear,
+      course,
+      branch: branch || null,
+      year,
+      hostelId: hostelId || null,
+      categoryId: categoryId || null,
+      feeType,
+    });
+    if (existing) {
+      throw createError(409, 'Fee rule already exists for the same scope');
+    }
+
+    // Calculate term fees from total amount (40%, 30%, 30% split)
+    // This ensures the virtual totalFee works correctly
+    const term1Fee = Math.round(amount * 0.4);
+    const term2Fee = Math.round(amount * 0.3);
+    const term3Fee = Math.round(amount * 0.3);
+    
+    // Get category name from categoryId if provided (for legacy category field compatibility)
+    let categoryName = null;
+    if (categoryId && categoryDoc) {
+      categoryName = categoryDoc.name;
+    }
+
+    const doc = await FeeStructure.create({
+      academicYear,
+      course,
+      branch,
+      year,
+      hostelId: hostelId || null,
+      categoryId: categoryId || null,
+      category: categoryName, // Store category name for backward compatibility
+      feeType,
+      amount,
+      term1Fee, // Calculate and store term fees
+      term2Fee,
+      term3Fee,
+      createdBy: req.admin?._id || req.user?._id,
+      updatedBy: req.admin?._id || req.user?._id,
+      isActive: true,
+    });
+
+    res.status(201).json({ success: true, data: doc });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// PUT /api/admin/fee-structures/:id
+export const updateAdminFeeStructure = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      academicYear,
+      course,
+      branch,
+      year,
+      hostelId,
+      categoryId,
+      feeType,
+      amount,
+      isActive,
+    } = req.body;
+
+    const fee = await FeeStructure.findById(id);
+    if (!fee) {
+      throw createError(404, 'Fee rule not found');
+    }
+
+    // Validate hostel/category if provided
+    let hostelDoc = null;
+    let categoryDoc = null;
+    if (hostelId) {
+      hostelDoc = await Hostel.findById(hostelId);
+      if (!hostelDoc) throw createError(400, 'Invalid hostel');
+    }
+    if (categoryId) {
+      categoryDoc = await HostelCategory.findById(categoryId);
+      if (!categoryDoc) throw createError(400, 'Invalid hostel category');
+      if (hostelDoc && categoryDoc.hostel.toString() !== hostelDoc._id.toString()) {
+        throw createError(400, 'Category does not belong to selected hostel');
+      }
+    }
+
+    // Duplicate guard for new scope
+    const duplicate = await FeeStructure.findOne({
+      _id: { $ne: id },
+      academicYear: academicYear || fee.academicYear,
+      course: course || fee.course,
+      branch: branch ?? fee.branch,
+      year: year || fee.year,
+      hostelId: hostelId ?? fee.hostelId,
+      categoryId: categoryId ?? fee.categoryId,
+      feeType: feeType || fee.feeType,
+    });
+    if (duplicate) {
+      throw createError(409, 'Another fee rule exists with the same scope');
+    }
+
+    fee.academicYear = academicYear || fee.academicYear;
+    fee.course = course || fee.course;
+    fee.branch = branch ?? fee.branch;
+    fee.year = year || fee.year;
+    fee.hostelId = hostelId ?? fee.hostelId;
+    fee.categoryId = categoryId ?? fee.categoryId;
+    fee.feeType = feeType || fee.feeType;
+    
+    // Update category name for backward compatibility
+    if (categoryId !== undefined) {
+      if (categoryId && categoryDoc) {
+        fee.category = categoryDoc.name;
+      } else {
+        fee.category = null; // Clear if categoryId is removed
+      }
+    }
+    
+    // Calculate and update term fees if amount is changed
+    if (amount !== undefined) {
+      fee.amount = amount;
+      fee.term1Fee = Math.round(amount * 0.4);
+      fee.term2Fee = Math.round(amount * 0.3);
+      fee.term3Fee = Math.round(amount * 0.3);
+    }
+    
+    if (isActive !== undefined) fee.isActive = isActive;
+    fee.updatedBy = req.admin?._id || req.user?._id;
+
+    await fee.save();
+    res.json({ success: true, data: fee });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// DELETE /api/admin/fee-structures/:id
+export const deleteAdminFeeStructure = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const fee = await FeeStructure.findById(id);
+    if (!fee) {
+      throw createError(404, 'Fee rule not found');
+    }
+    await FeeStructure.findByIdAndDelete(id);
+    res.json({ success: true, message: 'Fee rule deleted' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Get all fee structures for an academic year
 export const getFeeStructures = async (req, res) => {
   try {
     console.log('🔍 Backend: getFeeStructures called');
     console.log('🔍 Backend: Query params:', req.query);
     
-    const { academicYear, course, year } = req.query;
+    const { academicYear, course, branch, year } = req.query;
     
     if (!academicYear) {
       console.log('🔍 Backend: No academic year provided');
@@ -143,11 +376,13 @@ export const getFeeStructures = async (req, res) => {
     // Build query based on provided filters
     const query = { academicYear, isActive: true };
     if (course) query.course = course;
+    if (branch) query.branch = branch;
     if (year) query.year = parseInt(year);
     
     const feeStructures = await FeeStructure.find(query)
-      .populate('course', 'name duration')
-      .sort({ 'course.name': 1, year: 1, category: 1 });
+      .populate('categoryId', 'name') // Populate category name for matching
+      .populate('hostelId', 'name') // Also populate hostel for completeness
+      .sort({ course: 1, branch: 1, year: 1, category: 1 });
 
     console.log('🔍 Backend: Found fee structures:', feeStructures.length);
     console.log('🔍 Backend: Fee structures:', feeStructures);
@@ -172,15 +407,16 @@ export const getFeeStructures = async (req, res) => {
 // Get fee structure for specific academic year, course, year, and category
 export const getFeeStructure = async (req, res) => {
   try {
-    const { academicYear, course, year, category } = req.params;
+    const { academicYear, course, branch, year, category } = req.params;
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
       course, 
+      branch: branch || undefined,
       year: parseInt(year), 
       category, 
       isActive: true 
-    }).populate('course', 'name duration');
+    });
 
     if (!feeStructure) {
       return res.status(404).json({
@@ -203,31 +439,23 @@ export const getFeeStructure = async (req, res) => {
 };
 
 // Handle bulk fee structure creation
-const handleBulkFeeStructureCreation = async (req, res, academicYear, course, year, categories, adminId) => {
+const handleBulkFeeStructureCreation = async (req, res, academicYear, course, branch, year, categories, adminId) => {
   try {
-    console.log('🔍 Backend: Bulk creation for:', { academicYear, course, year, categories });
+    console.log('🔍 Backend: Bulk creation for:', { academicYear, course, branch, year, categories });
 
     // Validate required fields
-    if (!academicYear || !course || !year) {
+    if (!academicYear || !course || !branch || !year) {
       return res.status(400).json({
         success: false,
-        message: 'Academic year, course, and year are required for bulk creation'
+        message: 'Academic year, course, branch, and year are required for bulk creation'
       });
     }
 
-    // Validate course exists and year is within course duration
-    const courseDoc = await Course.findById(course);
-    if (!courseDoc) {
+    // Basic year validation (1-10 to stay safe)
+    if (year < 1 || year > 10) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid course selected'
-      });
-    }
-
-    if (year < 1 || year > courseDoc.duration) {
-      return res.status(400).json({
-        success: false,
-        message: `Year must be between 1 and ${courseDoc.duration} for this course`
+        message: 'Year must be between 1 and 10'
       });
     }
 
@@ -282,6 +510,7 @@ const handleBulkFeeStructureCreation = async (req, res, academicYear, course, ye
         const feeStructure = await FeeStructure.createOrUpdateFeeStructure({
           academicYear,
           course,
+          branch,
           year: parseInt(year),
           category,
           term1Fee: calculatedTerm1Fee,
@@ -333,35 +562,27 @@ export const createOrUpdateFeeStructure = async (req, res) => {
   try {
     console.log('🔍 Backend: createOrUpdateFeeStructure called with body:', req.body);
     
-    const { academicYear, course, year, category, totalFee, term1Fee, term2Fee, term3Fee, categories } = req.body;
+    const { academicYear, course, branch, year, category, totalFee, term1Fee, term2Fee, term3Fee, categories } = req.body;
     const adminId = req.admin?._id || req.user?._id;
 
     // Check if this is a bulk creation request
     if (categories && Array.isArray(categories)) {
-      return await handleBulkFeeStructureCreation(req, res, academicYear, course, year, categories, adminId);
+      return await handleBulkFeeStructureCreation(req, res, academicYear, course, branch, year, categories, adminId);
     }
 
     // Validate required fields for single creation
-    if (!academicYear || !course || !year || !category) {
+    if (!academicYear || !course || !branch || !year || !category) {
       return res.status(400).json({
         success: false,
-        message: 'Academic year, course, year, and category are required'
+        message: 'Academic year, course, branch, year, and category are required'
       });
     }
 
-    // Validate course exists and year is within course duration
-    const courseDoc = await Course.findById(course);
-    if (!courseDoc) {
+    // Basic year validation (1-10 to stay safe)
+    if (year < 1 || year > 10) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid course selected'
-      });
-    }
-
-    if (year < 1 || year > courseDoc.duration) {
-      return res.status(400).json({
-        success: false,
-        message: `Year must be between 1 and ${courseDoc.duration} for this course`
+        message: 'Year must be between 1 and 10'
       });
     }
 
@@ -411,6 +632,7 @@ export const createOrUpdateFeeStructure = async (req, res) => {
     const feeStructure = await FeeStructure.createOrUpdateFeeStructure({
       academicYear,
       course,
+      branch,
       year: parseInt(year),
       category,
       term1Fee: calculatedTerm1Fee,
@@ -447,11 +669,12 @@ export const createOrUpdateFeeStructure = async (req, res) => {
 // Delete fee structure
 export const deleteFeeStructure = async (req, res) => {
   try {
-    const { academicYear, course, year, category } = req.params;
+    const { academicYear, course, branch, year, category } = req.params;
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
       course, 
+      branch: branch || undefined,
       year: parseInt(year), 
       category, 
       isActive: true 
@@ -798,28 +1021,25 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
     console.log('🔍 Backend: getFeeStructureForAdmitCard called');
     console.log('🔍 Backend: Params:', req.params);
     
-    const { academicYear, course, year, category } = req.params;
+    const { academicYear, course, branch, year, category } = req.params;
     
-    if (!academicYear || !course || !year || !category) {
+    if (!academicYear || !course || !branch || !year || !category) {
       return res.status(400).json({
         success: false,
-        message: 'Academic year, course, year, and category are required'
+        message: 'Academic year, course, branch, year, and category are required'
       });
     }
 
-    console.log('🔍 Backend: Searching for fee structure:', { academicYear, course, year, category });
-    console.log('🔍 Backend: Course type:', typeof course, 'Course value:', course);
-    
-    // Convert course to ObjectId if it's a string
-    const courseId = typeof course === 'string' ? new mongoose.Types.ObjectId(course) : course;
+    console.log('🔍 Backend: Searching for fee structure:', { academicYear, course, branch, year, category });
     
     const feeStructure = await FeeStructure.findOne({ 
       academicYear, 
-      course: courseId, 
+      course, 
+      branch,
       year: parseInt(year), 
       category, 
       isActive: true 
-    }).populate('course', 'name duration');
+    });
 
     console.log('🔍 Backend: Found fee structure:', feeStructure);
 
@@ -829,6 +1049,7 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
         data: {
           academicYear,
           course,
+        branch,
           year: parseInt(year),
           category,
           term1Fee: 0,
@@ -845,6 +1066,7 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
       data: {
         academicYear: feeStructure.academicYear,
         course: feeStructure.course,
+        branch: feeStructure.branch,
         year: feeStructure.year,
         category: feeStructure.category,
         term1Fee: feeStructure.term1Fee,

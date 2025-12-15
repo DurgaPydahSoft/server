@@ -55,11 +55,18 @@ const userSchema = new mongoose.Schema({
     uppercase: true,
     validate: {
       validator: function(v) {
-        // Alphanumeric validation for roll number
-        return /^[A-Z0-9]+$/.test(v);
+        // Allow letters, numbers, hyphens and slashes (e.g., 23320-AIM-050)
+        return /^[A-Z0-9\-\/]+$/.test(v);
       },
-      message: props => `${props.value} is not a valid roll number! Must be uppercase alphanumeric.`
+      message: props => `${props.value} is not a valid roll number! Use letters/numbers with optional - or /.`
     }
+  },
+  // Admission number sourced from SQL (stored as-is, may contain hyphens/slashes)
+  admissionNumber: {
+    type: String,
+    required: false,
+    trim: true,
+    uppercase: true
   },
   hostelId: {
     type: String,
@@ -84,10 +91,75 @@ const userSchema = new mongoose.Schema({
     enum: ['admin', 'student'],
     default: 'student'
   },
+  /**
+   * Course/Branch stored as strings sourced from SQL (single source of truth).
+   * Old ObjectId refs are removed; these fields now hold exact names/codes
+   * coming from SQL (e.g., "B.Tech", "CSE", "Diploma", "DCME").
+   */
   course: {
+    type: String,
+    required: function() { return this.role === 'student'; },
+    trim: true
+  },
+  branch: {
+    type: String,
+    required: function() { return this.role === 'student'; },
+    trim: true
+  },
+  // Hostel hierarchy references
+  hostel: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
-    required: function() { return this.role === 'student'; }
+    ref: 'Hostel',
+    required: false,
+    index: true
+  },
+  hostelCategory: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostelCategory',
+    required: false,
+    index: true
+  },
+  room: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Room',
+    required: false,
+    index: true
+  },
+  // SQL database references (optional metadata)
+  sqlCourseId: {
+    type: Number,
+    required: false
+  },
+  sqlBranchId: {
+    type: Number,
+    required: false
+  },
+  // Migration metadata
+  courseMatchType: {
+    type: String,
+    enum: ['exact', 'fuzzy'],
+    required: false
+  },
+  branchMatchType: {
+    type: String,
+    enum: ['exact', 'fuzzy'],
+    required: false
+  },
+  courseMatchScore: {
+    type: Number,
+    required: false
+  },
+  branchMatchScore: {
+    type: Number,
+    required: false
+  },
+  migratedAt: {
+    type: Date,
+    required: false
+  },
+  syncedAt: {
+    type: Date,
+    required: false
   },
   year: {
     type: Number,
@@ -102,11 +174,6 @@ const userSchema = new mongoose.Schema({
       },
       message: props => `${props.value} is not a valid year!`
     }
-  },
-  branch: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Branch',
-    required: function() { return this.role === 'student'; }
   },
   gender: {
     type: String,
@@ -130,7 +197,8 @@ const userSchema = new mongoose.Schema({
   mealType: {
     type: String,
     enum: ['veg', 'non-veg'],
-    required: function() { return this.role === 'student'; }
+    required: false,
+    default: 'veg'
   },
   parentPermissionForOuting: {
     type: Boolean,
@@ -279,7 +347,7 @@ const userSchema = new mongoose.Schema({
   // Photo fields for students
   studentPhoto: {
     type: String,
-    required: function() { return this.role === 'student'; }
+    required: false
   },
   guardianPhoto1: {
     type: String,

@@ -88,7 +88,8 @@ export const processLateFees = async () => {
         // Get fee structure to check term balances
         const feeStructure = await FeeStructure.getFeeStructure(
           student.academicYear,
-          student.course._id,
+          student.course?.name || student.course,
+          student.branch,
           student.year,
           student.category
         );

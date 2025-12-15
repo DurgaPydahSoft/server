@@ -40,11 +40,16 @@ const adminSchema = new mongoose.Schema({
     }
   },
   course: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
+    type: String,
+    trim: true,
     required: function() {
       return this.role === 'principal';
     }
+  },
+  branch: {
+    type: String,
+    trim: true
+    // Optional - if not set, principal can see all branches of their course
   },
   email: {
     type: String,
@@ -53,8 +58,8 @@ const adminSchema = new mongoose.Schema({
     match: [/^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/, 'Please provide a valid email address']
   },
   leaveManagementCourses: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course'
+    type: String,
+    trim: true
   }],
   permissions: [{
     type: String,

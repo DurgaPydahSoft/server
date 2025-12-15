@@ -30,12 +30,12 @@ router.get('/courses', getCourses);
 router.get('/courses/:courseId/years', getCourseYears);
 router.get('/academic-years', getAcademicYears);
 router.get('/stats', getFeeStructureStats);
-router.get('/admit-card/:academicYear/:course/:year/:category', getFeeStructureForAdmitCard);
-router.get('/:academicYear/:course/:year/:category', getFeeStructure);
+router.get('/admit-card/:academicYear/:course/:branch/:year/:category', getFeeStructureForAdmitCard);
+router.get('/:academicYear/:course/:branch/:year/:category', getFeeStructure);
 
 // Admin only routes
 router.post('/', adminAuth, restrictTo('super_admin', 'admin'), createOrUpdateFeeStructure);
-router.delete('/:academicYear/:course/:year/:category', adminAuth, restrictTo('super_admin', 'admin'), deleteFeeStructure);
+router.delete('/:academicYear/:course/:branch/:year/:category', adminAuth, restrictTo('super_admin', 'admin'), deleteFeeStructure);
 
 // Additional fees routes (common for all students per academic year)
 router.get('/additional-fees/:academicYear', getAdditionalFees);

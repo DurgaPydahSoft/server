@@ -1,30 +1,21 @@
 import mongoose from 'mongoose';
 
 const roomSchema = new mongoose.Schema({
-  gender: {
-    type: String,
-    enum: ['Male', 'Female'],
-    required: [true, 'Gender is required'],
+  hostel: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Hostel',
+    required: [true, 'Hostel is required'],
     index: true
   },
   category: {
-    type: String,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostelCategory',
     required: [true, 'Category is required'],
-    validate: {
-      validator: function(v) {
-        const validCategories = this.gender === 'Male' 
-          ? ['A+', 'A', 'B+', 'B']
-          : ['A+', 'A', 'B', 'C'];
-        return validCategories.includes(v);
-      },
-      message: props => `${props.value} is not a valid category for ${this.gender}`
-    },
     index: true
   },
   roomNumber: {
     type: String,
     required: [true, 'Room number is required'],
-    unique: true,
     trim: true,
     validate: {
       validator: function(v) {
@@ -191,10 +182,8 @@ const roomSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Add compound index for gender and category
-roomSchema.index({ gender: 1, category: 1 });
-
-// Add index for room number
+// Unique per hostel + category + room number
+roomSchema.index({ hostel: 1, category: 1, roomNumber: 1 }, { unique: true });
 roomSchema.index({ roomNumber: 1 });
 
 // Add virtual for current occupancy

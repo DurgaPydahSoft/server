@@ -32,6 +32,20 @@ export const createCustomRole = async (req, res, next) => {
       throw createError(400, 'At least one course must be selected when using selected course assignment');
     }
 
+    // Validate that all assigned courses exist in SQL database and convert to course names
+    let validatedCourses = assignedCourses || [];
+    if (courseAssignment === 'selected' && assignedCourses && assignedCourses.length > 0) {
+      const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
+      const sqlCourses = await getCoursesFromSQL();
+      validatedCourses = assignedCourses.map(courseIdOrName => {
+        const course = sqlCourses.find(c => c.name === courseIdOrName || c._id === courseIdOrName);
+        if (!course) {
+          throw createError(400, `Invalid course selected: ${courseIdOrName}. Course must exist in SQL database.`);
+        }
+        return course.name; // Store course name as string
+      });
+    }
+
     // Create new custom role
     const customRole = new CustomRole({
       name,
@@ -39,7 +53,7 @@ export const createCustomRole = async (req, res, next) => {
       permissions,
       permissionAccessLevels: permissionAccessLevels || {},
       courseAssignment: courseAssignment || 'all',
-      assignedCourses: assignedCourses || [],
+      assignedCourses: validatedCourses,
       createdBy: req.admin._id
     });
 
@@ -67,7 +81,6 @@ export const getCustomRoles = async (req, res, next) => {
     }
 
     const customRoles = await CustomRole.find(query)
-      .populate('assignedCourses', 'name code')
       .sort({ createdAt: -1 });
 
     console.log('🔧 Found custom roles:', customRoles.length);
@@ -93,8 +106,7 @@ export const getCustomRole = async (req, res, next) => {
       query.createdBy = req.admin._id;
     }
 
-    const customRole = await CustomRole.findOne(query)
-      .populate('assignedCourses', 'name code');
+    const customRole = await CustomRole.findOne(query);
 
     if (!customRole) {
       throw createError(404, 'Custom role not found');
@@ -167,7 +179,21 @@ export const updateCustomRole = async (req, res, next) => {
       if (courseAssignment === 'selected' && (!assignedCourses || assignedCourses.length === 0)) {
         throw createError(400, 'At least one course must be selected when using selected course assignment');
       }
-      customRole.assignedCourses = assignedCourses;
+      
+      // Validate that all assigned courses exist in SQL database and convert to course names
+      let validatedCourses = assignedCourses;
+      if (courseAssignment === 'selected' && assignedCourses && assignedCourses.length > 0) {
+        const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
+        const sqlCourses = await getCoursesFromSQL();
+        validatedCourses = assignedCourses.map(courseIdOrName => {
+          const course = sqlCourses.find(c => c.name === courseIdOrName || c._id === courseIdOrName);
+          if (!course) {
+            throw createError(400, `Invalid course selected: ${courseIdOrName}. Course must exist in SQL database.`);
+          }
+          return course.name; // Store course name as string
+        });
+      }
+      customRole.assignedCourses = validatedCourses;
     }
     if (typeof isActive === 'boolean') {
       customRole.isActive = isActive;

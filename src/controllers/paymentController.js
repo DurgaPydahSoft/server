@@ -355,6 +355,7 @@ export const processPayment = async (req, res) => {
         const feeStructure = await FeeStructure.getFeeStructure(
           pendingPayment.academicYear, 
           student.course, 
+          student.branch,
           student.year, 
           student.category
         );
@@ -1125,7 +1126,7 @@ export const initiateHostelFeePayment = async (req, res) => {
     }
 
     // Get fee structure for student
-    const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.year, student.category);
+  const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.branch, student.year, student.category);
     if (!feeStructure) {
       return res.status(404).json({
         success: false,
@@ -1781,7 +1782,7 @@ export const recordHostelFeePayment = async (req, res) => {
     }
 
     // Check if student has fee structure
-    const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.year, student.category);
+  const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.branch, student.year, student.category);
     if (!feeStructure) {
       return res.status(400).json({
         success: false,

@@ -36,8 +36,6 @@ export const getStudentsForAttendance = async (req, res, next) => {
     
     const students = await User.find(query)
       .select('name rollNumber course branch year gender roomNumber')
-      .populate('course', 'name code')
-      .populate('branch', 'name code')
       .sort({ name: 1 })
       .lean(); // Use lean() for better performance and to avoid mongoose document issues
 
@@ -827,26 +825,25 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     console.log('🎓 Principal attendance request:', {
       date: normalizedDate,
       course: principal.course,
-      branch,
+      branch: principal.branch || branch,
       gender,
       studentId,
       status
     });
 
-    // Build query for students in principal's course
-    // Handle both populated course object and course ID
-    const courseId = principal.course && typeof principal.course === 'object' 
-      ? principal.course._id 
-      : principal.course;
-
+    // Build query for students in principal's course (now uses string comparison)
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: courseId
+      course: principal.course // Direct string comparison (course name)
     };
 
-    // Add filters if provided
-    if (branch) studentQuery.branch = branch;
+    // Add branch filter - use principal's branch if set, otherwise use query param
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    } else if (branch) {
+      studentQuery.branch = branch;
+    }
     if (gender) studentQuery.gender = gender;
     if (studentId) studentQuery.rollNumber = { $regex: studentId, $options: 'i' };
 
@@ -855,8 +852,6 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     // Get students in principal's course
     const students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
-      .populate('course', 'name code')
-      .populate('branch', 'name code')
       .sort({ name: 1 });
 
     console.log('🎓 Found students:', students.length);
@@ -1054,28 +1049,25 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
       throw createError(400, 'Start date cannot be after end date');
     }
 
-    // Build query for students in principal's course
-    // Handle both populated course object and course ID
-    const courseId = principal.course && typeof principal.course === 'object' 
-      ? principal.course._id 
-      : principal.course;
-
+    // Build query for students in principal's course (now uses string comparison)
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: courseId
+      course: principal.course // Direct string comparison (course name)
     };
 
-    // Add filters if provided
-    if (branch) studentQuery.branch = branch;
+    // Add branch filter - use principal's branch if set, otherwise use query param
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    } else if (branch) {
+      studentQuery.branch = branch;
+    }
     if (gender) studentQuery.gender = gender;
     if (studentId) studentQuery.rollNumber = { $regex: studentId, $options: 'i' };
 
     // Get students in principal's course
     const students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
-      .populate('course', 'name code')
-      .populate('branch', 'name code')
       .sort({ name: 1 });
 
     const studentIds = students.map(student => student._id);
@@ -1086,11 +1078,7 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
       date: { $gte: start, $lte: end }
     }).populate({
       path: 'student',
-      select: 'name rollNumber course branch year gender roomNumber',
-      populate: [
-        { path: 'course', select: 'name code' },
-        { path: 'branch', select: 'name code' }
-      ]
+      select: 'name rollNumber course branch year gender roomNumber'
     }).sort({ date: -1, 'student.name': 1 });
 
     // Get approved leaves for the date range
@@ -1234,24 +1222,20 @@ export const getPrincipalStudentCount = async (req, res, next) => {
     console.log('🎓 Principal student count - Principal data:', {
       principalId: principal._id,
       principalCourse: principal.course,
-      courseType: typeof principal.course,
-      courseIsObject: principal.course && typeof principal.course === 'object'
+      principalBranch: principal.branch
     });
 
-    // Handle both populated course object and course ID
-    const courseId = principal.course && typeof principal.course === 'object' 
-      ? principal.course._id 
-      : principal.course;
-
-    console.log('🎓 Extracted courseId:', courseId);
-
-    // Get count of students in principal's course
-
+    // Build query for students in principal's course (now uses string comparison)
     const query = {
       role: 'student',
       hostelStatus: 'Active',
-      course: courseId
+      course: principal.course // Direct string comparison (course name)
     };
+    
+    // Add branch filter if principal has a specific branch assigned
+    if (principal.branch) {
+      query.branch = principal.branch;
+    }
 
     console.log('🎓 Student count query:', query);
 
@@ -1262,7 +1246,6 @@ export const getPrincipalStudentCount = async (req, res, next) => {
     // Debug: Let's also check what students exist
     const sampleStudents = await User.find({ role: 'student', hostelStatus: 'Active' })
       .select('name rollNumber course')
-      .populate('course', 'name code')
       .limit(5);
 
     console.log('🎓 Sample students in system:', sampleStudents.map(s => ({
@@ -1297,26 +1280,22 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
       courseIsObject: principal.course && typeof principal.course === 'object'
     });
 
-    // Get students in principal's course
-    // Handle both populated course object and course ID
-    const courseId = principal.course && typeof principal.course === 'object' 
-      ? principal.course._id 
-      : principal.course;
-
-    console.log('🎓 Extracted courseId for attendance stats:', courseId);
-
+    // Get students in principal's course (now uses string comparison)
     const studentQuery = {
       role: 'student',
       hostelStatus: 'Active',
-      course: courseId
+      course: principal.course // Direct string comparison (course name)
     };
+    
+    // Add branch filter if principal has a specific branch assigned
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
 
     console.log('🎓 Student query for attendance stats:', studentQuery);
 
     const students = await User.find(studentQuery)
-      .select('_id name rollNumber course branch year gender roomNumber')
-      .populate('course', 'name code')
-      .populate('branch', 'name code');
+      .select('_id name rollNumber course branch year gender roomNumber');
 
     console.log('🎓 Students found for attendance stats:', students.length);
 
@@ -1379,24 +1358,23 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
       course: principal.course
     });
 
-    // Handle both populated course object and course ID
-    const courseId = principal.course && typeof principal.course === 'object' 
-      ? principal.course._id 
-      : principal.course;
-
+    // Build query for students in principal's course (now uses string comparison)
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: courseId
+      course: principal.course // Direct string comparison (course name)
     };
+    
+    // Add branch filter if principal has a specific branch assigned
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
 
     console.log('🎓 Student query:', studentQuery);
 
     // Get students in principal's course
     const students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
-      .populate('course', 'name code')
-      .populate('branch', 'name code')
       .sort({ name: 1 });
 
     console.log('🎓 Found students:', students.length);
@@ -1556,14 +1534,23 @@ export const generateAttendanceReport = async (req, res, next) => {
       .populate('markedBy', 'username role')
       .sort({ date: -1, 'student.name': 1 });
 
-    // Filter by principal's course if user is a principal
+    // Filter by principal's course if user is a principal (now uses string comparison)
     if (principal && principal.role === 'principal' && principal.course) {
-      const principalCourseId = typeof principal.course === 'object' ? principal.course._id : principal.course;
       attendance = attendance.filter(att => {
         if (!att.student || !att.student.course) return false;
-        const studentCourseId = typeof att.student.course === 'object' ? att.student.course._id : att.student.course;
-        return studentCourseId.toString() === principalCourseId.toString();
+        // Direct string comparison - both are course names now
+        const studentCourse = typeof att.student.course === 'object' ? att.student.course.name : att.student.course;
+        return studentCourse === principal.course;
       });
+      
+      // Also filter by branch if principal has a specific branch assigned
+      if (principal.branch) {
+        attendance = attendance.filter(att => {
+          if (!att.student || !att.student.branch) return false;
+          const studentBranch = typeof att.student.branch === 'object' ? att.student.branch.name : att.student.branch;
+          return studentBranch === principal.branch;
+        });
+      }
     }
 
     // Get approved leaves for the date range
