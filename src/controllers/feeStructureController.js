@@ -356,6 +356,29 @@ export const deleteAdminFeeStructure = async (req, res, next) => {
 };
 
 // Get all fee structures for an academic year
+// Helper function to normalize course name (imported from adminController pattern)
+function normalizeCourseName(courseName) {
+  if (!courseName) return courseName;
+  
+  const courseUpper = courseName.toUpperCase();
+  
+  // Map common variations to database names
+  if (courseUpper === 'BTECH' || courseUpper === 'B.TECH' || courseUpper === 'B TECH') {
+    return 'B.Tech';
+  }
+  if (courseUpper === 'DIPLOMA') {
+    return 'Diploma';
+  }
+  if (courseUpper === 'PHARMACY') {
+    return 'Pharmacy';
+  }
+  if (courseUpper === 'DEGREE') {
+    return 'Degree';
+  }
+  
+  return courseName; // Return original if no mapping found
+}
+
 export const getFeeStructures = async (req, res) => {
   try {
     console.log('🔍 Backend: getFeeStructures called');
@@ -374,8 +397,13 @@ export const getFeeStructures = async (req, res) => {
     console.log('🔍 Backend: Searching for academic year:', academicYear);
     
     // Build query based on provided filters
+    // Normalize course name for consistent matching
     const query = { academicYear, isActive: true };
-    if (course) query.course = course;
+    if (course) {
+      const normalizedCourse = normalizeCourseName(course.trim());
+      // Use case-insensitive regex for matching to handle variations
+      query.course = { $regex: new RegExp(`^${normalizedCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') };
+    }
     if (branch) query.branch = branch;
     if (year) query.year = parseInt(year);
     
