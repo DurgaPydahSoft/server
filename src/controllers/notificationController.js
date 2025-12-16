@@ -693,7 +693,7 @@ export const getPrincipalUnreadNotifications = async (req, res) => {
     const principalId = req.principal._id;
     const limit = parseInt(req.query.limit) || 10;
 
-    console.log('🔔 Fetching unread notifications for principal:', principalId);
+    // Removed excessive logging to prevent console spam
 
     const notifications = await Notification.find({ 
       recipient: principalId, 
@@ -704,7 +704,7 @@ export const getPrincipalUnreadNotifications = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(limit);
 
-    console.log('🔔 Found principal unread notifications:', notifications.length);
+    // Removed excessive logging to prevent console spam
 
     res.status(200).json({
       success: true,
@@ -725,14 +725,14 @@ export const getPrincipalUnreadCount = async (req, res) => {
   try {
     const principalId = req.principal._id;
 
-    console.log('🔔 Fetching principal unread count for principal:', principalId);
+    // Removed excessive logging to prevent console spam
 
     const count = await Notification.countDocuments({ 
       recipient: principalId, 
       isRead: false 
     });
 
-    console.log('🔔 Principal unread count:', count);
+    // Removed excessive logging to prevent console spam
 
     res.status(200).json({
       success: true,

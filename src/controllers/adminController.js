@@ -354,14 +354,25 @@ export const addStudent = async (req, res, next) => {
       if (mongoCourseId) {
         finalCourseId = mongoCourseId;
         const mongoCourse = await Course.findById(mongoCourseId).lean();
-        if (mongoCourse?.name) finalCourseName = mongoCourse.name;
+        if (mongoCourse?.name) finalCourseName = mongoCourse.name.trim();
       } else {
         throw createError(400, `Failed to resolve course from SQL database`);
       }
     } else if (finalCourseId && /^[0-9a-fA-F]{24}$/.test(String(finalCourseId))) {
       // Course provided as Mongo ObjectId; use its name
       const mongoCourse = await Course.findById(finalCourseId).lean();
-      if (mongoCourse?.name) finalCourseName = mongoCourse.name;
+      if (mongoCourse?.name) {
+        finalCourseName = mongoCourse.name.trim();
+      } else {
+        // If course not found by ID, try to use the incoming value as string
+        finalCourseName = typeof course === 'string' ? course.trim() : '';
+        if (!finalCourseName) {
+          throw createError(400, `Course not found with ID: ${finalCourseId}`);
+        }
+      }
+    } else if (typeof course === 'string') {
+      // Course is already a string - normalize and trim it
+      finalCourseName = normalizeCourseName(course.trim());
     }
     
     // If branch is from SQL, ensure MongoDB document exists AND capture branch name
@@ -370,7 +381,7 @@ export const addStudent = async (req, res, next) => {
       if (mongoBranchId) {
         finalBranchId = mongoBranchId;
         const mongoBranch = await Branch.findById(mongoBranchId).lean();
-        if (mongoBranch?.name) finalBranchName = mongoBranch.name;
+        if (mongoBranch?.name) finalBranchName = mongoBranch.name.trim();
       } else {
         console.warn(`⚠️ Failed to resolve branch from SQL database for sqlBranchId=${sqlBranchId}. Falling back to provided branch value.`);
         finalBranchId = branch; // fall back to incoming value (string) to avoid hard failure
@@ -378,7 +389,18 @@ export const addStudent = async (req, res, next) => {
     } else if (finalBranchId && /^[0-9a-fA-F]{24}$/.test(String(finalBranchId))) {
       // Branch provided as Mongo ObjectId; use its name
       const mongoBranch = await Branch.findById(finalBranchId).lean();
-      if (mongoBranch?.name) finalBranchName = mongoBranch.name;
+      if (mongoBranch?.name) {
+        finalBranchName = mongoBranch.name.trim();
+      } else {
+        // If branch not found by ID, try to use the incoming value as string
+        finalBranchName = typeof branch === 'string' ? branch.trim() : '';
+        if (!finalBranchName) {
+          console.warn(`⚠️ Branch not found with ID: ${finalBranchId}, using empty string`);
+        }
+      }
+    } else if (typeof branch === 'string') {
+      // Branch is already a string - normalize and trim it
+      finalBranchName = branch.trim();
     }
     
     // If concession is set, track who requested it
@@ -402,10 +424,10 @@ export const addStudent = async (req, res, next) => {
       password: generatedPassword,
       role: 'student',
       gender,
-      // Store course/branch as strings per schema
-      course: finalCourseName,
+      // Store course/branch as strings per schema (normalized and trimmed)
+      course: finalCourseName ? finalCourseName.trim() : '',
       year,
-      branch: finalBranchName,
+      branch: finalBranchName ? finalBranchName.trim() : '',
       // Store SQL IDs for reference
       ...(sqlCourseId && { sqlCourseId }),
       ...(sqlBranchId && { sqlBranchId }),
@@ -2733,65 +2755,134 @@ export const resetStudentPassword = async (req, res, next) => {
 };
 
 // Get students by principal's assigned course
+// Helper function to resolve SQL course ID to course name
+const resolveCourseName = async (courseValue) => {
+  if (!courseValue) return null;
+  
+  // If it's already a course name (not a SQL ID), return it
+  if (typeof courseValue === 'string' && !courseValue.startsWith('sql_') && !/^\d+$/.test(courseValue)) {
+    return courseValue;
+  }
+  
+  // If it's a SQL ID format (sql_1, sql_2, etc.)
+  if (typeof courseValue === 'string' && courseValue.startsWith('sql_')) {
+    try {
+      const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+      const sqlId = parseInt(courseValue.replace('sql_', ''));
+      const result = await fetchCourseByIdFromSQL(sqlId);
+      if (result.success && result.data) {
+        return result.data.name || courseValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL course ID:', error);
+    }
+  }
+  
+  // If it's numeric, treat as SQL ID
+  if (/^\d+$/.test(courseValue.toString())) {
+    try {
+      const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+      const result = await fetchCourseByIdFromSQL(parseInt(courseValue));
+      if (result.success && result.data) {
+        return result.data.name || courseValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL course ID:', error);
+    }
+  }
+  
+  return courseValue;
+};
+
 export const getStudentsByPrincipalCourse = async (req, res, next) => {
   try {
     const { page = 1, limit = 10, search, gender, category, roomNumber, batch, academicYear, hostelStatus } = req.query;
     const principal = req.principal; // From principalAuth middleware
 
-    console.log('🎓 Principal students request:', {
-      principalId: principal._id,
-      principalCourse: principal.course,
-      filters: req.query
-    });
-
     // Build query based on principal's assigned course (now a string)
-    const query = {
-      course: principal.course, // Direct string comparison
+    // Normalize course name for matching (handle case sensitivity and whitespace)
+    const principalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
+    
+    if (!principalCourse) {
+      throw createError(400, 'Principal course assignment is missing');
+    }
+
+    // Build base query - fetch all students that might match (including SQL IDs)
+    // We'll filter by course in memory after resolving SQL IDs
+    const baseQuery = {
       role: 'student'
     };
     
-    // Add branch filter if principal has a specific branch assigned
-    if (principal.branch) {
-      query.branch = principal.branch;
-    }
+    // Add other filters first
+    if (gender) baseQuery.gender = gender;
+    if (category) baseQuery.category = category;
+    if (roomNumber) baseQuery.roomNumber = roomNumber;
+    if (batch) baseQuery.batch = batch;
+    if (academicYear) baseQuery.academicYear = academicYear;
+    if (hostelStatus) baseQuery.hostelStatus = hostelStatus;
 
-    // Add search filter
+    // Add search filter if provided
     if (search) {
-      query.$or = [
+      baseQuery.$or = baseQuery.$or || [];
+      baseQuery.$or.push(
         { name: { $regex: search, $options: 'i' } },
         { rollNumber: { $regex: search, $options: 'i' } },
         { hostelId: { $regex: search, $options: 'i' } }
-      ];
+      );
     }
 
-    // Add other filters
-    if (gender) query.gender = gender;
-    if (category) query.category = category;
-    if (roomNumber) query.roomNumber = roomNumber;
-    if (batch) query.batch = batch;
-    if (academicYear) query.academicYear = academicYear;
-    if (hostelStatus) query.hostelStatus = hostelStatus;
-
-    console.log('🎓 Final query:', JSON.stringify(query, null, 2));
-
-    // Calculate pagination
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    const totalStudents = await User.countDocuments(query);
-    const totalPages = Math.ceil(totalStudents / parseInt(limit));
-
-    // Fetch students with pagination (no population needed - course/branch are now strings)
-    const students = await User.find(query)
+    // Fetch all students matching the base query (we'll filter by course in memory)
+    const allStudents = await User.find(baseQuery)
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
       .select('-password');
 
-    console.log('🎓 Found students:', students.length);
+    // Filter students by course (resolving SQL IDs if needed)
+    const filteredStudents = [];
+    for (const student of allStudents) {
+      // Resolve student's course (might be SQL ID)
+      const studentCourseName = await resolveCourseName(student.course);
+      const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+      
+      // Check if course matches
+      if (normalizedStudentCourse === principalCourse) {
+        // Also check branch if principal has a specific branch assigned
+        if (principal.branch) {
+          const principalBranch = principal.branch.trim();
+          const studentBranch = student.branch || '';
+          // Simple branch matching (can be enhanced to resolve SQL branch IDs if needed)
+          if (studentBranch.trim() === principalBranch || 
+              studentBranch.trim().toLowerCase() === principalBranch.toLowerCase()) {
+            filteredStudents.push(student);
+          }
+        } else {
+          filteredStudents.push(student);
+        }
+      }
+    }
+
+    // Apply pagination to filtered results
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const totalStudents = filteredStudents.length;
+    const totalPages = Math.ceil(totalStudents / parseInt(limit));
+    const paginatedStudents = filteredStudents.slice(skip, skip + parseInt(limit));
+
+    // Transform students to resolve course names (replace SQL IDs with actual course names)
+    const transformedStudents = await Promise.all(
+      paginatedStudents.map(async (student) => {
+        const studentObj = student.toObject ? student.toObject() : student;
+        // Resolve course name if it's a SQL ID
+        const resolvedCourseName = await resolveCourseName(studentObj.course);
+        return {
+          ...studentObj,
+          course: resolvedCourseName || studentObj.course
+        };
+      })
+    );
 
     res.json({
       success: true,
       data: {
-        students,
+        students: transformedStudents,
         totalStudents,
         totalPages,
         currentPage: parseInt(page),

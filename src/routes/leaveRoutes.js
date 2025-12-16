@@ -32,13 +32,12 @@ import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } fr
 
 const router = express.Router();
 
-// Debug middleware to log all requests
-router.use((req, res, next) => {
-  console.log(`🔍 Leave route accessed: ${req.method} ${req.path}`);
-  console.log(`🔍 Request headers:`, req.headers);
-  console.log(`🔍 Request body:`, req.body);
-  next();
-});
+// Debug middleware removed to prevent console spam
+// Uncomment below if debugging is needed:
+// router.use((req, res, next) => {
+//   console.log(`🔍 Leave route accessed: ${req.method} ${req.path}`);
+//   next();
+// });
 
 // Test route to verify server is working
 router.get('/test', (req, res) => {

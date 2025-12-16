@@ -10,6 +10,113 @@ import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import notificationService from '../utils/notificationService.js';
 import aiService from '../utils/aiService.js';
 
+// Helper function to normalize course name (similar to adminController and leaveController)
+const normalizeCourseName = (courseName) => {
+  if (!courseName) return courseName;
+  
+  const courseUpper = courseName.toUpperCase();
+  
+  // Map common variations to database names
+  if (courseUpper === 'BTECH' || courseUpper === 'B.TECH' || courseUpper === 'B TECH') {
+    return 'B.Tech';
+  }
+  if (courseUpper === 'DIPLOMA') {
+    return 'Diploma';
+  }
+  if (courseUpper === 'PHARMACY') {
+    return 'Pharmacy';
+  }
+  if (courseUpper === 'DEGREE') {
+    return 'Degree';
+  }
+  
+  return courseName; // Return original if no mapping found
+};
+
+// Helper function to normalize branch name
+const normalizeBranchName = (branchName) => {
+  if (!branchName) return branchName;
+  return branchName.trim();
+};
+
+// Helper function to resolve SQL course ID to course name
+const resolveCourseName = async (courseValue) => {
+  if (!courseValue) return null;
+  
+  // If it's already a course name (not a SQL ID), return it
+  if (typeof courseValue === 'string' && !courseValue.startsWith('sql_') && !/^\d+$/.test(courseValue)) {
+    return courseValue;
+  }
+  
+  // If it's a SQL ID format (sql_1, sql_2, etc.)
+  if (typeof courseValue === 'string' && courseValue.startsWith('sql_')) {
+    try {
+      const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+      const sqlId = parseInt(courseValue.replace('sql_', ''));
+      const result = await fetchCourseByIdFromSQL(sqlId);
+      if (result.success && result.data) {
+        return result.data.name || courseValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL course ID:', error);
+    }
+  }
+  
+  // If it's numeric, treat as SQL ID
+  if (/^\d+$/.test(courseValue.toString())) {
+    try {
+      const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+      const result = await fetchCourseByIdFromSQL(parseInt(courseValue));
+      if (result.success && result.data) {
+        return result.data.name || courseValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL course ID:', error);
+    }
+  }
+  
+  return courseValue;
+};
+
+// Helper function to resolve SQL branch ID to branch name
+const resolveBranchName = async (branchValue) => {
+  if (!branchValue) return null;
+  
+  // If it's already a branch name (not a SQL ID), return it
+  if (typeof branchValue === 'string' && !branchValue.startsWith('sql_') && !/^\d+$/.test(branchValue)) {
+    return branchValue;
+  }
+  
+  // If it's a SQL ID format (sql_1, sql_2, etc.)
+  if (typeof branchValue === 'string' && branchValue.startsWith('sql_')) {
+    try {
+      const { fetchBranchByIdFromSQL } = await import('../utils/sqlService.js');
+      const sqlId = parseInt(branchValue.replace('sql_', ''));
+      const result = await fetchBranchByIdFromSQL(sqlId);
+      if (result.success && result.data) {
+        return result.data.name || branchValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL branch ID:', error);
+    }
+  }
+  
+  // If it's numeric, treat as SQL ID
+  if (/^\d+$/.test(branchValue.toString())) {
+    try {
+      const { fetchBranchByIdFromSQL } = await import('../utils/sqlService.js');
+      const result = await fetchBranchByIdFromSQL(parseInt(branchValue));
+      if (result.success && result.data) {
+        return result.data.name || branchValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL branch ID:', error);
+    }
+  }
+  
+  return branchValue;
+};
+
 // Student: create complaint
 export const createComplaint = async (req, res, next) => {
   try {
@@ -1515,21 +1622,65 @@ export const listPrincipalComplaints = async (req, res) => {
     }
 
     console.log('🎓 Principal course:', principal.course);
+    console.log('🎓 Principal branch:', principal.branch);
 
     // Build query
     let query = {};
     
-    // Filter by course - get complaints from students in this course (now uses string comparison)
-    const studentQuery = { course: principal.course, role: 'student' };
-    // Add branch filter if principal has a specific branch assigned
-    if (principal.branch) {
-      studentQuery.branch = principal.branch;
-    }
-    const courseStudents = await User.find(studentQuery).distinct('_id');
-    console.log('🎓 Course students count:', courseStudents.length);
-    console.log('🎓 Course students:', courseStudents);
+    // Normalize principal's course and branch for matching
+    const normalizedPrincipalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
+    const normalizedPrincipalBranch = principal.branch ? normalizeBranchName(principal.branch.trim()) : null;
     
-    query['student'] = { $in: courseStudents };
+    // Filter by course - handle SQL IDs and course names
+    // Fetch all students that might match (including those with SQL IDs)
+    const allStudents = await User.find({ role: 'student' }).select('_id course branch');
+    
+    // Filter students by resolving their course/branch and matching with principal's course/branch
+    const matchingStudentIds = [];
+    for (const student of allStudents) {
+      // Resolve student's course (might be SQL ID)
+      const studentCourseName = await resolveCourseName(student.course);
+      const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+      
+      // Check if course matches
+      const courseMatches = normalizedStudentCourse && normalizedPrincipalCourse && 
+        (normalizedStudentCourse === normalizedPrincipalCourse || 
+         normalizedStudentCourse.toUpperCase() === normalizedPrincipalCourse.toUpperCase());
+      
+      if (courseMatches) {
+        // If principal has a branch filter, check branch too
+        if (normalizedPrincipalBranch) {
+          const studentBranchName = await resolveBranchName(student.branch);
+          const normalizedStudentBranch = studentBranchName ? normalizeBranchName(studentBranchName.trim()) : null;
+          
+          const branchMatches = normalizedStudentBranch && 
+            (normalizedStudentBranch === normalizedPrincipalBranch || 
+             normalizedStudentBranch.toUpperCase() === normalizedPrincipalBranch.toUpperCase());
+          
+          if (branchMatches) {
+            matchingStudentIds.push(student._id);
+          }
+        } else {
+          // No branch filter, just add student
+          matchingStudentIds.push(student._id);
+        }
+      }
+    }
+    
+    console.log('🎓 Matching students count:', matchingStudentIds.length);
+    
+    if (matchingStudentIds.length === 0) {
+      // No matching students, return empty result
+      return res.json({
+        success: true,
+        data: {
+          complaints: [],
+          total: 0
+        }
+      });
+    }
+    
+    query['student'] = { $in: matchingStudentIds };
     
     // Filter by type if specified
     if (type && type !== 'all') {
@@ -1593,15 +1744,48 @@ export const principalGetTimeline = async (req, res) => {
     }
 
     console.log('🎓 Principal course:', principal.course);
+    console.log('🎓 Principal branch:', principal.branch);
 
-    // Build student query (now uses string comparison)
-    const studentQuery = { course: principal.course, role: 'student' };
-    if (principal.branch) {
-      studentQuery.branch = principal.branch;
+    // Normalize principal's course and branch for matching
+    const normalizedPrincipalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
+    const normalizedPrincipalBranch = principal.branch ? normalizeBranchName(principal.branch.trim()) : null;
+    
+    // Fetch all students and filter by resolving their course/branch
+    const allStudents = await User.find({ role: 'student' }).select('_id course branch');
+    
+    // Filter students by resolving their course/branch and matching with principal's course/branch
+    const matchingStudentIds = [];
+    for (const student of allStudents) {
+      // Resolve student's course (might be SQL ID)
+      const studentCourseName = await resolveCourseName(student.course);
+      const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+      
+      // Check if course matches
+      const courseMatches = normalizedStudentCourse && normalizedPrincipalCourse && 
+        (normalizedStudentCourse === normalizedPrincipalCourse || 
+         normalizedStudentCourse.toUpperCase() === normalizedPrincipalCourse.toUpperCase());
+      
+      if (courseMatches) {
+        // If principal has a branch filter, check branch too
+        if (normalizedPrincipalBranch) {
+          const studentBranchName = await resolveBranchName(student.branch);
+          const normalizedStudentBranch = studentBranchName ? normalizeBranchName(studentBranchName.trim()) : null;
+          
+          const branchMatches = normalizedStudentBranch && 
+            (normalizedStudentBranch === normalizedPrincipalBranch || 
+             normalizedStudentBranch.toUpperCase() === normalizedPrincipalBranch.toUpperCase());
+          
+          if (branchMatches) {
+            matchingStudentIds.push(student._id);
+          }
+        } else {
+          // No branch filter, just add student
+          matchingStudentIds.push(student._id);
+        }
+      }
     }
-    const courseStudents = await User.find(studentQuery).distinct('_id');
-    console.log('🎓 Course students count:', courseStudents.length);
-    console.log('🎓 Course students:', courseStudents);
+    
+    console.log('🎓 Matching students count:', matchingStudentIds.length);
 
     const complaint = await Complaint.findById(id)
       .populate('student', 'name rollNumber roomNumber category')
@@ -1618,15 +1802,15 @@ export const principalGetTimeline = async (req, res) => {
 
     console.log('🎓 Complaint student ID:', complaint.student);
     console.log('🎓 Complaint student ID type:', typeof complaint.student);
-    console.log('🎓 Course students types:', courseStudents.map(id => typeof id));
+    console.log('🎓 Matching students types:', matchingStudentIds.map(id => typeof id));
     
     // Convert to strings for comparison to handle ObjectId vs string issues
-    const courseStudentStrings = courseStudents.map(id => id.toString());
+    const matchingStudentStrings = matchingStudentIds.map(id => id.toString());
     const complaintStudentString = complaint.student._id.toString();
-    console.log('🎓 Is complaint student in course students?', courseStudentStrings.includes(complaintStudentString));
+    console.log('🎓 Is complaint student in matching students?', matchingStudentStrings.includes(complaintStudentString));
 
     // Check if complaint belongs to a student in principal's course
-    if (!courseStudentStrings.includes(complaintStudentString)) {
+    if (!matchingStudentStrings.includes(complaintStudentString)) {
       console.log('🎓 Access denied - complaint student not in principal course');
       return res.status(403).json({
         success: false,
@@ -1674,12 +1858,46 @@ export const principalGetComplaintDetails = async (req, res) => {
       });
     }
 
-    // Build student query (now uses string comparison)
-    const studentQuery = { course: principal.course, role: 'student' };
-    if (principal.branch) {
-      studentQuery.branch = principal.branch;
+    // Normalize principal's course and branch for matching
+    const normalizedPrincipalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
+    const normalizedPrincipalBranch = principal.branch ? normalizeBranchName(principal.branch.trim()) : null;
+    
+    // Fetch all students and filter by resolving their course/branch
+    const allStudents = await User.find({ role: 'student' }).select('_id course branch');
+    
+    // Filter students by resolving their course/branch and matching with principal's course/branch
+    const matchingStudentIds = [];
+    for (const student of allStudents) {
+      // Resolve student's course (might be SQL ID)
+      const studentCourseName = await resolveCourseName(student.course);
+      const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+      
+      // Check if course matches
+      const courseMatches = normalizedStudentCourse && normalizedPrincipalCourse && 
+        (normalizedStudentCourse === normalizedPrincipalCourse || 
+         normalizedStudentCourse.toUpperCase() === normalizedPrincipalCourse.toUpperCase());
+      
+      if (courseMatches) {
+        // If principal has a branch filter, check branch too
+        if (normalizedPrincipalBranch) {
+          const studentBranchName = await resolveBranchName(student.branch);
+          const normalizedStudentBranch = studentBranchName ? normalizeBranchName(studentBranchName.trim()) : null;
+          
+          const branchMatches = normalizedStudentBranch && 
+            (normalizedStudentBranch === normalizedPrincipalBranch || 
+             normalizedStudentBranch.toUpperCase() === normalizedPrincipalBranch.toUpperCase());
+          
+          if (branchMatches) {
+            matchingStudentIds.push(student._id);
+          }
+        } else {
+          // No branch filter, just add student
+          matchingStudentIds.push(student._id);
+        }
+      }
     }
-    const courseStudents = await User.find(studentQuery).distinct('_id');
+    
+    const courseStudents = matchingStudentIds;
 
     const complaint = await Complaint.findById(id)
       .populate('student', 'name rollNumber roomNumber course branch year')

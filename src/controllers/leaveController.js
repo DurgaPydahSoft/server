@@ -70,9 +70,71 @@ const isDateBeforeToday = (dateToCheck) => {
   checkDate.setUTCHours(5, 30, 0, 0); // 12:00 AM IST
   
   const result = checkDate < today;
-  console.log(`🔍 isDateBeforeToday: dateToCheck=${dateToCheck}, checkDate=${checkDate.toISOString()}, today=${today.toISOString()}, result=${result}`);
+  // Removed excessive logging to prevent console spam
   
   return result;
+};
+
+// Helper function to normalize course name (similar to adminController)
+const normalizeCourseName = (courseName) => {
+  if (!courseName) return courseName;
+  
+  const courseUpper = courseName.toUpperCase();
+  
+  // Map common variations to database names
+  if (courseUpper === 'BTECH' || courseUpper === 'B.TECH' || courseUpper === 'B TECH') {
+    return 'B.Tech';
+  }
+  if (courseUpper === 'DIPLOMA') {
+    return 'Diploma';
+  }
+  if (courseUpper === 'PHARMACY') {
+    return 'Pharmacy';
+  }
+  if (courseUpper === 'DEGREE') {
+    return 'Degree';
+  }
+  
+  return courseName; // Return original if no mapping found
+};
+
+// Helper function to resolve SQL course ID to course name
+const resolveCourseName = async (courseValue) => {
+  if (!courseValue) return null;
+  
+  // If it's already a course name (not a SQL ID), return it
+  if (typeof courseValue === 'string' && !courseValue.startsWith('sql_') && !/^\d+$/.test(courseValue)) {
+    return courseValue;
+  }
+  
+  // If it's a SQL ID format (sql_1, sql_2, etc.)
+  if (typeof courseValue === 'string' && courseValue.startsWith('sql_')) {
+    try {
+      const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+      const sqlId = parseInt(courseValue.replace('sql_', ''));
+      const result = await fetchCourseByIdFromSQL(sqlId);
+      if (result.success && result.data) {
+        return result.data.name || courseValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL course ID:', error);
+    }
+  }
+  
+  // If it's numeric, treat as SQL ID
+  if (/^\d+$/.test(courseValue.toString())) {
+    try {
+      const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+      const result = await fetchCourseByIdFromSQL(parseInt(courseValue));
+      if (result.success && result.data) {
+        return result.data.name || courseValue;
+      }
+    } catch (error) {
+      console.error('Error resolving SQL course ID:', error);
+    }
+  }
+  
+  return courseValue;
 };
 
 // Helper function to check if a leave request has expired
@@ -94,9 +156,6 @@ const isLeaveExpired = (leave) => {
 // Function to automatically delete expired leave requests
 const autoDeleteExpiredLeaves = async () => {
   try {
-    const now = new Date();
-    console.log(`🔍 Auto-deletion check at: ${now.toISOString()}`);
-    
     // Get IST date range for proper date comparison
     const { today, tomorrow } = getISTDateRange();
     
@@ -115,33 +174,18 @@ const autoDeleteExpiredLeaves = async () => {
     const expiredLeaves = allPendingLeaves.filter(leave => {
       if (leave.applicationType === 'Leave') {
         // For Leave requests, check if start date is before today (end of day)
-        const isExpired = isDateBeforeToday(leave.startDate);
-        console.log(`🔍 Leave ${leave._id}: startDate=${leave.startDate}, isExpired=${isExpired}`);
-        return isExpired;
+        return isDateBeforeToday(leave.startDate);
       } else if (leave.applicationType === 'Permission') {
         // For Permission requests, check if permission date is before today
-        const isExpired = isDateBeforeToday(leave.permissionDate);
-        console.log(`🔍 Permission ${leave._id}: permissionDate=${leave.permissionDate}, isExpired=${isExpired}`);
-        return isExpired;
+        return isDateBeforeToday(leave.permissionDate);
       } else if (leave.applicationType === 'Stay in Hostel') {
         // For Stay in Hostel requests, check if stay date is before today
-        const isExpired = isDateBeforeToday(leave.stayDate);
-        console.log(`🔍 Stay in Hostel ${leave._id}: stayDate=${leave.stayDate}, isExpired=${isExpired}`);
-        return isExpired;
+        return isDateBeforeToday(leave.stayDate);
       }
       return false;
     });
     
-    console.log(`🔍 Found ${expiredLeaves.length} expired leave requests to delete`);
-    
-    // Log details of expired leaves for debugging
-    if (expiredLeaves.length > 0) {
-      console.log('🔍 Expired leaves details:');
-      expiredLeaves.forEach(leave => {
-        console.log(`  - ID: ${leave._id}, Type: ${leave.applicationType}, Date: ${leave.applicationType === 'Leave' ? leave.startDate : (leave.permissionDate || leave.stayDate)}, Status: ${leave.status}`);
-      });
-    }
-    
+    // Only log if there are expired leaves to delete
     if (expiredLeaves.length > 0) {
       console.log(`🗑️ Auto-deleting ${expiredLeaves.length} expired leave requests`);
       
@@ -1301,8 +1345,7 @@ export const recordIncomingVisit = async (req, res, next) => {
 export const getLeaveById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    console.log('🔍 getLeaveById called with ID:', id);
-    console.log('🔍 Request headers:', req.headers);
+    // Removed excessive logging to prevent console spam
     
     const leave = await Leave.findById(id).populate({
       path: 'student',
@@ -1315,16 +1358,8 @@ export const getLeaveById = async (req, res, next) => {
     console.log('🔍 Leave found:', leave ? 'Yes' : 'No');
     
     if (!leave) {
-      console.log('❌ Leave not found for ID:', id);
       return res.status(404).json({ success: false, message: 'Leave not found' });
     }
-    
-    console.log('✅ Leave found:', {
-      id: leave._id,
-      student: leave.student?.name,
-      status: leave.status,
-      visitCount: leave.visitCount
-    });
     
     // Add visit information to response
     const response = {
@@ -1342,7 +1377,6 @@ export const getLeaveById = async (req, res, next) => {
       }
     };
     
-    console.log('✅ Sending response:', response);
     res.json(response);
   } catch (error) {
     console.error('❌ Error in getLeaveById:', error);
@@ -1755,10 +1789,11 @@ export const wardenVerifyOTP = async (req, res, next) => {
     console.log('Leave ID:', leave._id);
 
     // Notify principals assigned to the student's course
-    const studentCourseId = leave.student.course._id || leave.student.course;
+    // After SQL migration: course is stored as string (course name), not ObjectId
+    const studentCourseName = leave.student.course?.name || leave.student.course;
     const principals = await Admin.find({ 
       role: 'principal',
-      course: studentCourseId,
+      course: studentCourseName, // Now using course name (string) instead of ObjectId
       isActive: true
     });
     
@@ -1766,7 +1801,7 @@ export const wardenVerifyOTP = async (req, res, next) => {
     const notificationTitle = 'Leave Request Ready for Approval';
     const notificationMessage = `${leave.student?.name || 'A student'}'s ${leave.applicationType} request has been verified by warden and is ready for your approval`;
     
-    console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseId}`);
+    console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseName}`);
     
     for (const principal of principals) {
       // Send in-app notification
@@ -1886,8 +1921,6 @@ export const wardenRejectLeave = async (req, res, next) => {
 // Get leave requests for principal (all types except Stay in Hostel)
 export const getPrincipalLeaveRequests = async (req, res, next) => {
   try {
-    console.log('Getting principal leave requests with query:', req.query);
-    
     // Auto-delete expired leaves before fetching
     await autoDeleteExpiredLeaves();
     
@@ -1896,7 +1929,6 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     
     // Get principal's assigned course
     const principal = await Admin.findById(principalId).select('course branch');
-    console.log('🔍 Raw principal data:', principal);
     
     if (!principal) {
       throw createError(400, 'Principal not found');
@@ -1906,98 +1938,133 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       throw createError(400, 'Principal is not assigned to any course');
     }
     
-    console.log('🔍 Principal details:', {
-      id: principal._id,
-      course: principal.course, // Now a string (course name)
-      branch: principal.branch // Optional branch filter
-    });
-    
     const query = {};
 
-    if (status) {
-      query.status = status;
-    }
-
+    // Build applicationType filter - exclude Stay in Hostel, but allow filtering by specific type
     if (applicationType) {
-      query.applicationType = applicationType;
+      query.applicationType = applicationType; // User wants a specific type (Leave, Permission, etc.)
+    } else {
+      // If no specific type requested, exclude Stay in Hostel (they have their own workflow)
+      query.applicationType = { $ne: 'Stay in Hostel' };
     }
-
-    // Exclude Stay in Hostel requests (they have their own workflow)
-    query.applicationType = { $ne: 'Stay in Hostel' };
 
     // Exclude bulk outing leave records
     query.reason = { $not: /^Bulk outing:/ };
 
-    // Include both 'Warden Verified' and 'Pending Principal Approval' statuses
-    if (!status) {
+    // Include both 'Warden Verified' and 'Pending Principal Approval' statuses by default
+    if (status) {
+      query.status = status; // User wants a specific status
+    } else {
+      // Default: show only leaves ready for principal approval
       query.status = { $in: ['Warden Verified', 'Pending Principal Approval'] };
     }
 
-    // Debug: Let's also check what leaves exist without any filters
-    const allLeavesNoFilter = await Leave.find({}).populate('student', 'name course').limit(3);
-    console.log('🔍 Sample leaves without filters:', allLeavesNoFilter.map(l => ({
-      id: l._id,
-      student: l.student?.name,
-      course: l.student?.course
-    })));
-
-    console.log('🔍 MongoDB query:', query);
-    console.log('🔍 Principal course ID:', principal.course._id || principal.course);
-
     // First, get all leaves that match the query
+    // Note: course and branch are stored as strings (course names), not ObjectId references
+    // So we don't populate them - they're already strings
     const allLeaves = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code _id' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto sqlCourseId sqlBranchId'
       })
       .populate('approvedBy', 'name')
       .populate('verifiedBy', 'name')
       .sort({ createdAt: -1 });
 
-    console.log(`🔍 Found ${allLeaves.length} total leaves before filtering`);
+    // Helper function to resolve SQL course ID to course name
+    const resolveCourseName = async (courseValue) => {
+      if (!courseValue) return null;
+      
+      // If it's already a course name (not SQL ID format), return as-is
+      if (typeof courseValue === 'string' && !courseValue.startsWith('sql_')) {
+        return courseValue;
+      }
+      
+      // If it's a SQL ID format (sql_1, sql_2, etc.), fetch the actual course name
+      if (typeof courseValue === 'string' && courseValue.startsWith('sql_')) {
+        try {
+          const sqlCourseId = parseInt(courseValue.replace('sql_', ''));
+          const { fetchCourseByIdFromSQL } = await import('../utils/sqlService.js');
+          const result = await fetchCourseByIdFromSQL(sqlCourseId);
+          if (result.success && result.data) {
+            return result.data.name; // Return the actual course name
+          }
+        } catch (error) {
+          console.error(`Error resolving course ID ${courseValue}:`, error);
+        }
+      }
+      
+      // Fallback: return the original value
+      return courseValue;
+    };
 
-    // Debug: Log first few leaves to see course structure
-    if (allLeaves.length > 0) {
-      console.log('🔍 Sample leave student course structure:', {
-        leaveId: allLeaves[0]._id,
-        student: allLeaves[0].student?.name,
-        studentCourse: allLeaves[0].student?.course,
-        studentCourseId: allLeaves[0].student?.course?._id || allLeaves[0].student?.course
-      });
+    // Helper function to resolve SQL branch ID to branch name
+    const resolveBranchName = async (branchValue) => {
+      if (!branchValue) return null;
+      
+      // If it's already a branch name (not SQL ID format), return as-is
+      if (typeof branchValue === 'string' && !branchValue.startsWith('sql_')) {
+        return branchValue;
+      }
+      
+      // If it's a SQL ID format, fetch the actual branch name
+      if (typeof branchValue === 'string' && branchValue.startsWith('sql_')) {
+        try {
+          const sqlBranchId = parseInt(branchValue.replace('sql_', ''));
+          const { fetchBranchByIdFromSQL } = await import('../utils/sqlService.js');
+          const result = await fetchBranchByIdFromSQL(sqlBranchId);
+          if (result.success && result.data) {
+            return result.data.name; // Return the actual branch name
+          }
+        } catch (error) {
+          console.error(`Error resolving branch ID ${branchValue}:`, error);
+        }
+      }
+      
+      // Fallback: return the original value
+      return branchValue;
+    };
+
+    // Filter leaves to only show students from principal's assigned course
+    // Resolve SQL IDs to course names if needed
+    const filteredLeaves = [];
+    for (const leave of allLeaves) {
+      // Resolve student course (handle SQL IDs like 'sql_1')
+      let studentCourse = leave.student?.course;
+      if (studentCourse && typeof studentCourse === 'string' && studentCourse.startsWith('sql_')) {
+        studentCourse = await resolveCourseName(studentCourse);
+      }
+      
+      // Compare with principal's course (normalize both for comparison)
+      const normalizedStudentCourse = studentCourse?.trim();
+      const normalizedPrincipalCourse = principal.course?.trim();
+      const matches = normalizedStudentCourse === normalizedPrincipalCourse;
+      
+      if (matches) {
+        // Also check branch if principal has a specific branch assigned
+        if (principal.branch) {
+          let studentBranch = leave.student?.branch;
+          if (studentBranch && typeof studentBranch === 'string' && studentBranch.startsWith('sql_')) {
+            studentBranch = await resolveBranchName(studentBranch);
+          }
+          
+          const normalizedStudentBranch = studentBranch?.trim();
+          const normalizedPrincipalBranch = principal.branch?.trim();
+          
+          if (normalizedStudentBranch === normalizedPrincipalBranch) {
+            filteredLeaves.push(leave);
+          }
+        } else {
+          // No branch filter, just course match
+          filteredLeaves.push(leave);
+        }
+      }
     }
-
-    // Filter leaves to only show students from principal's assigned course (now uses string comparison)
-    const filteredLeaves = allLeaves.filter(leave => {
-      // Extract student course name (could be object or string)
-      const studentCourse = leave.student?.course?.name || leave.student?.course;
-      const matches = studentCourse === principal.course; // Direct string comparison
-      
-      // Also check branch if principal has a specific branch assigned
-      if (matches && principal.branch) {
-        const studentBranch = leave.student?.branch?.name || leave.student?.branch;
-        return studentBranch === principal.branch;
-      }
-      
-      // Only log first few for debugging
-      if (allLeaves.indexOf(leave) < 3) {
-        console.log(`🔍 Leave ${leave._id}: Student course ${studentCourse} vs Principal course ${principal.course} = ${matches}`);
-      }
-      
-      return matches;
-    });
-
-    console.log(`🔍 Filtered to ${filteredLeaves.length} leaves for principal's course`);
 
     // Apply pagination to filtered results
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + limit;
     const paginatedLeaves = filteredLeaves.slice(startIndex, endIndex);
-
-    console.log(`🔍 Paginated: showing ${paginatedLeaves.length} leaves (page ${page}, limit ${limit})`);
 
     res.json({
       success: true,
@@ -2005,14 +2072,7 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
         leaves: paginatedLeaves,
         totalPages: Math.ceil(filteredLeaves.length / limit),
         currentPage: page,
-        totalRequests: filteredLeaves.length,
-        debug: {
-          principalCourse: principal.course,
-          principalBranch: principal.branch,
-          totalLeavesFound: allLeaves.length,
-          filteredLeavesCount: filteredLeaves.length,
-          paginatedLeavesCount: paginatedLeaves.length
-        }
+        totalRequests: filteredLeaves.length
       }
     });
   } catch (error) {
@@ -2055,16 +2115,23 @@ export const principalApproveLeave = async (req, res, next) => {
       principalCourse: principal.course
     });
 
-    // Check if principal is assigned to the student's course (now uses string comparison)
-    const studentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
+    // Check if principal is assigned to the student's course
+    // Resolve SQL IDs to course names before comparison
+    const rawStudentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
+    const studentCourseName = await resolveCourseName(rawStudentCourse);
+    const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+    const normalizedPrincipalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
     
     console.log('🔍 Course comparison:', {
-      studentCourse: studentCourse,
+      rawStudentCourse: rawStudentCourse,
+      studentCourseName: studentCourseName,
+      normalizedStudentCourse: normalizedStudentCourse,
       principalCourse: principal.course,
-      matches: studentCourse === principal.course
+      normalizedPrincipalCourse: normalizedPrincipalCourse,
+      matches: normalizedStudentCourse === normalizedPrincipalCourse
     });
     
-    if (studentCourse !== principal.course) {
+    if (normalizedStudentCourse !== normalizedPrincipalCourse) {
       throw createError(403, 'You are not authorized to approve leave requests for this student\'s course');
     }
     
@@ -2157,16 +2224,23 @@ export const principalRejectLeave = async (req, res, next) => {
       throw createError(404, 'Leave request not found');
     }
 
-    // Check if principal is assigned to the student's course (now uses string comparison)
-    const studentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
+    // Check if principal is assigned to the student's course
+    // Resolve SQL IDs to course names before comparison
+    const rawStudentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
+    const studentCourseName = await resolveCourseName(rawStudentCourse);
+    const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+    const normalizedPrincipalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
     
     console.log('🔍 Course comparison in reject:', {
-      studentCourse: studentCourse,
+      rawStudentCourse: rawStudentCourse,
+      studentCourseName: studentCourseName,
+      normalizedStudentCourse: normalizedStudentCourse,
       principalCourse: principal.course,
-      matches: studentCourse === principal.course
+      normalizedPrincipalCourse: normalizedPrincipalCourse,
+      matches: normalizedStudentCourse === normalizedPrincipalCourse
     });
     
-    if (studentCourse !== principal.course) {
+    if (normalizedStudentCourse !== normalizedPrincipalCourse) {
       throw createError(403, 'You are not authorized to reject leave requests for this student\'s course');
     }
     
@@ -2263,10 +2337,14 @@ export const principalDecision = async (req, res, next) => {
       throw createError(400, 'Invalid request type');
     }
 
-    // Verify the student belongs to the principal's course (now uses string comparison)
-    const studentCourse = typeof request.student?.course === 'object' ? request.student.course.name : request.student?.course;
+    // Verify the student belongs to the principal's course
+    // Resolve SQL IDs to course names before comparison
+    const rawStudentCourse = typeof request.student?.course === 'object' ? request.student.course.name : request.student?.course;
+    const studentCourseName = await resolveCourseName(rawStudentCourse);
+    const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
+    const normalizedPrincipalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
     
-    if (studentCourse && principal.course && studentCourse !== principal.course) {
+    if (normalizedStudentCourse && normalizedPrincipalCourse && normalizedStudentCourse !== normalizedPrincipalCourse) {
       throw createError(403, 'You can only make decisions for students in your assigned course');
     }
     
