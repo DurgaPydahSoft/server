@@ -358,6 +358,33 @@ export const fetchBranchByIdFromSQL = async (branchId) => {
 };
 
 /**
+ * Fetch student credentials (password hash) by username (roll number) or admission number
+ */
+export const fetchStudentCredentialsSQL = async (identifier) => {
+  try {
+    const query = `
+      SELECT 
+        id,
+        student_id,
+        admission_number,
+        username,
+        password_hash
+      FROM student_credentials
+      WHERE username = ? OR admission_number = ?
+      LIMIT 1
+    `;
+    const result = await executeQuery(query, [identifier, identifier]);
+    if (result.success && result.data.length > 0) {
+      return { success: true, data: result.data[0] };
+    }
+    return { success: false, error: 'Credentials not found in SQL' };
+  } catch (error) {
+    console.error('❌ Error fetching student credentials from SQL:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
  * Close SQL connection pool
  */
 export const closeSQLPool = async () => {

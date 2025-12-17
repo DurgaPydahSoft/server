@@ -1,7 +1,9 @@
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import User from '../models/User.js';
 import TempStudent from '../models/TempStudent.js';
 import { createError } from '../utils/error.js';
+import { fetchStudentCredentialsSQL } from '../utils/sqlService.js';
 
 // Generate JWT token
 const generateToken = (user) => {
@@ -44,8 +46,41 @@ export const studentLogin = async (req, res, next) => {
       throw createError(403, 'Your hostel access has been deactivated. Please contact the administration for assistance.');
     }
 
-    // Verify password
-    const isMatch = await student.comparePassword(password);
+    // Verify password with MongoDB first
+    let isMatch = await student.comparePassword(password);
+    
+    // If MongoDB password doesn't match, check against SQL database
+    if (!isMatch) {
+      console.log('MongoDB password verification failed. Checking SQL database...');
+      try {
+        const sqlCredentials = await fetchStudentCredentialsSQL(identifier);
+        
+        if (sqlCredentials.success) {
+          const { password_hash } = sqlCredentials.data;
+          
+          if (password_hash) {
+            // Check usage of $2y$ prefix (common in PHP/Laravel bcrypt) and replace with $2a$ if needed for node.js bcrypt compatibility if failure occurs, 
+            // but standard bcryptjs usually handles it.
+            // Using standard comparison:
+            isMatch = await bcrypt.compare(password, password_hash);
+            
+            if (isMatch) {
+              console.log('✅ Password verified against SQL database');
+            } else {
+              console.log('❌ Password verification failed against SQL database');
+            }
+          }
+        } else {
+          console.log('No credentials found in SQL database for identifier:', identifier);
+        }
+      } catch (sqlError) {
+        console.error('Error verifying SQL password:', sqlError);
+        // Don't throw here, let the final check handle the failure
+      }
+    } else {
+       console.log('✅ Password verified against MongoDB');
+    }
+
     if (!isMatch) {
       throw createError(401, 'Invalid roll number or password');
     }
