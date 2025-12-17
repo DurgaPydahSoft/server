@@ -107,18 +107,83 @@ feeStructureSchema.methods.getTermFee = function (termNumber) {
 };
 
 // Static method to get fee structure for academic year, course, year, and category
-feeStructureSchema.statics.getFeeStructure = async function (academicYear, course, branch, year, category) {
+// Supports both old format (category as string) and new format (categoryId/hostelId as ObjectIds)
+feeStructureSchema.statics.getFeeStructure = async function (academicYear, course, branch, year, category, hostelId = null, categoryId = null) {
+  // Build base query
   const query = {
     academicYear,
     course,
     year,
-    category,
     isActive: true,
   };
-  if (branch) {
-    query.branch = branch;
+  
+  // Handle branch matching: if branch is provided, try both exact match AND null (applies to all)
+  // If fee structure has branch: null/undefined, it applies to all branches
+  // Build branch $or conditions
+  const branchOrConditions = branch 
+    ? [
+        { branch: branch },           // Exact branch match
+        { branch: null },              // Applies to all branches
+        { branch: { $exists: false } } // Branch field doesn't exist
+      ]
+    : [
+        { branch: null },              // Applies to all branches
+        { branch: { $exists: false } }  // Branch field doesn't exist
+      ];
+  
+  // Try to find fee structure with new format first (categoryId/hostelId)
+  if (hostelId && categoryId) {
+    const newFormatQuery = {
+      academicYear,
+      course,
+      year,
+      isActive: true,
+      $or: branchOrConditions,
+      hostelId: hostelId,
+      categoryId: categoryId
+    };
+    const newFormatStructure = await this.findOne(newFormatQuery);
+    if (newFormatStructure) {
+      return newFormatStructure;
+    }
   }
-  return await this.findOne(query);
+  
+  // If not found with new format, try with old format (category as string)
+  if (category) {
+    const oldFormatQuery = {
+      academicYear,
+      course,
+      year,
+      isActive: true,
+      $or: branchOrConditions,
+      category: category
+    };
+    const oldFormatStructure = await this.findOne(oldFormatQuery);
+    if (oldFormatStructure) {
+      return oldFormatStructure;
+    }
+  }
+  
+  // If still not found, try without category/categoryId (applies to all categories)
+  const fallbackQuery = {
+    academicYear,
+    course,
+    year,
+    isActive: true,
+    $or: [
+      ...branchOrConditions,
+      { categoryId: null },
+      { category: null }
+    ]
+  };
+  
+  if (hostelId) {
+    fallbackQuery.hostelId = hostelId;
+  } else {
+    fallbackQuery.$or.push({ hostelId: null });
+  }
+  
+  return await this.findOne(fallbackQuery);
 };
 
 feeStructureSchema.statics.getFeeStructureStrict = async function (academicYear, course, branch, year, category) {

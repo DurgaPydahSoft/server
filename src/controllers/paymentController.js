@@ -5,6 +5,9 @@ import FeeStructure from '../models/FeeStructure.js';
 import cashfreeService from '../utils/cashfreeService.js';
 import notificationService from '../utils/notificationService.js';
 import { createError } from '../utils/error.js';
+import { fetchCourseByIdFromSQL, fetchBranchByIdFromSQL } from '../utils/sqlService.js';
+import Course from '../models/Course.js';
+import Branch from '../models/Branch.js';
 
 // Initiate payment for electricity bill
 export const initiatePayment = async (req, res) => {
@@ -1693,6 +1696,105 @@ export const recordAdditionalFeePayment = async (req, res) => {
   }
 };
 
+// Helper function to normalize course name
+function normalizeCourseName(courseName) {
+  if (!courseName) return courseName;
+  
+  const courseUpper = courseName.toUpperCase();
+  
+  // Map common variations to database names
+  if (courseUpper === 'BTECH' || courseUpper === 'B.TECH' || courseUpper === 'B TECH') {
+    return 'B.Tech';
+  }
+  if (courseUpper === 'DIPLOMA') {
+    return 'Diploma';
+  }
+  if (courseUpper === 'PHARMACY') {
+    return 'Pharmacy';
+  }
+  if (courseUpper === 'DEGREE') {
+    return 'Degree';
+  }
+  
+  return courseName; // Return original if no mapping found
+}
+
+// Helper function to resolve course name from SQL ID or ObjectId
+async function resolveCourseName(courseIdOrName) {
+  if (!courseIdOrName) return null;
+  
+  // If it's already a string that looks like a course name (not an ID), return it
+  if (typeof courseIdOrName === 'string' && !courseIdOrName.startsWith('sql_') && !/^[0-9a-fA-F]{24}$/.test(courseIdOrName)) {
+    return normalizeCourseName(courseIdOrName.trim());
+  }
+  
+  // If it's an SQL ID (sql_1, sql_2, etc.)
+  if (typeof courseIdOrName === 'string' && courseIdOrName.startsWith('sql_')) {
+    const sqlId = courseIdOrName.replace('sql_', '');
+    try {
+      const result = await fetchCourseByIdFromSQL(sqlId);
+      if (result.success && result.data) {
+        return normalizeCourseName(result.data.name);
+      }
+    } catch (error) {
+      console.error('Error fetching course from SQL:', error);
+    }
+  }
+  
+  // If it's a MongoDB ObjectId, try to find in MongoDB
+  if (typeof courseIdOrName === 'string' && /^[0-9a-fA-F]{24}$/.test(courseIdOrName)) {
+    try {
+      const course = await Course.findById(courseIdOrName);
+      if (course) {
+        return normalizeCourseName(course.name);
+      }
+    } catch (error) {
+      console.error('Error fetching course from MongoDB:', error);
+    }
+  }
+  
+  // Fallback: return as-is (might already be a name)
+  return normalizeCourseName(courseIdOrName);
+}
+
+// Helper function to resolve branch name from SQL ID or ObjectId
+async function resolveBranchName(branchIdOrName) {
+  if (!branchIdOrName) return null;
+  
+  // If it's already a string that looks like a branch name (not an ID), return it
+  if (typeof branchIdOrName === 'string' && !branchIdOrName.startsWith('sql_') && !/^[0-9a-fA-F]{24}$/.test(branchIdOrName)) {
+    return branchIdOrName.trim();
+  }
+  
+  // If it's an SQL ID (sql_1, sql_2, etc.)
+  if (typeof branchIdOrName === 'string' && branchIdOrName.startsWith('sql_')) {
+    const sqlId = branchIdOrName.replace('sql_', '');
+    try {
+      const result = await fetchBranchByIdFromSQL(sqlId);
+      if (result.success && result.data) {
+        return result.data.name.trim();
+      }
+    } catch (error) {
+      console.error('Error fetching branch from SQL:', error);
+    }
+  }
+  
+  // If it's a MongoDB ObjectId, try to find in MongoDB
+  if (typeof branchIdOrName === 'string' && /^[0-9a-fA-F]{24}$/.test(branchIdOrName)) {
+    try {
+      const branch = await Branch.findById(branchIdOrName);
+      if (branch) {
+        return branch.name.trim();
+      }
+    } catch (error) {
+      console.error('Error fetching branch from MongoDB:', error);
+    }
+  }
+  
+  // Fallback: return as-is (might already be a name)
+  return branchIdOrName;
+}
+
 export const recordHostelFeePayment = async (req, res) => {
   try {
     const {
@@ -1781,12 +1883,43 @@ export const recordHostelFeePayment = async (req, res) => {
       });
     }
 
-    // Check if student has fee structure
-  const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.branch, student.year, student.category);
+    // Resolve course and branch names from SQL IDs if needed
+    const resolvedCourseName = await resolveCourseName(student.course);
+    const resolvedBranchName = await resolveBranchName(student.branch);
+
+    console.log('🔍 Resolved course/branch:', {
+      originalCourse: student.course,
+      resolvedCourse: resolvedCourseName,
+      originalBranch: student.branch,
+      resolvedBranch: resolvedBranchName
+    });
+
+    // Get student's hostel and category IDs (for new format fee structures)
+    const studentHostelId = student.hostel ? (typeof student.hostel === 'object' ? student.hostel._id : student.hostel) : null;
+    const studentCategoryId = student.hostelCategory ? (typeof student.hostelCategory === 'object' ? student.hostelCategory._id : student.hostelCategory) : null;
+
+    console.log('🔍 Student hostel/category IDs:', {
+      hostelId: studentHostelId,
+      categoryId: studentCategoryId,
+      category: student.category
+    });
+
+    // Check if student has fee structure (use resolved names and IDs)
+    // Pass both old format (category string) and new format (hostelId/categoryId)
+    const feeStructure = await FeeStructure.getFeeStructure(
+      academicYear, 
+      resolvedCourseName, 
+      resolvedBranchName, 
+      student.year, 
+      student.category, // Old format: category as string
+      studentHostelId, // New format: hostelId as ObjectId
+      studentCategoryId // New format: categoryId as ObjectId
+    );
+    
     if (!feeStructure) {
       return res.status(400).json({
         success: false,
-        message: 'No fee structure found for student'
+        message: `No fee structure found for student. Course: ${resolvedCourseName || student.course}, Branch: ${resolvedBranchName || student.branch}, Year: ${student.year}, Category: ${student.category}, Academic Year: ${academicYear}`
       });
     }
 
