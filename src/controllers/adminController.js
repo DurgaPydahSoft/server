@@ -77,6 +77,7 @@ export const addStudent = async (req, res, next) => {
     const {
       name,
       rollNumber,
+      admissionNumber,
       gender,
       course,
       year,
@@ -121,7 +122,6 @@ export const addStudent = async (req, res, next) => {
       
       if (!sqlResult.success) {
         // Also try with admission number if provided in request
-        const admissionNumber = req.body.admissionNumber;
         if (admissionNumber && admissionNumber !== rollNumber) {
           const sqlResultAdmission = await fetchStudentByIdentifier(admissionNumber);
           if (!sqlResultAdmission.success) {
@@ -421,6 +421,7 @@ export const addStudent = async (req, res, next) => {
     const student = new User({
       name,
       rollNumber: rollNumber.toUpperCase(),
+      admissionNumber: admissionNumber ? admissionNumber.toUpperCase() : undefined,
       password: generatedPassword,
       role: 'student',
       gender,
@@ -580,13 +581,16 @@ const validateBatch = async (batch, courseId) => {
   
   // If courseId is provided, fetch the course to get its duration
   if (courseId) {
-    try {
-      const course = await Course.findById(courseId);
-      if (course && course.duration) {
-        return duration === course.duration;
+    // Only attempt to find by ID if it's a valid MongoDB ObjectId
+    if (/^[0-9a-fA-F]{24}$/.test(String(courseId))) {
+      try {
+        const course = await Course.findById(courseId);
+        if (course && course.duration) {
+          return duration === course.duration;
+        }
+      } catch (error) {
+        console.error('Error fetching course for batch validation:', error);
       }
-    } catch (error) {
-      console.error('Error fetching course for batch validation:', error);
     }
   }
   
@@ -1479,6 +1483,7 @@ export const updateStudent = async (req, res, next) => {
   const { 
       name, 
       rollNumber,
+      admissionNumber,
       course, 
       year,
       branch, 
@@ -1687,6 +1692,7 @@ export const updateStudent = async (req, res, next) => {
     // Update fields
     if (name) student.name = name;
     if (rollNumber) student.rollNumber = rollNumber;
+    if (admissionNumber !== undefined) student.admissionNumber = admissionNumber ? admissionNumber.toUpperCase() : undefined;
     if (course) student.course = course;
     if (year) student.year = year;
     if (branch) student.branch = branch;
@@ -1805,9 +1811,17 @@ export const updateStudent = async (req, res, next) => {
     // Graduation status auto-update on manual edit
     let maxYear = 3; // Default
     try {
-      const courseDoc = await Course.findById(course || student.course);
-      if (courseDoc && courseDoc.duration) {
-        maxYear = courseDoc.duration;
+      const courseIdToCheck = course || student.course;
+      // Only attempt to find by ID if it's a valid MongoDB ObjectId
+      if (courseIdToCheck && /^[0-9a-fA-F]{24}$/.test(String(courseIdToCheck))) {
+        const courseDoc = await Course.findById(courseIdToCheck);
+        if (courseDoc && courseDoc.duration) {
+          maxYear = courseDoc.duration;
+        }
+      } else {
+        // Handle SQL course IDs or course names
+        const courseName = course || student.course;
+        maxYear = getCourseDuration(String(courseName));
       }
     } catch (error) {
       console.error('Error fetching course for graduation status:', error);

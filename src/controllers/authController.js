@@ -16,12 +16,24 @@ const generateToken = (user) => {
 export const studentLogin = async (req, res, next) => {
   try {
     const { rollNumber, password } = req.body;
+    const identifier = rollNumber ? rollNumber.trim().toUpperCase() : '';
+
+    console.log(`Student login attempt - Identifier: ${identifier}`);
 
     // Find student
     const student = await User.findOne({ 
-      rollNumber: rollNumber.toUpperCase(),
+      $or: [
+        { rollNumber: identifier },
+        { admissionNumber: identifier }
+      ],
       role: 'student'
     });
+    
+    if (student) {
+      console.log(`Student found: ${student.rollNumber} (Admission: ${student.admissionNumber})`);
+    } else {
+      console.log('Student not found with identifier:', identifier);
+    }
     
     if (!student) {
       throw createError(401, 'Invalid roll number or password');
@@ -130,8 +142,15 @@ export const resetPassword = async (req, res, next) => {
 export const verifyRollNumber = async (req, res) => {
   try {
     const { rollNumber } = req.body;
+    const identifier = rollNumber ? rollNumber.trim().toUpperCase() : '';
 
-    const student = await User.findOne({ rollNumber, role: 'student' });
+    const student = await User.findOne({
+      $or: [
+        { rollNumber: identifier },
+        { admissionNumber: identifier }
+      ],
+      role: 'student'
+    });
     
     if (!student) {
       return res.status(404).json({ message: 'Roll number not found' });
@@ -162,8 +181,15 @@ export const verifyRollNumber = async (req, res) => {
 export const completeRegistration = async (req, res) => {
   try {
     const { rollNumber, password } = req.body;
+    const identifier = rollNumber ? rollNumber.trim().toUpperCase() : '';
 
-    const student = await User.findOne({ rollNumber, role: 'student' });
+    const student = await User.findOne({
+      $or: [
+        { rollNumber: identifier },
+        { admissionNumber: identifier }
+      ],
+      role: 'student'
+    });
     
     if (!student) {
       return res.status(404).json({ message: 'Roll number not found' });
