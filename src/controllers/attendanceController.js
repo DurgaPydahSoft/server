@@ -1,14 +1,22 @@
 import Attendance from '../models/Attendance.js';
 import User from '../models/User.js';
 import Leave from '../models/Leave.js';
-import { createError } from '../utils/error.js';
-import notificationService from '../utils/notificationService.js';
 
 // Helper to normalize date to start of day
 function normalizeDate(date) {
   const d = new Date(date);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
+
+// Helper to normalize course name
+const normalizeCourseName = (name) => {
+  if (!name) return '';
+  return name.trim().toUpperCase()
+    .replace(/\./g, '') // Remove dots
+    .replace(/\s+/g, ' ') // Normalize spaces
+    .replace(/\s+/g, ''); // Remove all spaces
+};
+import notificationService from '../utils/notificationService.js';
 
 // Get students for attendance taking
 export const getStudentsForAttendance = async (req, res, next) => {
@@ -831,15 +839,56 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
       status
     });
 
-    // Build query for students in principal's course (now uses string comparison)
+    // Determine allowed courses for the principal
+    let allowedCourses = [];
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      allowedCourses = principal.assignedCourses;
+    } else if (principal.course) {
+      allowedCourses = [principal.course];
+    }
+
+    // Filter by specific course if requested
+    const { course } = req.query;
+    if (course) {
+       // normalize/fuzzy check if requested course is in allowedCourses
+       // For now, strict check or fuzzy check. Let's do a simple check.
+       // We can just set allowedCourses to [course] if it's valid, 
+       // but safer to just add it to the query filter directly if it matches one of the assigned.
+       // However, to keep it simple and consistent with previous fuzzy logic:
+       
+       const requestedCourse = course.trim();
+       const isAllowed = allowedCourses.some(c => 
+         c.toLowerCase().replace(/[^a-z0-9]/g, '') === requestedCourse.toLowerCase().replace(/[^a-z0-9]/g, '')
+       );
+
+       if (isAllowed) {
+         allowedCourses = [requestedCourse];
+       }
+    }
+
+    // Build query for students in principal's allowed courses
+    // Use regex to match course names more flexibly
+    const courseRegexes = allowedCourses.map(c => {
+      const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`^${escaped}$`, 'i'); 
+    });
+
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: principal.course // Direct string comparison (course name)
+      course: { $in: allowedCourses }
     };
+    
+    // Fallback regex query logic will be applied if initial find returns 0, 
+    // similar to other functions. Or we can just use $in regex immediately.
+    // Let's use the explicit logic I added before for robustness:
+    /* 
+       Actually, `getPrincipalAttendanceForDate` does a find. 
+       Let's use the robust pattern: try exact, if 0, try regex.
+    */
 
-    // Add branch filter - use principal's branch if set, otherwise use query param
-    if (principal.branch) {
+    // Add branch filter
+    if (allowedCourses.length === 1 && principal.branch) {
       studentQuery.branch = principal.branch;
     } else if (branch) {
       studentQuery.branch = branch;
@@ -850,9 +899,20 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     console.log('🎓 Student query:', studentQuery);
 
     // Get students in principal's course
-    const students = await User.find(studentQuery)
+    let students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
       .sort({ name: 1 });
+
+    if (students.length === 0) {
+       console.log('🎓 No students found (Date) with exact match, trying regex/normalized match');
+       const regexQuery = {
+         ...studentQuery,
+         course: { $in: courseRegexes }
+       };
+       students = await User.find(regexQuery)
+         .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
+         .sort({ name: 1 });
+    }
 
     console.log('🎓 Found students:', students.length);
     if (students.length > 0) {
@@ -1035,7 +1095,7 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
 // Get attendance for principal's course for a date range
 export const getPrincipalAttendanceForRange = async (req, res, next) => {
   try {
-    const { startDate, endDate, branch, gender, studentId, status } = req.query;
+    const { startDate, endDate, branch, gender, studentId, status, course } = req.query;
     const principal = req.principal;
     
     if (!startDate || !endDate) {
@@ -1049,15 +1109,38 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
       throw createError(400, 'Start date cannot be after end date');
     }
 
-    // Build query for students in principal's course (now uses string comparison)
+    // Determine allowed courses
+    let allowedCourses = [];
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      allowedCourses = principal.assignedCourses;
+    } else if (principal.course) {
+      allowedCourses = [principal.course];
+    }
+
+    if (course) {
+       const requestedCourse = course.trim();
+       const isAllowed = allowedCourses.some(c => 
+         c.toLowerCase().replace(/[^a-z0-9]/g, '') === requestedCourse.toLowerCase().replace(/[^a-z0-9]/g, '')
+       );
+       if (isAllowed) {
+         allowedCourses = [requestedCourse];
+       }
+    }
+
+    const courseRegexes = allowedCourses.map(c => {
+      const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`^${escaped}$`, 'i'); 
+    });
+
+    // Build query for students
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: principal.course // Direct string comparison (course name)
+      course: { $in: allowedCourses }
     };
 
-    // Add branch filter - use principal's branch if set, otherwise use query param
-    if (principal.branch) {
+    // Add branch filter
+    if (allowedCourses.length === 1 && principal.branch) {
       studentQuery.branch = principal.branch;
     } else if (branch) {
       studentQuery.branch = branch;
@@ -1065,10 +1148,21 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     if (gender) studentQuery.gender = gender;
     if (studentId) studentQuery.rollNumber = { $regex: studentId, $options: 'i' };
 
-    // Get students in principal's course
-    const students = await User.find(studentQuery)
+    // Get students
+    let students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
       .sort({ name: 1 });
+
+    if (students.length === 0) {
+       console.log('🎓 No students found (Range) with exact match, trying regex/normalized match');
+       const regexQuery = {
+         ...studentQuery,
+         course: { $in: courseRegexes }
+       };
+       students = await User.find(regexQuery)
+         .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
+         .sort({ name: 1 });
+    }
 
     const studentIds = students.map(student => student._id);
 
@@ -1225,21 +1319,49 @@ export const getPrincipalStudentCount = async (req, res, next) => {
       principalBranch: principal.branch
     });
 
-    // Build query for students in principal's course (now uses string comparison)
-    const query = {
-      role: 'student',
-      hostelStatus: 'Active',
-      course: principal.course // Direct string comparison (course name)
-    };
-    
-    // Add branch filter if principal has a specific branch assigned
-    if (principal.branch) {
-      query.branch = principal.branch;
+    // Determine allowed courses for the principal
+    let allowedCourses = [];
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      allowedCourses = principal.assignedCourses; 
+    } else if (principal.course) {
+      allowedCourses = [principal.course];
     }
 
-    console.log('🎓 Student count query:', query);
+    // Build query for students in principal's allowed courses
+    const studentQuery = {
+      role: 'student',
+      hostelStatus: 'Active',
+      course: { $in: allowedCourses }
+    };
+    
+    // Add branch filter if principal has a specific branch assigned AND single course
+    if (allowedCourses.length === 1 && principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
 
-    const totalStudents = await User.countDocuments(query);
+    console.log('🎓 Student count query:', studentQuery);
+
+    let totalStudents = await User.countDocuments(studentQuery);
+    
+    if (totalStudents === 0) {
+       console.log('🎓 No students found (Count) with exact match, trying regex/normalized match');
+       const courseRegexes = allowedCourses.map(course => {
+          const escaped = course.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          return new RegExp(`^${escaped}$`, 'i'); 
+       });
+       
+       const regexQuery = {
+         role: 'student',
+         hostelStatus: 'Active',
+         course: { $in: courseRegexes }
+       };
+
+       if (allowedCourses.length === 1 && principal.branch) {
+          regexQuery.branch = principal.branch;
+       }
+       
+       totalStudents = await User.countDocuments(regexQuery);
+    }
 
     console.log('🎓 Total students found:', totalStudents);
 
@@ -1280,24 +1402,61 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
       courseIsObject: principal.course && typeof principal.course === 'object'
     });
 
-    // Get students in principal's course (now uses string comparison)
-    const studentQuery = {
-      role: 'student',
+    // Determine allowed courses for the principal
+    let allowedCourses = [];
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      // Don't normalize for the query yet, let's see what raw values are
+      allowedCourses = principal.assignedCourses; 
+    } else if (principal.course) {
+      allowedCourses = [principal.course];
+    }
+    
+    console.log('🎓 Generated Allowed Courses:', allowedCourses);
+
+    // Build query for students in principal's allowed courses
+    // Use regex to match course names more flexibly (case insensitive, ignoring spaces)
+    const courseRegexes = allowedCourses.map(course => {
+      // Escape special characters but allow flexibility with spaces/dots
+      const escaped = course.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // "B.Tech" becomes "B\.Tech", we want "B\.? ?Tech" roughly
+      return new RegExp(`^${escaped}$`, 'i'); 
+    });
+
+    const studentQuery = { 
+      role: 'student', 
       hostelStatus: 'Active',
-      course: principal.course // Direct string comparison (course name)
+      course: { $in: allowedCourses } // Try exact match first
     };
     
-    // Add branch filter if principal has a specific branch assigned
-    if (principal.branch) {
-      studentQuery.branch = principal.branch;
+    console.log('🎓 Initial Student Query (Exact Match):', studentQuery);
+    
+    // Check if we find any students with exact match
+    let students = await User.find(studentQuery).select('_id name rollNumber course branch year gender roomNumber');
+    
+    if (students.length === 0) {
+       console.log('🎓 No students found with exact match, trying regex/normalized match');
+       // If no exact match, try regex or normalized approach if needed. 
+       
+       const regexQuery = {
+         role: 'student',
+         hostelStatus: 'Active',
+         course: { $in: courseRegexes }
+       }
+       
+       console.log('🎓 Regex Student Query:', regexQuery);
+       students = await User.find(regexQuery).select('_id name rollNumber course branch year gender roomNumber');
     }
 
-    console.log('🎓 Student query for attendance stats:', studentQuery);
+    // Add branch filter if principal has a specific branch assigned AND single course
+    if (allowedCourses.length === 1 && principal.branch) {
+      studentQuery.branch = principal.branch;
+      // Re-fetch only if branch filter is applied
+      students = await User.find(studentQuery).select('_id name rollNumber course branch year gender roomNumber');
+    }
+    
+    console.log('🎓 Students Found Count:', students.length);
 
-    const students = await User.find(studentQuery)
-      .select('_id name rollNumber course branch year gender roomNumber');
 
-    console.log('🎓 Students found for attendance stats:', students.length);
 
     const studentIds = students.map(student => student._id);
 
@@ -1358,24 +1517,57 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
       course: principal.course
     });
 
-    // Build query for students in principal's course (now uses string comparison)
+    // Determine allowed courses for the principal
+    let allowedCourses = [];
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
+    } else if (principal.course) {
+      allowedCourses = [normalizeCourseName(principal.course.trim())];
+    }
+
+    // Build query for students in principal's allowed courses
+    // Use regex to match course names more flexibly (case insensitive, ignoring spaces)
+    const courseRegexes = allowedCourses.map(course => {
+      // Escape special characters but allow flexibility with spaces/dots
+      const escaped = course.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // "B.Tech" becomes "B\.Tech", we want "B\.? ?Tech" roughly
+      return new RegExp(`^${escaped}$`, 'i'); 
+    });
+
     const studentQuery = { 
       role: 'student', 
       hostelStatus: 'Active',
-      course: principal.course // Direct string comparison (course name)
+      course: { $in: allowedCourses }
     };
     
-    // Add branch filter if principal has a specific branch assigned
-    if (principal.branch) {
+    // Add branch filter if principal has a specific branch assigned AND single course
+    if (allowedCourses.length === 1 && principal.branch) {
       studentQuery.branch = principal.branch;
     }
 
     console.log('🎓 Student query:', studentQuery);
 
     // Get students in principal's course
-    const students = await User.find(studentQuery)
+    let students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
       .sort({ name: 1 });
+
+    if (students.length === 0) {
+       console.log('🎓 No students found (ByStatus) with exact match, trying regex/normalized match');
+       const regexQuery = {
+         role: 'student',
+         hostelStatus: 'Active',
+         course: { $in: courseRegexes }
+       };
+       // Add branch filter if needed
+       if (allowedCourses.length === 1 && principal.branch) {
+          regexQuery.branch = principal.branch;
+       }
+       
+       students = await User.find(regexQuery)
+         .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
+         .sort({ name: 1 });
+    }
 
     console.log('🎓 Found students:', students.length);
 

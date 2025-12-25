@@ -2810,17 +2810,31 @@ const resolveCourseName = async (courseValue) => {
 
 export const getStudentsByPrincipalCourse = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, search, gender, category, roomNumber, batch, academicYear, hostelStatus } = req.query;
+    const { page = 1, limit = 10, search, gender, category, roomNumber, batch, academicYear, hostelStatus, course } = req.query;
     const principal = req.principal; // From principalAuth middleware
 
-    // Build query based on principal's assigned course (now a string)
-    // Normalize course name for matching (handle case sensitivity and whitespace)
-    const principalCourse = principal.course ? normalizeCourseName(principal.course.trim()) : null;
-    
-    if (!principalCourse) {
-      throw createError(400, 'Principal course assignment is missing');
+    // Determine allowed courses for the principal
+    let allowedCourses = [];
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
+    } else if (principal.course) {
+      allowedCourses = [normalizeCourseName(principal.course.trim())];
     }
 
+    if (allowedCourses.length === 0) {
+      throw createError(400, 'Principal has no assigned courses');
+    }
+
+    // Determine target course(s) for filtering
+    let targetCourses = allowedCourses;
+    if (course) {
+      const requestedCourse = normalizeCourseName(course.trim());
+      if (!allowedCourses.includes(requestedCourse)) {
+        throw createError(403, 'Access to this course is not authorized');
+      }
+      targetCourses = [requestedCourse];
+    }
+    
     // Build base query - fetch all students that might match (including SQL IDs)
     // We'll filter by course in memory after resolving SQL IDs
     const baseQuery = {
@@ -2857,10 +2871,13 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
       const studentCourseName = await resolveCourseName(student.course);
       const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
       
-      // Check if course matches
-      if (normalizedStudentCourse === principalCourse) {
-        // Also check branch if principal has a specific branch assigned
-        if (principal.branch) {
+      // Check if course matches any of the target courses
+      if (targetCourses.includes(normalizedStudentCourse)) {
+        // Also check branch if principal has a specific branch assigned (legacy single course behavior)
+        if (principal.assignedCourses && principal.assignedCourses.length > 1) {
+             // If multiple courses assigned, principal sees all branches for those courses
+             filteredStudents.push(student);
+        } else if (principal.branch) {
           const principalBranch = principal.branch.trim();
           const studentBranch = student.branch || '';
           // Simple branch matching (can be enhanced to resolve SQL branch IDs if needed)

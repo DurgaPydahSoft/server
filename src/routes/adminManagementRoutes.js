@@ -62,8 +62,11 @@ router.get('/validate', adminAuth, async (req, res) => {
     }
 
     // Include course for principals
-    if (adminData.role === 'principal' && adminData.course) {
-      userResponse.course = adminData.course;
+    if (adminData.role === 'principal') {
+      if (adminData.course) userResponse.course = adminData.course;
+      if (adminData.assignedCourses && adminData.assignedCourses.length > 0) {
+        userResponse.assignedCourses = adminData.assignedCourses;
+      }
     }
 
     // Include custom role info for custom role admins

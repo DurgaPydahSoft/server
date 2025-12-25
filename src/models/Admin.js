@@ -39,11 +39,17 @@ const adminSchema = new mongoose.Schema({
       return this.role === 'warden';
     }
   },
+  assignedCourses: [{
+    type: String,
+    trim: true
+  }],
   course: {
     type: String,
     trim: true,
+    // Legacy: Kept for backward compatibility. New functionality uses assignedCourses.
     required: function() {
-      return this.role === 'principal';
+      // Only required if assignedCourses is empty and role is principal
+      return this.role === 'principal' && (!this.assignedCourses || this.assignedCourses.length === 0);
     }
   },
   branch: {
