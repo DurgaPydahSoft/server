@@ -12,10 +12,10 @@ function normalizeDate(date) {
 // Get staff/guests for attendance taking
 export const getStaffForAttendance = async (req, res, next) => {
   try {
-    const { date, department, type, gender } = req.query;
+    const { date, department, type, gender, hostelId } = req.query;
     const normalizedDate = normalizeDate(date || new Date());
 
-    console.log('🔍 getStaffForAttendance - Query params:', { date, department, type, gender });
+    console.log('🔍 getStaffForAttendance - Query params:', { date, department, type, gender, hostelId });
     console.log('🔍 getStaffForAttendance - Normalized date:', normalizedDate);
 
     // Build query for active staff/guests
@@ -27,6 +27,7 @@ export const getStaffForAttendance = async (req, res, next) => {
     if (department && department.trim() !== '') query.department = department;
     if (type && type.trim() !== '') query.type = type;
     if (gender && gender.trim() !== '') query.gender = gender;
+    if (hostelId && hostelId.trim() !== '') query.hostelId = hostelId;
 
     console.log('🔍 getStaffForAttendance - Query:', query);
     

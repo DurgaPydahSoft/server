@@ -8,7 +8,7 @@ const staffGuestSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['staff', 'guest', 'student'],
+    enum: ['staff', 'guest', 'student', 'warden'],
     required: true
   },
   gender: {

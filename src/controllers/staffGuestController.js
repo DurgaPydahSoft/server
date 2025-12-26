@@ -48,7 +48,7 @@ const checkRoomAvailability = async (roomId) => {
 
   // Count staff in the room (using roomId)
   const staffCount = await StaffGuest.countDocuments({
-    type: 'staff',
+    type: { $in: ['staff', 'warden'] },
     roomId: roomId,
     isActive: true
   });
@@ -98,8 +98,8 @@ export const addStaffGuest = async (req, res, next) => {
     }
 
     // Validate type
-    if (!['staff', 'guest', 'student'].includes(type)) {
-      throw createError(400, 'Type must be staff, guest, or student');
+    if (!['staff', 'guest', 'student', 'warden'].includes(type)) {
+      throw createError(400, 'Type must be staff, guest, student, or warden');
     }
 
     // Validate gender
@@ -149,7 +149,7 @@ export const addStaffGuest = async (req, res, next) => {
     let finalCategoryId = null;
     let finalRoomId = null;
 
-    if (type === 'staff' && (roomId || roomNumber)) {
+    if (['staff', 'warden'].includes(type) && (roomId || roomNumber)) {
       // New hierarchy: use roomId if provided
       if (roomId) {
         selectedRoom = await Room.findById(roomId).populate('hostel', 'name').populate('category', 'name');
@@ -185,7 +185,7 @@ export const addStaffGuest = async (req, res, next) => {
         // Check if bed number is already taken in this room
         if (bedNumber) {
           const bedOccupied = await StaffGuest.findOne({
-            type: 'staff',
+            type: { $in: ['staff', 'warden'] },
             roomId: finalRoomId,
             bedNumber,
             isActive: true,
@@ -259,12 +259,12 @@ export const addStaffGuest = async (req, res, next) => {
       stayType: type === 'staff' ? stayType : 'daily',
       selectedMonth: type === 'staff' && stayType === 'monthly' ? selectedMonth : null,
       // New hierarchy fields
-      hostelId: type === 'staff' ? finalHostelId : null,
-      categoryId: type === 'staff' ? finalCategoryId : null,
-      roomId: type === 'staff' ? finalRoomId : null,
+      hostelId: ['staff', 'warden'].includes(type) ? finalHostelId : null,
+      categoryId: ['staff', 'warden'].includes(type) ? finalCategoryId : null,
+      roomId: ['staff', 'warden'].includes(type) ? finalRoomId : null,
       // Legacy fields (for backward compatibility)
-      roomNumber: type === 'staff' ? (selectedRoom ? selectedRoom.roomNumber : (roomNumber ? roomNumber.trim() : null)) : null,
-      bedNumber: type === 'staff' && bedNumber ? bedNumber.trim() : null,
+      roomNumber: ['staff', 'warden'].includes(type) ? (selectedRoom ? selectedRoom.roomNumber : (roomNumber ? roomNumber.trim() : null)) : null,
+      bedNumber: ['staff', 'warden'].includes(type) && bedNumber ? bedNumber.trim() : null,
       dailyRate: dailyRate ? parseFloat(dailyRate) : null,
       chargeType: (type === 'staff' && stayType === 'monthly') ? (chargeType || 'per_day') : 'per_day',
       monthlyFixedAmount: (type === 'staff' && stayType === 'monthly' && (chargeType || 'per_day') === 'monthly_fixed') 
@@ -491,8 +491,8 @@ export const updateStaffGuest = async (req, res, next) => {
     }
 
     // Validate type if provided
-    if (type && !['staff', 'guest', 'student'].includes(type)) {
-      throw createError(400, 'Type must be staff, guest, or student');
+    if (type && !['staff', 'guest', 'student', 'warden'].includes(type)) {
+      throw createError(400, 'Type must be staff, guest, student, or warden');
     }
 
     // Validate gender if provided
@@ -561,7 +561,7 @@ export const updateStaffGuest = async (req, res, next) => {
     let finalCategoryId = null;
     let finalRoomId = null;
 
-    if (currentType === 'staff' && (roomId !== undefined || roomNumber !== undefined || hostelId !== undefined)) {
+    if (['staff', 'warden'].includes(currentType) && (roomId !== undefined || roomNumber !== undefined || hostelId !== undefined)) {
       // New hierarchy: use roomId if provided
       if (roomId !== undefined) {
         if (roomId) {
@@ -622,7 +622,7 @@ export const updateStaffGuest = async (req, res, next) => {
         // Check if bed number is already taken (excluding current staff)
         if (bedNumber) {
           const bedOccupied = await StaffGuest.findOne({
-            type: 'staff',
+            type: { $in: ['staff', 'warden'] },
             roomId: targetRoomId,
             bedNumber,
             isActive: true,
@@ -663,22 +663,28 @@ export const updateStaffGuest = async (req, res, next) => {
     if (purpose !== undefined) staffGuest.purpose = purpose ? purpose.trim() : '';
     
     // Update stay-related fields
-    if (currentType === 'staff') {
-      if (stayType !== undefined) staffGuest.stayType = stayType;
-      if (stayType === 'monthly' && selectedMonth !== undefined) {
-        staffGuest.selectedMonth = selectedMonth;
-        staffGuest.checkinDate = null;
-        staffGuest.checkoutDate = null;
-      } else if (stayType === 'daily') {
-        if (checkinDate !== undefined) staffGuest.checkinDate = checkinDate ? new Date(checkinDate) : null;
-        if (checkoutDate !== undefined) staffGuest.checkoutDate = checkoutDate ? new Date(checkoutDate) : null;
-        staffGuest.selectedMonth = null;
+    // Unified update logic for staff and warden hierarchy/room fields
+    if (['staff', 'warden'].includes(currentType)) {
+      // Stay type logic only for staff
+      if (currentType === 'staff') {
+        if (stayType !== undefined) staffGuest.stayType = stayType;
+        if (stayType === 'monthly' && selectedMonth !== undefined) {
+          staffGuest.selectedMonth = selectedMonth;
+          staffGuest.checkinDate = null;
+          staffGuest.checkoutDate = null;
+        } else if (stayType === 'daily') {
+          if (checkinDate !== undefined) staffGuest.checkinDate = checkinDate ? new Date(checkinDate) : null;
+          if (checkoutDate !== undefined) staffGuest.checkoutDate = checkoutDate ? new Date(checkoutDate) : null;
+          staffGuest.selectedMonth = null;
+        }
       }
-      // Update new hierarchy fields
+
+      // Hierarchy fields update for both staff and warden
       if (hostelId !== undefined) staffGuest.hostelId = hostelId || null;
       if (categoryId !== undefined) staffGuest.categoryId = categoryId || null;
       if (roomId !== undefined) staffGuest.roomId = roomId || null;
-      // Update legacy fields for backward compatibility
+      
+      // Legacy fields update for both staff and warden
       if (roomNumber !== undefined) {
         if (selectedRoom) {
           staffGuest.roomNumber = selectedRoom.roomNumber;
@@ -688,6 +694,7 @@ export const updateStaffGuest = async (req, res, next) => {
       }
       if (bedNumber !== undefined) staffGuest.bedNumber = bedNumber ? bedNumber.trim() : null;
     } else {
+      // For non-staff/non-warden roles
       if (checkinDate !== undefined) staffGuest.checkinDate = checkinDate ? new Date(checkinDate) : null;
       if (checkoutDate !== undefined) staffGuest.checkoutDate = checkoutDate ? new Date(checkoutDate) : null;
     }
