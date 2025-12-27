@@ -20,7 +20,8 @@ export const getStaffForAttendance = async (req, res, next) => {
 
     // Build query for active staff/guests
     const query = { 
-      isActive: true 
+      isActive: true,
+      checkOutTime: null
     };
 
     // Add filters if provided (only if they have valid values)
