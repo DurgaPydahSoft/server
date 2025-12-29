@@ -69,6 +69,14 @@ const processMenuItems = async (meals) => {
   return processedMeals;
 };
 
+// Helper to get current date in IST (Indian Standard Time)
+function getISTDate() {
+  const now = new Date();
+  // Get time in Kolkata
+  const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  return istTime;
+}
+
 // Create or update menu for a specific date
 export const createOrUpdateMenuForDate = async (req, res, next) => {
   try {
@@ -176,7 +184,8 @@ export const createOrUpdateMenuForDate = async (req, res, next) => {
     res.json({ success: true, data: menu });
 
     // Send notification asynchronously (non-blocking) if menu is for today
-    const today = normalizeDate(new Date());
+    // Use IST date for today comparison
+    const today = normalizeDate(getISTDate());
     if (normDate.getTime() === today.getTime()) {
       // Run notification in background, don't block the response
       // Use process.nextTick to ensure it runs after response is sent
@@ -226,7 +235,8 @@ export const getMenuForDate = async (req, res, next) => {
 // Get today's menu (for student dashboard)
 export const getMenuForToday = async (req, res, next) => {
   try {
-    const today = normalizeDate(new Date());
+    // Use IST date for today
+    const today = normalizeDate(getISTDate());
     const menu = await Menu.findOne({ date: today });
     if (!menu) throw createError(404, 'Menu for today not found');
     res.json({ success: true, data: menu });
@@ -238,7 +248,8 @@ export const getMenuForToday = async (req, res, next) => {
 // Get today's menu with user's ratings (for student dashboard)
 export const getMenuForTodayWithRatings = async (req, res, next) => {
   try {
-    const today = normalizeDate(new Date());
+    // Use IST date for today
+    const today = normalizeDate(getISTDate());
     const menu = await Menu.findOne({ date: today });
     if (!menu) throw createError(404, 'Menu for today not found');
     
@@ -367,7 +378,13 @@ export const getUserMealRating = async (req, res, next) => {
 export const getRatingStats = async (req, res, next) => {
   try {
     const { date } = req.query;
-    const normDate = normalizeDate(date || new Date());
+    // Use IST date for today default
+    let normDate;
+    if (date) {
+      normDate = normalizeDate(date);
+    } else {
+      normDate = normalizeDate(getISTDate());
+    }
     
     const menu = await Menu.findOne({ date: normDate });
     if (!menu) {
@@ -442,7 +459,8 @@ export const addMenuItemForDate = async (req, res, next) => {
       await menu.save();
 
       // Send notification if menu is for today
-      const today = normalizeDate(new Date());
+      // Use IST date for today
+      const today = normalizeDate(getISTDate());
       if (normDate.getTime() === today.getTime()) {
         try {
           const students = await User.find({ role: 'student' });

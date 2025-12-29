@@ -259,9 +259,9 @@ export const addStaffGuest = async (req, res, next) => {
       stayType: type === 'staff' ? stayType : 'daily',
       selectedMonth: type === 'staff' && stayType === 'monthly' ? selectedMonth : null,
       // New hierarchy fields
-      hostelId: ['staff', 'warden'].includes(type) ? finalHostelId : null,
-      categoryId: ['staff', 'warden'].includes(type) ? finalCategoryId : null,
-      roomId: ['staff', 'warden'].includes(type) ? finalRoomId : null,
+      hostelId: ['staff', 'warden'].includes(type) ? (finalHostelId || hostelId) : null,
+      categoryId: ['staff', 'warden'].includes(type) ? (finalCategoryId || categoryId) : null,
+      roomId: ['staff', 'warden'].includes(type) ? (finalRoomId || roomId) : null,
       // Legacy fields (for backward compatibility)
       roomNumber: ['staff', 'warden'].includes(type) ? (selectedRoom ? selectedRoom.roomNumber : (roomNumber ? roomNumber.trim() : null)) : null,
       bedNumber: ['staff', 'warden'].includes(type) && bedNumber ? bedNumber.trim() : null,
