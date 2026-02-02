@@ -62,11 +62,11 @@ const notificationSchema = new mongoose.Schema({
 // Index for efficient querying
 notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
 
-// TTL index: expire documents 30 days after createdAt (2592000 seconds)
+// TTL index: expire documents 15 days after createdAt (1296000 seconds)
 // Created asynchronously so it does not block the main event loop
 notificationSchema.index(
   { createdAt: 1 },
-  { expireAfterSeconds: 2592000 }
+  { expireAfterSeconds: 1296000 }
 );
 
 // Static method to create notification
