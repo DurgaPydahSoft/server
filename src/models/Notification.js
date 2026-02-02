@@ -54,13 +54,20 @@ const notificationSchema = new mongoose.Schema({
   isRead: {
     type: Boolean,
     default: false
-  }
+  },
 }, {
   timestamps: true
 });
 
 // Index for efficient querying
 notificationSchema.index({ recipient: 1, isRead: 1, createdAt: -1 });
+
+// TTL index: expire documents 30 days after createdAt (2592000 seconds)
+// Created asynchronously so it does not block the main event loop
+notificationSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: 2592000 }
+);
 
 // Static method to create notification
 notificationSchema.statics.createNotification = async function(data) {
@@ -76,5 +83,14 @@ notificationSchema.methods.markAsRead = async function() {
 };
 
 const Notification = mongoose.model('Notification', notificationSchema);
+
+// Create TTL index asynchronously when connected so it does not block the main event loop
+mongoose.connection.once('connected', () => {
+  setImmediate(() => {
+    Notification.createIndexes().catch((err) => {
+      console.error('Notification TTL index creation failed:', err.message);
+    });
+  });
+});
 
 export default Notification; 
