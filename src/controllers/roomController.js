@@ -692,6 +692,42 @@ export const getElectricityBills = async (req, res, next) => {
   }
 };
 
+// Remove all electricity bills for a given month - admin only. Respects optional hostel/category filters.
+export const clearElectricityBillsForMonth = async (req, res, next) => {
+  try {
+    const { month, hostel, category } = req.body;
+
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid month in YYYY-MM format is required.'
+      });
+    }
+
+    const filter = { 'electricityBills.month': month };
+    if (hostel && isValidObjectId(hostel)) {
+      filter.hostel = hostel;
+    }
+    if (category && isValidObjectId(category)) {
+      filter.category = category;
+    }
+
+    const result = await Room.updateMany(
+      filter,
+      { $pull: { electricityBills: { month } } }
+    );
+
+    const scope = [hostel, category].filter(Boolean).length ? 'filtered rooms' : 'all rooms';
+    res.json({
+      success: true,
+      message: `Removed electricity bills for ${month} from ${scope}.`,
+      modifiedCount: result.modifiedCount
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Get electricity bills for a student's room
 export const getStudentRoomBills = async (req, res, next) => {
   try {

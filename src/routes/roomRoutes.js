@@ -17,6 +17,7 @@ import {
   getDefaultElectricityRate,
   setDefaultElectricityRate,
   addBulkElectricityBills,
+  clearElectricityBillsForMonth,
   getRoomsWithBedAvailability,
   getCategories
 } from '../controllers/roomController.js';
@@ -116,6 +117,7 @@ router.delete('/:id', adminAuth, deleteRoom);
 
 // Admin electricity bill routes - admin only
 router.post('/bulk-electricity-bills', adminAuth, addBulkElectricityBills);
+router.post('/clear-electricity-bills-for-month', adminAuth, clearElectricityBillsForMonth);
 router.post('/:roomId/electricity-bill', adminAuth, addOrUpdateElectricityBill);
 router.get('/:roomId/electricity-bill', adminAuth, getElectricityBills);
 router.get('/electricity-default-rate', adminAuth, getDefaultElectricityRate);
