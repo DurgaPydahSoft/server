@@ -4,7 +4,8 @@ import {
   verifyRollNumber,
   completeRegistration,
   resetPassword,
-  validate
+  validate,
+  verifySSOToken
 } from '../controllers/authController.js';
 import { authenticateStudent, protect } from '../middleware/authMiddleware.js';
 
@@ -17,6 +18,9 @@ router.get('/test', (req, res) => {
 
 // Token validation endpoint
 router.get('/validate', protect, validate);
+
+// SSO: verify external token and issue our JWT (no auth required)
+router.post('/verify-token', verifySSOToken);
 
 // Admin login - DISABLED: Using new admin management system
 // router.post('/admin/login', adminLogin);

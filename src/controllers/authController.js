@@ -1,6 +1,9 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
+import axios from 'axios';
 import User from '../models/User.js';
+import Admin from '../models/Admin.js';
 import TempStudent from '../models/TempStudent.js';
 import { createError } from '../utils/error.js';
 import { fetchStudentCredentialsSQL } from '../utils/sqlService.js';
@@ -275,6 +278,142 @@ export const validate = async (req, res, next) => {
     }
     // For admins and others, just return req.user
     return res.json({ success: true, data: { user: req.user } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * SSO: Verify external token via the other backend only (no local JWT verification).
+ * Expects body: { encryptedToken }.
+ * Requires SSO_VERIFY_URL. Calls {SSO_VERIFY_URL}/auth/verify-token and uses the response
+ * to look up user and issue our JWT. Returns same response shape as student/admin login.
+ */
+export const verifySSOToken = async (req, res, next) => {
+  try {
+    const { encryptedToken } = req.body;
+    if (!encryptedToken) {
+      throw createError(400, 'Token is required');
+    }
+
+    const ssoVerifyBaseUrl = process.env.SSO_VERIFY_URL && process.env.SSO_VERIFY_URL.trim();
+    if (!ssoVerifyBaseUrl) {
+      throw createError(500, 'SSO verification not configured: set SSO_VERIFY_URL');
+    }
+
+    const verifyEndpoint = `${ssoVerifyBaseUrl.replace(/\/$/, '')}/auth/verify-token`;
+    let verifyResponse;
+    try {
+      verifyResponse = await axios.post(verifyEndpoint, { encryptedToken }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
+      });
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message || 'SSO verification service unavailable';
+      throw createError(err.response?.status === 401 ? 401 : 502, msg);
+    }
+    const result = verifyResponse.data;
+    if (!result || !result.success || !result.valid || !result.data) {
+      throw createError(401, result?.message || 'Invalid or expired token');
+    }
+    const userId = result.data.userId || result.data._id;
+    const role = result.data.role;
+    if (result.data.expiresAt && new Date(result.data.expiresAt).getTime() < Date.now()) {
+      throw createError(401, 'Token has expired');
+    }
+
+    if (!userId || !role) {
+      throw createError(401, 'Invalid token: missing userId or role');
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      throw createError(401, 'Invalid token: invalid userId');
+    }
+
+    const isStudent = role === 'student';
+    if (isStudent) {
+      const student = await User.findById(userId).select('-password');
+      if (!student) {
+        throw createError(401, 'User not found');
+      }
+      if (student.role !== 'student') {
+        throw createError(401, 'Invalid token: user is not a student');
+      }
+      if (student.hostelStatus === 'Inactive') {
+        throw createError(403, 'Your hostel access has been deactivated. Please contact the administration.');
+      }
+
+      const token = generateToken(student);
+      return res.json({
+        success: true,
+        data: {
+          token,
+          student: {
+            id: student._id,
+            name: student.name,
+            rollNumber: student.rollNumber,
+            course: student.course,
+            branch: student.branch,
+            roomNumber: student.roomNumber,
+            isPasswordChanged: student.isPasswordChanged,
+            gender: student.gender,
+            category: student.category,
+            year: student.year,
+            studentPhone: student.studentPhone,
+            parentPhone: student.parentPhone,
+            hostelStatus: student.hostelStatus,
+            batch: student.batch,
+            academicYear: student.academicYear,
+            email: student.email,
+            studentPhoto: student.studentPhoto,
+            guardianPhoto1: student.guardianPhoto1,
+            guardianPhoto2: student.guardianPhoto2
+          },
+          requiresPasswordChange: !student.isPasswordChanged
+        }
+      });
+    }
+
+    // Admin/staff: resolve from Admin model
+    let admin = await Admin.findById(userId).select('-password')
+      .populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
+    if (!admin || !admin.isActive) {
+      throw createError(401, 'Admin not found or is not active');
+    }
+
+    const token = generateToken(admin);
+    const adminResponse = {
+      id: admin._id,
+      username: admin.username,
+      role: admin.role,
+      permissions: admin.permissions,
+      permissionAccessLevels: admin.permissionAccessLevels
+    };
+    if (admin.role === 'warden' && admin.hostelType) {
+      adminResponse.hostelType = admin.hostelType;
+    }
+    if (admin.role === 'principal') {
+      if (admin.assignedCourses?.length) {
+        adminResponse.assignedCourses = admin.assignedCourses;
+        adminResponse.course = admin.assignedCourses[0];
+      } else if (admin.course) {
+        adminResponse.course = admin.course;
+        adminResponse.assignedCourses = [admin.course];
+      }
+      if (admin.branch) adminResponse.branch = admin.branch;
+    }
+    if (admin.role === 'custom' && admin.customRoleId) {
+      adminResponse.customRoleId = admin.customRoleId;
+      adminResponse.customRole = admin.customRole;
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        token,
+        admin: adminResponse
+      }
+    });
   } catch (error) {
     next(error);
   }
