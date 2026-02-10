@@ -52,6 +52,12 @@ export const mapSQLCourseToMongoFormat = (sqlCourse) => {
     description: sqlCourse.metadata ? JSON.stringify(sqlCourse.metadata) : '',
     duration: sqlCourse.total_years || 4,
     durationUnit: 'years',
+    level: sqlCourse.level, // Add level (diploma, ug, pg)
+    college: sqlCourse.college_id ? {
+      id: sqlCourse.college_id,
+      name: sqlCourse.college_name,
+      code: sqlCourse.college_code
+    } : null,
     isActive: sqlCourse.is_active === 1,
     createdAt: sqlCourse.created_at,
     updatedAt: sqlCourse.updated_at

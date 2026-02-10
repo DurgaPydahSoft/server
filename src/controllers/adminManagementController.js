@@ -650,7 +650,7 @@ export const adminLogin = async (req, res, next) => {
 // Create a new principal
 export const createPrincipal = async (req, res, next) => {
   try {
-    const { username, password, course, courses, branch, email } = req.body;
+    const { username, password, assignedCollegeId, assignedLevels, email } = req.body;
 
     // Check if username already exists
     const existingAdmin = await Admin.findOne({ username });
@@ -658,36 +658,14 @@ export const createPrincipal = async (req, res, next) => {
       throw createError(400, 'Username already exists');
     }
 
-    // Validate courses
-    let finalAssignedCourses = [];
-    
-    // Import mapper
-    const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
-    const sqlCourses = await getCoursesFromSQL();
-
-    if (courses && Array.isArray(courses) && courses.length > 0) {
-      // Validate multiple courses
-      for (const courseItem of courses) {
-        const courseExists = sqlCourses.find(c => c.name === courseItem || c._id === courseItem);
-        if (!courseExists) {
-          throw createError(400, `Invalid course selected: ${courseItem}. Course must exist in SQL database.`);
-        }
-        if (!finalAssignedCourses.includes(courseExists.name)) {
-            finalAssignedCourses.push(courseExists.name);
-        }
-      }
-    } else if (course) {
-      // Validate single course (legacy/fallback)
-      const courseExists = sqlCourses.find(c => c.name === course || c._id === course);
-      if (!courseExists) {
-        throw createError(400, 'Invalid course selected. Course must exist in SQL database.');
-      }
-      finalAssignedCourses.push(courseExists.name);
-    } else {
-      throw createError(400, 'At least one course is required');
+    // Validate College & Levels
+    if (!assignedCollegeId) {
+      throw createError(400, 'College selection is required');
     }
-    
-    const courseName = finalAssignedCourses[0]; // Primary/Legacy field
+
+    if (!assignedLevels || !Array.isArray(assignedLevels) || assignedLevels.length === 0) {
+      throw createError(400, 'At least one level (Diploma, UG, PG) must be selected');
+    }
 
     // Validate email format if provided
     if (email && email.trim()) {
@@ -701,35 +679,17 @@ export const createPrincipal = async (req, res, next) => {
     const principalPermissions = [
       'principal_attendance_oversight',
       'principal_student_oversight',
-      'principal_course_management'
+      'principal_course_management',
+      'leave_management' // Explicitly add leave_management
     ];
-
-    // Validate branch if provided (ONLY if single course)
-    let branchName = null;
-    if (finalAssignedCourses.length === 1 && branch && branch.trim()) {
-      // Validate branch exists in SQL database for the selected course
-      const { getBranchesByCourseFromSQL } = await import('../utils/courseBranchMapper.js');
-      // We need the ID of the single course
-      const singleCourseObj = sqlCourses.find(c => c.name === courseName);
-      
-      if (singleCourseObj) {
-        const branches = await getBranchesByCourseFromSQL(singleCourseObj._id);
-        const branchExists = branches.find(b => b.name === branch || b._id === branch);
-        if (!branchExists) {
-          throw createError(400, 'Invalid branch selected. Branch must exist in SQL database for this course.');
-        }
-        branchName = branchExists.name; // Store branch name as string
-      }
-    }
 
     // Create new principal
     const principalData = {
       username,
       password,
       role: 'principal',
-      assignedCourses: finalAssignedCourses,
-      course: courseName, // Legacy support
-      branch: branchName, // Store branch name as string (optional, usually null for multi-course)
+      assignedCollegeId,
+      assignedLevels,
       permissions: principalPermissions,
       createdBy: req.admin._id
     };
@@ -771,6 +731,8 @@ export const getPrincipals = async (req, res, next) => {
 
     console.log('🎓 Found principals:', principals.length);
     console.log('🎓 Query used:', query);
+    
+    // Enhance response with college info if needed (client fetches colleges separately so IDs are fine)
 
     res.json({
       success: true,
@@ -781,14 +743,14 @@ export const getPrincipals = async (req, res, next) => {
   }
 };
 
-// Update principal
+
 export const updatePrincipal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, course, courses, branch, isActive, email } = req.body;
+    const { username, password, assignedCollegeId, assignedLevels, isActive, email } = req.body;
 
     console.log('🎓 Updating principal:', id);
-    console.log('🎓 Update data:', { username, course, isActive, email });
+    console.log('🎓 Update data:', { username, assignedCollegeId, assignedLevels, isActive, email });
 
     // Build query based on admin role
     let query = {
@@ -818,94 +780,24 @@ export const updatePrincipal = async (req, res, next) => {
     if (password) {
       principal.password = password;
     }
-    // Update courses
-    if (courses !== undefined || course !== undefined) {
-      // Import mapper
-      const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
-      const sqlCourses = await getCoursesFromSQL();
-      let newAssignedCourses = [];
-
-      if (courses && Array.isArray(courses) && courses.length > 0) {
-        // Validate multiple courses
-        for (const courseItem of courses) {
-          const courseExists = sqlCourses.find(c => c.name === courseItem || c._id === courseItem);
-          if (!courseExists) {
-             throw createError(400, `Invalid course selected: ${courseItem}. Course must exist in SQL database.`);
-          }
-          if (!newAssignedCourses.includes(courseExists.name)) {
-              newAssignedCourses.push(courseExists.name);
-          }
-        }
-      } else if (course) {
-         // Validate single course
-         const courseExists = sqlCourses.find(c => c.name === course || c._id === course);
-         if (!courseExists) {
-             throw createError(400, 'Invalid course selected. Course must exist in SQL database.');
-         }
-         newAssignedCourses.push(courseExists.name);
-      }
-      
-      if (newAssignedCourses.length > 0) {
-          principal.assignedCourses = newAssignedCourses;
-          principal.course = newAssignedCourses[0];
-          
-          // Clear branch if multiple courses
-          if (newAssignedCourses.length > 1) {
-            principal.branch = undefined;
-          }
-      }
+    
+    if (assignedCollegeId) {
+      principal.assignedCollegeId = assignedCollegeId;
     }
     
-    // Handle branch update if provided
-    if (req.body.branch !== undefined) {
-      const currentAssigned = principal.assignedCourses || (principal.course ? [principal.course] : []);
-      
-      if (currentAssigned.length > 1) {
-         principal.branch = undefined;
-      } else if (currentAssigned.length === 1) {
-         const branch = req.body.branch;
-         if (branch && branch.trim()) {
-            const { getBranchesByCourseFromSQL } = await import('../utils/courseBranchMapper.js');
-            const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
-            const sqlCourses = await getCoursesFromSQL();
-            // We need the ID of the single course
-            const courseName = currentAssigned[0];
-            const singleCourseObj = sqlCourses.find(c => c.name === courseName);
-            
-            if (singleCourseObj) {
-              const branches = await getBranchesByCourseFromSQL(singleCourseObj._id);
-              const branchExists = branches.find(b => b.name === branch || b._id === branch);
-              if (!branchExists) {
-                throw createError(400, 'Invalid branch selected. Branch must exist in SQL database for this course.');
-              }
-              principal.branch = branchExists.name;
-            }
-         } else {
-            principal.branch = undefined;
-         }
-      } else {
-        principal.branch = undefined;
-      }
+    if (assignedLevels) {
+      principal.assignedLevels = assignedLevels;
     }
+    
     if (typeof isActive === 'boolean') {
       principal.isActive = isActive;
     }
     
-    // Update email - allow setting to empty string to clear it
     if (email !== undefined) {
-      if (email && email.trim()) {
-        // Validate email format
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-          throw createError(400, 'Invalid email address format');
-        }
-        principal.email = email.trim().toLowerCase();
-      } else {
-        // Clear email if empty string is passed
-        principal.email = undefined;
-      }
+      principal.email = email;
     }
 
+    console.log('🎓 Saving principal');
     const updatedPrincipal = await principal.save();
     
     // Remove password from response

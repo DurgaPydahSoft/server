@@ -57,6 +57,34 @@ const courseManagementWriteAuth = [adminAuth, (req, res, next) => {
 
 // ==================== COURSE ROUTES ====================
 
+// Get all colleges from SQL
+router.get('/colleges', async (req, res) => {
+  try {
+    const { fetchCollegesFromSQL } = await import('../utils/sqlService.js');
+    const result = await fetchCollegesFromSQL();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch colleges',
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching colleges:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch colleges',
+      error: error.message
+    });
+  }
+});
+
 // Get all courses (public access for dropdowns) - Now fetches from SQL
 router.get('/courses', async (req, res) => {
   try {
@@ -72,7 +100,9 @@ router.get('/courses', async (req, res) => {
       description: course.description || '',
       duration: course.duration,
       durationUnit: course.durationUnit || 'years',
-      isActive: course.isActive
+      isActive: course.isActive,
+      college: course.college,
+      level: course.level
     }));
     
     res.json({

@@ -592,18 +592,57 @@ export const getAllLeaveRequests = async (req, res, next) => {
 
     // Filter by admin's course permissions if they have leave_management permission
     if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
-      if (req.admin.leaveManagementCourses && req.admin.leaveManagementCourses.length > 0) {
-        // Filter students by the courses the admin has access to
-        query['student'] = {
-          $in: await User.distinct('_id', {
-            course: { $in: req.admin.leaveManagementCourses }
-          })
-        };
-        console.log('Filtering by admin course permissions:', req.admin.leaveManagementCourses);
+      const { assignedCourses, assignedCollegeId, assignedLevels } = req.admin;
+      const orConditions = [];
+
+      // 1. Legacy/Direct Course Assignment
+      if (assignedCourses && assignedCourses.length > 0) {
+        orConditions.push({
+          course: { $in: assignedCourses }
+        });
+        console.log('Filtering by assigned courses:', assignedCourses);
+      }
+
+      // 2. College & Level Based Assignment
+      if (assignedCollegeId && assignedLevels && assignedLevels.length > 0) {
+        // Find all courses that match this College AND one of the Levels
+        // utilizing the cached SQL courses in courseBranchMapper
+        try {
+          const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
+          const allSQLCourses = await getCoursesFromSQL();
+          
+          const validCourses = allSQLCourses.filter(c => 
+            c.college && c.college.id === assignedCollegeId && 
+            c.level && assignedLevels.map(l => l.toLowerCase()).includes(c.level.toLowerCase())
+          );
+          
+          const validCourseNames = validCourses.map(c => c.name);
+          
+          if (validCourseNames.length > 0) {
+            orConditions.push({
+              course: { $in: validCourseNames }
+            });
+            console.log(`Filtering by College ID ${assignedCollegeId} and Levels ${assignedLevels}. Matched Courses:`, validCourseNames);
+          } else {
+             console.log(`No courses found for College ID ${assignedCollegeId} and Levels ${assignedLevels}`);
+          }
+
+          // Also filter by college.id directly if the student has it synced
+          // This is an AND condition with the course check effectively, but we can't do strict AND 
+          // because we need to support legacy 'course' string only students too.
+          // So we primarily rely on resolving the 'allowed courses' list.
+          
+        } catch (err) {
+          console.error("Error resolving courses for college/level:", err);
+        }
+      }
+
+      if (orConditions.length > 0) {
+         query.$or = orConditions;
       } else {
-        // If admin has leave_management permission but no courses assigned, return empty
-        console.log('Admin has leave_management permission but no courses assigned');
-        return res.json({
+         // Admin has leave_management but NO assignments (neither legacy nor new)
+         console.log('Admin has leave_management permission but no courses/levels assigned');
+         return res.json({
           success: true,
           data: {
             leaves: [],
@@ -673,7 +712,38 @@ export const verifyOTPAndApprove = async (req, res, next) => {
 
     // Check course permissions for sub-admin
     if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
-      if (!req.admin.leaveManagementCourses || !req.admin.leaveManagementCourses.includes(leave.student.course.toString())) {
+      const studentCourse = leave.student.course.name || leave.student.course; // Handle populated or string
+      const { assignedCourses, assignedCollegeId, assignedLevels } = req.admin;
+      let hasPermission = false;
+
+      // 1. Check Legacy/Direct Assignment
+      if (assignedCourses && assignedCourses.includes(studentCourse)) {
+        hasPermission = true;
+      }
+
+      // 2. Check College & Level Assignment
+      if (!hasPermission && assignedCollegeId && assignedLevels) {
+        try {
+           const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
+           const allSQLCourses = await getCoursesFromSQL();
+           
+           // Find the details of the student's course
+           const studentCourseDetails = allSQLCourses.find(c => c.name === studentCourse);
+           
+           if (studentCourseDetails) {
+             const isCollegeMatch = studentCourseDetails.college && studentCourseDetails.college.id === assignedCollegeId;
+             const isLevelMatch = studentCourseDetails.level && assignedLevels.map(l => l.toLowerCase()).includes(studentCourseDetails.level.toLowerCase());
+             
+             if (isCollegeMatch && isLevelMatch) {
+               hasPermission = true;
+             }
+           }
+        } catch (err) {
+          console.error("Error validating permission for college/level:", err);
+        }
+      }
+
+      if (!hasPermission) {
         throw createError(403, 'You do not have permission to approve leave requests for this student\'s course');
       }
     }

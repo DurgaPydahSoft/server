@@ -101,6 +101,12 @@ const userSchema = new mongoose.Schema({
     required: function() { return this.role === 'student'; },
     trim: true
   },
+  // College Details (Synced from SQL)
+  college: {
+    id: { type: Number },
+    name: { type: String },
+    code: { type: String }
+  },
   branch: {
     type: String,
     required: function() { return this.role === 'student'; },
@@ -306,15 +312,7 @@ const userSchema = new mongoose.Schema({
   },
   batch: {
     type: String,
-    required: function() { return this.role === 'student'; },
-    validate: {
-      validator: function(v) {
-        if (this.role !== 'student') return true;
-        // Validate batch format (e.g., 2022-2026)
-        return /^\d{4}-\d{4}$/.test(v);
-      },
-      message: props => `${props.value} is not a valid batch format! Use format YYYY-YYYY (e.g., 2022-2026)`
-    }
+    required: function() { return this.role === 'student'; }
   },
   academicYear: {
     type: String,

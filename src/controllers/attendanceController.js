@@ -1404,14 +1404,50 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
 
     // Determine allowed courses for the principal
     let allowedCourses = [];
-    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
-      // Don't normalize for the query yet, let's see what raw values are
-      allowedCourses = principal.assignedCourses; 
-    } else if (principal.course) {
-      allowedCourses = [principal.course];
+    
+    // New Logic: Filter by Assigned Colleges & Levels
+    if (principal.assignedCollegeIds && principal.assignedCollegeIds.length > 0) {
+      console.log('🎓 Filtering by Assigned Colleges:', principal.assignedCollegeIds);
+      
+      try {
+        const { fetchCoursesFromSQL } = await import('../utils/sqlService.js');
+        const sqlCoursesResult = await fetchCoursesFromSQL();
+        
+        if (sqlCoursesResult.success) {
+           const allCourses = sqlCoursesResult.data;
+           
+           // Filter courses that match College IDs AND Levels
+           const matchingCourses = allCourses.filter(course => {
+             const collegeMatch = course.college_id && principal.assignedCollegeIds.includes(course.college_id);
+             
+             // If levels are assigned, filter by them. If no levels assigned, include all levels for that college? 
+             // Or assume strict filtering? The Model says levels are optional effectively but UI enforces it?
+             // UI enforces selection. So we should filter.
+             // If principal.assignedLevels is empty, maybe allow all? Let's assume strict if provided.
+             const levelMatch = (!principal.assignedLevels || principal.assignedLevels.length === 0) || 
+                               (course.level && principal.assignedLevels.includes(course.level.toLowerCase()));
+                               
+             return collegeMatch && levelMatch;
+           });
+           
+           allowedCourses = matchingCourses.map(c => c.name);
+           console.log(`🎓 Found ${allowedCourses.length} courses matching colleges/levels`);
+        }
+      } catch (err) {
+        console.error('🎓 Error fetching SQL courses for principal filter:', err);
+      }
+    } 
+    
+    // Fallback/Legacy Logic
+    if (allowedCourses.length === 0) {
+      if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+        allowedCourses = principal.assignedCourses; 
+      } else if (principal.course) {
+        allowedCourses = [principal.course];
+      }
     }
     
-    console.log('🎓 Generated Allowed Courses:', allowedCourses);
+    console.log('🎓 Final Allowed Courses for Query:', allowedCourses);
 
     // Build query for students in principal's allowed courses
     // Use regex to match course names more flexibly (case insensitive, ignoring spaces)
@@ -1519,10 +1555,39 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
 
     // Determine allowed courses for the principal
     let allowedCourses = [];
-    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
-      allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
-    } else if (principal.course) {
-      allowedCourses = [normalizeCourseName(principal.course.trim())];
+
+    // New Logic: Filter by Assigned Colleges & Levels
+    if (principal.assignedCollegeIds && principal.assignedCollegeIds.length > 0) {
+      console.log('🎓 [ByStatus] Filtering by Assigned Colleges:', principal.assignedCollegeIds);
+      
+      try {
+        const { fetchCoursesFromSQL } = await import('../utils/sqlService.js');
+        const sqlCoursesResult = await fetchCoursesFromSQL();
+        
+        if (sqlCoursesResult.success) {
+           const allCourses = sqlCoursesResult.data;
+           
+           const matchingCourses = allCourses.filter(course => {
+             const collegeMatch = course.college_id && principal.assignedCollegeIds.includes(course.college_id);
+             const levelMatch = (!principal.assignedLevels || principal.assignedLevels.length === 0) || 
+                               (course.level && principal.assignedLevels.includes(course.level.toLowerCase()));
+             return collegeMatch && levelMatch;
+           });
+           
+           allowedCourses = matchingCourses.map(c => normalizeCourseName(c.name));
+        }
+      } catch (err) {
+        console.error('🎓 [ByStatus] Error fetching SQL courses:', err);
+      }
+    }
+
+    // Fallback/Legacy Logic
+    if (allowedCourses.length === 0) {
+      if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+        allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
+      } else if (principal.course) {
+        allowedCourses = [normalizeCourseName(principal.course.trim())];
+      }
     }
 
     // Build query for students in principal's allowed courses

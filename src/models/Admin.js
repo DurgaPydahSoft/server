@@ -43,13 +43,26 @@ const adminSchema = new mongoose.Schema({
     type: String,
     trim: true
   }],
+  // New College & Level based assignment
+  assignedCollegeIds: [{
+    type: Number,
+    required: false
+  }],
+  assignedLevels: [{
+    type: String,
+    enum: ['diploma', 'ug', 'pg'],
+    trim: true
+  }],
   course: {
     type: String,
     trim: true,
-    // Legacy: Kept for backward compatibility. New functionality uses assignedCourses.
+    // Legacy: Kept for backward compatibility. New functionality uses assignedCollegeId/Levels.
     required: function() {
-      // Only required if assignedCourses is empty and role is principal
-      return this.role === 'principal' && (!this.assignedCourses || this.assignedCourses.length === 0);
+      // Only required if role is principal AND neither old (courses) nor new (college) fields are present
+      if (this.role !== 'principal') return false;
+      const hasCollege = (this.assignedCollegeIds && this.assignedCollegeIds.length > 0) || this.assignedCollegeId != null;
+      const hasCourses = (this.assignedCourses && this.assignedCourses.length > 0);
+      return !hasCollege && !hasCourses;
     }
   },
   branch: {

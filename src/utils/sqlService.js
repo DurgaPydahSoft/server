@@ -210,22 +210,51 @@ export const fetchStudentByIdentifier = async (identifier) => {
 };
 
 /**
- * Fetch all courses from SQL
+ * Fetch all colleges from SQL
  */
-export const fetchCoursesFromSQL = async () => {
+export const fetchCollegesFromSQL = async () => {
   try {
     const query = `
       SELECT 
         id,
         name,
         code,
-        metadata,
-        total_years,
         is_active,
         created_at,
         updated_at
-      FROM courses
+      FROM colleges
       ORDER BY name ASC
+    `;
+    const result = await executeQuery(query);
+    return result;
+  } catch (error) {
+    console.error('❌ Error fetching colleges from SQL:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Fetch all courses from SQL
+ */
+export const fetchCoursesFromSQL = async () => {
+  try {
+    const query = `
+      SELECT 
+        c.id,
+        c.name,
+        c.code,
+        c.metadata,
+        c.total_years,
+        c.level,
+        c.college_id,
+        c.is_active,
+        c.created_at,
+        c.updated_at,
+        col.name AS college_name,
+        col.code AS college_code
+      FROM courses c
+      LEFT JOIN colleges col ON c.college_id = col.id
+      ORDER BY c.name ASC
     `;
     const result = await executeQuery(query);
     return result;
@@ -242,16 +271,21 @@ export const fetchCourseByIdFromSQL = async (courseId) => {
   try {
     const query = `
       SELECT 
-        id,
-        name,
-        code,
-        metadata,
-        total_years,
-        is_active,
-        created_at,
-        updated_at
-      FROM courses
-      WHERE id = ?
+        c.id,
+        c.name,
+        c.code,
+        c.metadata,
+        c.total_years,
+        c.level,
+        c.college_id,
+        c.is_active,
+        c.created_at,
+        c.updated_at,
+        col.name AS college_name,
+        col.code AS college_code
+      FROM courses c
+      LEFT JOIN colleges col ON c.college_id = col.id
+      WHERE c.id = ?
       LIMIT 1
     `;
     const result = await executeQuery(query, [courseId]);
@@ -261,6 +295,51 @@ export const fetchCourseByIdFromSQL = async (courseId) => {
     return { success: false, error: 'Course not found' };
   } catch (error) {
     console.error('❌ Error fetching course by ID from SQL:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Fetch student by Name from SQL (Approximate/Normalized search)
+ */
+export const fetchStudentByName = async (name) => {
+  try {
+    // Basic normalization: Remove dots, extra spaces
+    // We will use LIKE in SQL for broader matching or strict name matching
+    // For now, let's try strict name, and then a LIKE query if needed.
+    // Given the user wants "approximate", we'll try a flexible LIKE first.
+    
+    const cleanName = name.replace(/\./g, '').replace(/\s+/g, '%').trim();
+    // 'B . JAYA' -> 'B % JAYA'
+    
+    const query = `
+      SELECT 
+        id,
+        admission_number,
+        admission_no,
+        pin_no,
+        student_name,
+        current_year,
+        batch,
+        course,
+        branch
+      FROM students
+      WHERE REPLACE(student_name, '.', '') LIKE ? 
+         OR student_name LIKE ?
+      LIMIT 1
+    `;
+    
+    // Attempt 1: Try to match ignoring dots
+    const searchPattern = `%${cleanName}%`; 
+    
+    const result = await executeQuery(query, [searchPattern, `%${name}%`]);
+    
+    if (result.success && result.data.length > 0) {
+      return { success: true, data: result.data[0] };
+    }
+    return { success: false, error: 'Student not found by name' };
+  } catch (error) {
+    console.error('❌ Error fetching student by name:', error);
     return { success: false, error: error.message };
   }
 };
