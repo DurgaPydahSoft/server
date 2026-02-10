@@ -220,7 +220,7 @@ if (process.env.NODE_ENV === 'production') {
   // Handle client-side routing (no authentication required)
   app.get('*', (req, res) => {
     console.log('🌐 Serving static file for:', req.path);
-    res.sendFile(path.resolve(__dirname, '../client/dist/index.html'));
+    res.sendFile(path.resolve(__dirname, '../../client/dist/index.html'));
   });
 }
 
