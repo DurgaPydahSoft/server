@@ -79,7 +79,7 @@ const concessionManagementAuth = [adminAuth, (req, res, next) => {
   });
 }];
 import { testEmailService, getEmailServiceStatus } from '../utils/emailService.js';
-import { fetchStudentFromSQL, testConnection as testSQLConnection } from '../controllers/sqlStudentController.js';
+import { fetchStudentFromSQL, testConnection as testSQLConnection, getColleges as getSQLColleges } from '../controllers/sqlStudentController.js';
 import multer from 'multer';
 
 const router = express.Router();
@@ -218,6 +218,7 @@ router.post('/students/update-years-academic-calendar', updateStudentYearsFromAc
 
 // SQL database integration routes
 router.get('/students/fetch-from-sql/:identifier', fetchStudentFromSQL);
+router.get('/sql/colleges', getSQLColleges);
 router.get('/sql/test-connection', testSQLConnection);
 
 // Routes for /students (exact path)

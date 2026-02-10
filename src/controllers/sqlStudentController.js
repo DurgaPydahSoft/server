@@ -1,4 +1,4 @@
-import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
+import { fetchStudentByIdentifier, testSQLConnection, fetchCollegesFromSQL } from '../utils/sqlService.js';
 import { matchCourseAndBranch } from '../utils/courseBranchMatcher.js';
 import { createError } from '../utils/error.js';
 
@@ -125,6 +125,7 @@ export const fetchStudentFromSQL = async (req, res, next) => {
         mappedData.courseName = courseMatch.courseName;
         mappedData.branchId = courseMatch.branchId;
         mappedData.branchName = courseMatch.branchName;
+        mappedData.college = courseMatch.college; // Add college data
         mappedData.courseMatchType = courseMatch.courseMatchType;
         mappedData.branchMatchType = courseMatch.branchMatchType;
       } else {
@@ -171,3 +172,27 @@ export const testConnection = async (req, res, next) => {
   }
 };
 
+/**
+ * Fetch all colleges from SQL
+ */
+export const getColleges = async (req, res, next) => {
+  try {
+    const result = await fetchCollegesFromSQL();
+    
+    if (result.success) {
+      res.json({
+        success: true,
+        data: result.data
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch colleges from SQL',
+        error: result.error
+      });
+    }
+  } catch (error) {
+    console.error('❌ Error in getColleges:', error);
+    next(createError(500, 'Error fetching colleges from SQL', error.message));
+  }
+};

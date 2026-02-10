@@ -598,6 +598,58 @@ export const adminLogin = async (req, res, next) => {
       tokenData.customRole = admin.customRole;
     }
 
+    // NEW LOGIC: Inject assignedCourses AND CollegeDetails for Principals based on assignedCollegeIds
+    if (admin.role === 'principal' && admin.assignedCollegeIds && admin.assignedCollegeIds.length > 0) {
+      try {
+        const { fetchCoursesFromSQL, fetchCollegesFromSQL } = await import('../utils/sqlService.js');
+        
+        // 1. Fetch and inject College Details
+        const sqlCollegesResult = await fetchCollegesFromSQL();
+        if (sqlCollegesResult.success) {
+           const allColleges = sqlCollegesResult.data;
+           const myColleges = allColleges.filter(col => admin.assignedCollegeIds.includes(col.id));
+           
+           // Inject detailed college info
+           admin.assignedCollegeDetails = myColleges.map(col => ({
+             id: col.id,
+             name: col.name,
+             code: col.code
+           }));
+           tokenData.assignedCollegeDetails = admin.assignedCollegeDetails;
+           console.log(`🎓 [Login] Injected ${admin.assignedCollegeDetails.length} college details`);
+        }
+
+        // 2. Fetch and inject Assigned Courses (existing logic)
+        const sqlCoursesResult = await fetchCoursesFromSQL();
+        
+        if (sqlCoursesResult.success) {
+           const allCourses = sqlCoursesResult.data;
+           
+           // Filter courses that match College IDs AND Levels
+           const matchingCourses = allCourses.filter(course => {
+             const collegeMatch = course.college_id && admin.assignedCollegeIds.includes(course.college_id);
+             const levelMatch = (!admin.assignedLevels || admin.assignedLevels.length === 0) || 
+                               (course.level && admin.assignedLevels.map(l => l.toLowerCase()).includes(course.level.toLowerCase()));
+             return collegeMatch && levelMatch;
+           });
+           
+           const derivedCourses = matchingCourses.map(c => c.name);
+           console.log(`🎓 [Login] Derived ${derivedCourses.length} courses from colleges for principal`);
+           
+           // Override/Inject assignedCourses in the token data and admin object for response
+           // We do NOT save this to DB, just use it for the session
+           admin.assignedCourses = derivedCourses; 
+           tokenData.assignedCourses = derivedCourses;
+           if (derivedCourses.length > 0) {
+             tokenData.course = derivedCourses[0];
+             admin.course = derivedCourses[0];
+           }
+        }
+      } catch (err) {
+        console.error('🎓 [Login] Error generating courses/colleges from SQL:', err);
+      }
+    }
+
     const token = jwt.sign(tokenData, process.env.JWT_SECRET, { expiresIn: '24h' });
 
     // Prepare admin response data
@@ -650,7 +702,7 @@ export const adminLogin = async (req, res, next) => {
 // Create a new principal
 export const createPrincipal = async (req, res, next) => {
   try {
-    const { username, password, assignedCollegeId, assignedLevels, email } = req.body;
+    const { username, password, assignedCollegeId, assignedCollegeIds, assignedLevels, email } = req.body;
 
     // Check if username already exists
     const existingAdmin = await Admin.findOne({ username });
@@ -659,7 +711,9 @@ export const createPrincipal = async (req, res, next) => {
     }
 
     // Validate College & Levels
-    if (!assignedCollegeId) {
+    // Support both single ID (legacy) and array of IDs (new)
+    const hasCollege = (assignedCollegeIds && assignedCollegeIds.length > 0) || assignedCollegeId;
+    if (!hasCollege) {
       throw createError(400, 'College selection is required');
     }
 
@@ -688,7 +742,8 @@ export const createPrincipal = async (req, res, next) => {
       username,
       password,
       role: 'principal',
-      assignedCollegeId,
+      assignedCollegeIds: assignedCollegeIds || (assignedCollegeId ? [assignedCollegeId] : []), // Normalize to array
+      assignedCollegeId: assignedCollegeId, // Keep for backward compatibility if needed, or remove if schema handles it
       assignedLevels,
       permissions: principalPermissions,
       createdBy: req.admin._id
@@ -747,10 +802,10 @@ export const getPrincipals = async (req, res, next) => {
 export const updatePrincipal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, assignedCollegeId, assignedLevels, isActive, email } = req.body;
+    const { username, password, assignedCollegeId, assignedCollegeIds, assignedLevels, isActive, email } = req.body;
 
     console.log('🎓 Updating principal:', id);
-    console.log('🎓 Update data:', { username, assignedCollegeId, assignedLevels, isActive, email });
+    console.log('🎓 Update data:', { username, assignedCollegeId, assignedCollegeIds, assignedLevels, isActive, email });
 
     // Build query based on admin role
     let query = {
@@ -781,8 +836,16 @@ export const updatePrincipal = async (req, res, next) => {
       principal.password = password;
     }
     
-    if (assignedCollegeId) {
-      principal.assignedCollegeId = assignedCollegeId;
+    if (assignedCollegeIds) {
+      principal.assignedCollegeIds = assignedCollegeIds;
+      // If we are setting array, we might want to clear or sync the legacy single ID field if it exists
+      if (assignedCollegeIds.length > 0) {
+         principal.assignedCollegeId = assignedCollegeIds[0];
+      }
+    } else if (assignedCollegeId) {
+       // Fallback for legacy requests
+       principal.assignedCollegeId = assignedCollegeId;
+       principal.assignedCollegeIds = [assignedCollegeId];
     }
     
     if (assignedLevels) {

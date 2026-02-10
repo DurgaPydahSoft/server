@@ -277,7 +277,56 @@ export const validate = async (req, res, next) => {
       return res.json({ success: true, data: { user: populatedUser } });
     }
     // For admins and others, just return req.user
-    return res.json({ success: true, data: { user: req.user } });
+    const userResponse = req.user.toObject ? req.user.toObject() : { ...req.user };
+    
+    // NEW LOGIC: Inject assignedCourses AND CollegeDetails for Principals based on assignedCollegeIds (for page refreshes)
+    if (req.user.role === 'principal' && req.user.assignedCollegeIds && req.user.assignedCollegeIds.length > 0) {
+      try {
+        const { fetchCoursesFromSQL, fetchCollegesFromSQL } = await import('../utils/sqlService.js');
+        
+        // 1. Fetch and inject College Details
+        const sqlCollegesResult = await fetchCollegesFromSQL();
+        if (sqlCollegesResult.success) {
+           const allColleges = sqlCollegesResult.data;
+           const myColleges = allColleges.filter(col => req.user.assignedCollegeIds.includes(col.id));
+           
+           // Inject detailed college info
+           userResponse.assignedCollegeDetails = myColleges.map(col => ({
+             id: col.id,
+             name: col.name,
+             code: col.code
+           }));
+           console.log(`🎓 [Validate] Injected ${userResponse.assignedCollegeDetails.length} college details`);
+        }
+
+        // 2. Fetch and inject Assigned Courses (existing logic)
+        const sqlCoursesResult = await fetchCoursesFromSQL();
+        
+        if (sqlCoursesResult.success) {
+           const allCourses = sqlCoursesResult.data;
+           
+           // Filter courses that match College IDs AND Levels
+           const matchingCourses = allCourses.filter(course => {
+             const collegeMatch = course.college_id && req.user.assignedCollegeIds.includes(course.college_id);
+             const levelMatch = (!req.user.assignedLevels || req.user.assignedLevels.length === 0) || 
+                               (course.level && req.user.assignedLevels.map(l => l.toLowerCase()).includes(course.level.toLowerCase()));
+             return collegeMatch && levelMatch;
+           });
+           
+           const derivedCourses = matchingCourses.map(c => c.name);
+           console.log(`🎓 [Validate] Derived ${derivedCourses.length} courses from colleges for principal`);
+           
+           userResponse.assignedCourses = derivedCourses;
+           if (derivedCourses.length > 0) {
+             userResponse.course = derivedCourses[0];
+           }
+        }
+      } catch (err) {
+         console.error('🎓 [Validate] Error generating courses/colleges from colleges:', err);
+      }
+    }
+
+    return res.json({ success: true, data: { user: userResponse } });
   } catch (error) {
     next(error);
   }

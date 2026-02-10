@@ -100,7 +100,8 @@ export const addStudent = async (req, res, next) => {
       batch,
       academicYear,
       email,
-      concession = 0
+      concession = 0,
+      college
     } = req.body;
 
     // Check if student already exists in MongoDB
@@ -429,6 +430,8 @@ export const addStudent = async (req, res, next) => {
       course: finalCourseName ? finalCourseName.trim() : '',
       year,
       branch: finalBranchName ? finalBranchName.trim() : '',
+      // Store College details
+      college: typeof college === 'string' ? JSON.parse(college) : college,
       // Store SQL IDs for reference
       ...(sqlCourseId && { sqlCourseId }),
       ...(sqlBranchId && { sqlBranchId }),
@@ -2815,10 +2818,38 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
 
     // Determine allowed courses for the principal
     let allowedCourses = [];
-    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
-      allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
-    } else if (principal.course) {
-      allowedCourses = [normalizeCourseName(principal.course.trim())];
+    
+    // New Logic: Filter by Assigned Colleges & Levels
+    if (principal.assignedCollegeIds && principal.assignedCollegeIds.length > 0) {
+      try {
+        const { fetchCoursesFromSQL } = await import('../utils/sqlService.js');
+        const sqlCoursesResult = await fetchCoursesFromSQL();
+        
+        if (sqlCoursesResult.success) {
+           const allCourses = sqlCoursesResult.data;
+           
+           // Filter courses that match College IDs AND Levels
+           const matchingCourses = allCourses.filter(course => {
+             const collegeMatch = course.college_id && principal.assignedCollegeIds.includes(course.college_id);
+             const levelMatch = (!principal.assignedLevels || principal.assignedLevels.length === 0) || 
+                               (course.level && principal.assignedLevels.map(l => l.toLowerCase()).includes(course.level.toLowerCase()));
+             return collegeMatch && levelMatch;
+           });
+           
+           allowedCourses = matchingCourses.map(c => normalizeCourseName(c.name));
+        }
+      } catch (err) {
+        console.error('🎓 Error fetching SQL courses for principal filter:', err);
+      }
+    }
+    
+    // Fallback/Legacy Logic
+    if (allowedCourses.length === 0) {
+      if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+        allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
+      } else if (principal.course) {
+        allowedCourses = [normalizeCourseName(principal.course.trim())];
+      }
     }
 
     if (allowedCourses.length === 0) {

@@ -77,6 +77,7 @@ export const matchCourse = async (sqlCourseName) => {
           courseId: course._id, // This will be sql_XXX format
           sqlId: course.sqlId, // Actual SQL ID
           courseName: course.name,
+          college: course.college,
           matchType: 'exact'
         };
       }
@@ -96,6 +97,7 @@ export const matchCourse = async (sqlCourseName) => {
         courseId: bestMatch._id,
         sqlId: bestMatch.sqlId,
         courseName: bestMatch.name,
+        college: bestMatch.college,
         matchType: 'fuzzy',
         confidence: bestScore
       };
@@ -241,6 +243,7 @@ export const matchCourseAndBranch = async (sqlCourseName, sqlBranchName) => {
       courseName: courseMatch.courseName,
       branchId: branchMatch.branchId,
       branchName: branchMatch.branchName,
+      college: courseMatch.college, // Propagate college data
       courseMatchType: courseMatch.matchType,
       branchMatchType: branchMatch.matchType
     };

@@ -5,6 +5,8 @@ import Branch from '../models/Branch.js';
 // Cache for SQL courses and branches (refresh every 5 minutes)
 let coursesCache = null;
 let branchesCache = null;
+let mappedCoursesCache = null; // NEW: Cached MongoDB-format courses
+let mappedBranchesCache = null; // NEW: Cached MongoDB-format branches
 let cacheTimestamp = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
@@ -31,9 +33,13 @@ const refreshCacheIfNeeded = async () => {
     
     if (coursesResult.success) {
       coursesCache = coursesResult.data;
+      // Pre-map for performance
+      mappedCoursesCache = coursesCache.map(mapSQLCourseToMongoFormat);
     }
     if (branchesResult.success) {
       branchesCache = branchesResult.data;
+      // Pre-map for performance
+      mappedBranchesCache = branchesCache.map(mapSQLBranchToMongoFormat);
     }
     cacheTimestamp = now;
     console.log(`✅ Cache refreshed: ${coursesCache?.length || 0} courses, ${branchesCache?.length || 0} branches`);
@@ -91,16 +97,21 @@ export const getCoursesFromSQL = async () => {
   try {
     await refreshCacheIfNeeded();
     
+    // Return pre-mapped cache if available
+    if (mappedCoursesCache) {
+      return mappedCoursesCache;
+    }
+
     if (!coursesCache) {
       const result = await fetchCoursesFromSQL();
       if (!result.success) {
         throw new Error(result.error || 'Failed to fetch courses from SQL');
       }
       coursesCache = result.data;
+      mappedCoursesCache = coursesCache.map(mapSQLCourseToMongoFormat);
     }
     
-    // Map SQL courses to MongoDB format
-    return coursesCache.map(mapSQLCourseToMongoFormat);
+    return mappedCoursesCache;
   } catch (error) {
     console.error('❌ Error getting courses from SQL:', error);
     // Fallback to MongoDB if SQL fails
@@ -122,16 +133,21 @@ export const getBranchesFromSQL = async () => {
   try {
     await refreshCacheIfNeeded();
     
+    // Return pre-mapped cache if available
+    if (mappedBranchesCache) {
+      return mappedBranchesCache;
+    }
+
     if (!branchesCache) {
       const result = await fetchBranchesFromSQL();
       if (!result.success) {
         throw new Error(result.error || 'Failed to fetch branches from SQL');
       }
       branchesCache = result.data;
+      mappedBranchesCache = branchesCache.map(mapSQLBranchToMongoFormat);
     }
     
-    // Map SQL branches to MongoDB format
-    return branchesCache.map(mapSQLBranchToMongoFormat);
+    return mappedBranchesCache;
   } catch (error) {
     console.error('❌ Error getting branches from SQL:', error);
     // Fallback to MongoDB if SQL fails
@@ -275,6 +291,8 @@ export const findBranchByNameOrCode = async (courseId, nameOrCode) => {
 export const clearCache = () => {
   coursesCache = null;
   branchesCache = null;
+  mappedCoursesCache = null;
+  mappedBranchesCache = null;
   cacheTimestamp = null;
   console.log('🗑️ Courses and branches cache cleared');
 };
