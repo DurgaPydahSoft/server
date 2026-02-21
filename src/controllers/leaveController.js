@@ -84,8 +84,8 @@ const isDateBeforeToday = (dateToCheck) => {
 // Helper function to check if a leave request has expired
 const isLeaveExpired = (leave) => {
   if (leave.applicationType === 'Leave') {
-    // For Leave requests, expire at end of day
-    return isDateBeforeToday(leave.startDate);
+    // For Leave requests, expire only after the end date has passed
+    return isDateBeforeToday(leave.endDate);
   } else if (leave.applicationType === 'Permission') {
     // For Permission requests, expire at end of day
     return isDateBeforeToday(leave.permissionDate);
@@ -117,8 +117,8 @@ const autoDeleteExpiredLeaves = async () => {
     // Filter expired leaves using JavaScript logic for better date handling
     const expiredLeaves = allPendingLeaves.filter(leave => {
       if (leave.applicationType === 'Leave') {
-        // For Leave requests, check if start date is before today (end of day)
-        return isDateBeforeToday(leave.startDate);
+        // For Leave requests, check if end date is before today
+        return isDateBeforeToday(leave.endDate);
       } else if (leave.applicationType === 'Permission') {
         // For Permission requests, check if permission date is before today
         return isDateBeforeToday(leave.permissionDate);
@@ -142,13 +142,13 @@ const autoDeleteExpiredLeaves = async () => {
             
             if (leave.status === 'Warden Verified') {
               if (leave.applicationType === 'Leave') {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the date has passed without principal approval.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the entire leave period has passed without principal approval.`;
               } else {
                 notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the date has passed without principal approval.`;
               }
             } else {
               if (leave.applicationType === 'Leave') {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the date has passed without OTP verification.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the entire leave period has passed without OTP verification.`;
               } else {
                 notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the date has passed without OTP verification.`;
               }
@@ -1397,13 +1397,42 @@ export const getLeaveById = async (req, res, next) => {
 // Get all approved leave requests for security guards (including warden verified)
 export const getApprovedLeaves = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, selectedDate } = req.query;
     
+    // Build query
+    const query = { 
+      status: { $in: ['Approved', 'Warden Verified'] } 
+    };
+
+    // Add date filtering if selectedDate is provided
+    if (selectedDate) {
+      const date = new Date(selectedDate);
+      const startOfDay = new Date(date);
+      startOfDay.setUTCHours(5, 30, 0, 0); // 12:00 AM IST
+      
+      const endOfDay = new Date(date);
+      endOfDay.setUTCHours(29, 29, 59, 999); // 11:59:59 PM IST (next day 5:29 AM UTC)
+
+      query.$or = [
+        {
+          applicationType: 'Leave',
+          startDate: { $lte: endOfDay },
+          endDate: { $gte: startOfDay }
+        },
+        {
+          applicationType: 'Permission',
+          permissionDate: { $gte: startOfDay, $lte: endOfDay }
+        },
+        {
+          applicationType: 'Stay in Hostel',
+          stayDate: { $gte: startOfDay, $lte: endOfDay }
+        }
+      ];
+    }
+
     // Include both 'Approved' and 'Warden Verified' statuses
     // Note: course and branch are now stored as strings, not ObjectId references
-    const leaves = await Leave.find({ 
-      status: { $in: ['Approved', 'Warden Verified'] } 
-    })
+    const leaves = await Leave.find(query)
       .populate({
         path: 'student',
         select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
@@ -1415,9 +1444,7 @@ export const getApprovedLeaves = async (req, res, next) => {
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
-    const count = await Leave.countDocuments({ 
-      status: { $in: ['Approved', 'Warden Verified'] } 
-    });
+    const count = await Leave.countDocuments(query);
 
     res.json({
       success: true,
