@@ -15,7 +15,7 @@ const mealSchema = new mongoose.Schema({
 
 // Rating schema for individual meals
 const mealRatingSchema = new mongoose.Schema({
-  mealType: { type: String, enum: ['breakfast', 'lunch', 'dinner'], required: true },
+  mealType: { type: String, enum: ['breakfast', 'lunch', 'snacks', 'dinner'], required: true },
   rating: { type: Number, min: 1, max: 5, required: true },
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
   comment: { type: String, maxlength: 500 },
