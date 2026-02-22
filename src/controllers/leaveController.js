@@ -56,13 +56,20 @@ const validateGatePassDateTime = (gatePassDateTime, startDate) => {
 // Helper function to get IST date range for daily limit
 const getISTDateRange = () => {
   const now = new Date();
-  const today = new Date();
   
-  // Set to 12:00 AM IST (UTC+5:30)
-  today.setUTCHours(5, 30, 0, 0); // 12:00 AM IST = 5:30 AM UTC
+  // Create a Date object for the current time in IST
+  // IST is UTC + 5:30
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(now.getTime() + istOffset);
   
-  const tomorrow = new Date(today);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  // Set to 12:00 AM IST
+  const todayIST = new Date(istNow);
+  todayIST.setUTCHours(0, 0, 0, 0);
+  
+  // Convert back to UTC to get the comparison time
+  const today = new Date(todayIST.getTime() - istOffset);
+  
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
   
   return { today, tomorrow };
 };
@@ -72,13 +79,13 @@ const isDateBeforeToday = (dateToCheck) => {
   const { today } = getISTDateRange();
   const checkDate = new Date(dateToCheck);
   
-  // Set the check date to start of day for comparison
-  checkDate.setUTCHours(5, 30, 0, 0); // 12:00 AM IST
+  // Set the check date to start of day IST for comparison
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istCheck = new Date(checkDate.getTime() + istOffset);
+  istCheck.setUTCHours(0, 0, 0, 0);
+  const normalizedCheckDate = new Date(istCheck.getTime() - istOffset);
   
-  const result = checkDate < today;
-  // Removed excessive logging to prevent console spam
-  
-  return result;
+  return normalizedCheckDate < today;
 };
 
 // Helper function to check if a leave request has expired
@@ -1407,11 +1414,17 @@ export const getApprovedLeaves = async (req, res, next) => {
     // Add date filtering if selectedDate is provided
     if (selectedDate) {
       const date = new Date(selectedDate);
-      const startOfDay = new Date(date);
-      startOfDay.setUTCHours(5, 30, 0, 0); // 12:00 AM IST
+      const istOffset = 5.5 * 60 * 60 * 1000;
       
-      const endOfDay = new Date(date);
-      endOfDay.setUTCHours(29, 29, 59, 999); // 11:59:59 PM IST (next day 5:29 AM UTC)
+      // Start of day in IST converted to UTC
+      const startOfDayIST = new Date(date);
+      startOfDayIST.setUTCHours(0, 0, 0, 0);
+      const startOfDay = new Date(startOfDayIST.getTime() - istOffset);
+      
+      // End of day in IST converted to UTC
+      const endOfDayIST = new Date(date);
+      endOfDayIST.setUTCHours(23, 59, 59, 999);
+      const endOfDay = new Date(endOfDayIST.getTime() - istOffset);
 
       query.$or = [
         {
