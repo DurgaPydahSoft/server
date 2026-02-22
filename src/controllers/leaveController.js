@@ -1408,7 +1408,7 @@ export const getApprovedLeaves = async (req, res, next) => {
     
     // Build query
     const query = { 
-      status: { $in: ['Approved', 'Warden Verified'] } 
+      status: { $in: ['Approved', 'Warden Verified', 'Principal Approved'] } 
     };
 
     // Add date filtering if selectedDate is provided
