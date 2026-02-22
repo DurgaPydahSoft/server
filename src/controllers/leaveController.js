@@ -1413,17 +1413,16 @@ export const getApprovedLeaves = async (req, res, next) => {
 
     // Add date filtering if selectedDate is provided
     if (selectedDate) {
-      const date = new Date(selectedDate);
+      // Parse YYYY-MM-DD string explicitly as an IST day
+      const [year, month, day] = selectedDate.split('-').map(Number);
       const istOffset = 5.5 * 60 * 60 * 1000;
       
-      // Start of day in IST converted to UTC
-      const startOfDayIST = new Date(date);
-      startOfDayIST.setUTCHours(0, 0, 0, 0);
+      // Midnight in IST for this date
+      const startOfDayIST = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
       const startOfDay = new Date(startOfDayIST.getTime() - istOffset);
       
-      // End of day in IST converted to UTC
-      const endOfDayIST = new Date(date);
-      endOfDayIST.setUTCHours(23, 59, 59, 999);
+      // End of day in IST for this date
+      const endOfDayIST = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
       const endOfDay = new Date(endOfDayIST.getTime() - istOffset);
 
       query.$or = [
