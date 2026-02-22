@@ -204,47 +204,27 @@ const leaveSchema = new mongoose.Schema({
 // Pre-save middleware to calculate numberOfDays and set QR availability
 leaveSchema.pre('save', function(next) {
   try {
-    console.log('🔧 Leave pre-save middleware - Application type:', this.applicationType);
-    console.log('🔧 Leave pre-save middleware - Start date:', this.startDate);
-    console.log('🔧 Leave pre-save middleware - End date:', this.endDate);
-    console.log('🔧 Leave pre-save middleware - Permission date:', this.permissionDate);
-    console.log('🔧 Leave pre-save middleware - Stay date:', this.stayDate);
+    const IST_OFFSET = 5.5 * 60 * 60 * 1000;
     
     if (this.applicationType === 'Leave' && this.startDate && this.endDate) {
       const start = new Date(this.startDate);
       const end = new Date(this.endDate);
       const timeDiff = end.getTime() - start.getTime();
       const dayDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-      this.numberOfDays = Math.max(1, dayDiff); // Ensure at least 1 day
+      this.numberOfDays = Math.max(1, dayDiff);
       
-      // Set QR availability to 2 minutes before start date
-      const qrAvailableTime = new Date(start.getTime() - (2 * 60 * 1000)); // 2 minutes before
-      this.qrAvailableFrom = qrAvailableTime;
-      
-      console.log('🔧 Leave pre-save middleware - Calculated numberOfDays:', this.numberOfDays);
-      console.log('🔧 Leave pre-save middleware - Set qrAvailableFrom:', this.qrAvailableFrom);
+      // Set QR availability to 2 minutes before start date (stored in UTC)
+      this.qrAvailableFrom = new Date(start.getTime() - (2 * 60 * 1000));
     } else if (this.applicationType === 'Permission' && this.permissionDate) {
-      // For permissions, QR is available from the permission date
+      // For permissions, QR is available from the permission date (midnight IST)
       this.qrAvailableFrom = new Date(this.permissionDate);
-      this.numberOfDays = 1; // Permissions are always for 1 day
-      
-      console.log('🔧 Permission pre-save middleware - Set numberOfDays to 1');
-      console.log('🔧 Permission pre-save middleware - Set qrAvailableFrom:', this.qrAvailableFrom);
-    } else if (this.applicationType === 'Stay in Hostel' && this.stayDate) {
-      // For stay in hostel, set numberOfDays to 1 and no QR needed
       this.numberOfDays = 1;
-      this.qrAvailableFrom = null; // No QR needed for stay in hostel
-      
-      console.log('🔧 Stay in Hostel pre-save middleware - Set numberOfDays to 1');
-      console.log('🔧 Stay in Hostel pre-save middleware - No QR needed');
-    } else {
-      // Fallback: set default values
-      this.numberOfDays = this.numberOfDays || 1;
-      console.log('🔧 Fallback pre-save middleware - Set numberOfDays to:', this.numberOfDays);
+    } else if (this.applicationType === 'Stay in Hostel' && this.stayDate) {
+      this.numberOfDays = 1;
+      this.qrAvailableFrom = null;
     }
     next();
   } catch (error) {
-    console.error('❌ Error in leave pre-save middleware:', error);
     next(error);
   }
 });
@@ -254,15 +234,17 @@ leaveSchema.virtual('isQrAvailable').get(function() {
   if (this.status !== 'Approved' || this.visitLocked || this.applicationType === 'Stay in Hostel') {
     return false;
   }
+  const IST_OFFSET = 5.5 * 60 * 60 * 1000;
   const now = new Date();
   
   if (this.applicationType === 'Leave') {
-    return now >= this.qrAvailableFrom && now <= this.endDate;
+    const endOfDayUTC = new Date(this.endDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+    return now >= this.qrAvailableFrom && now <= endOfDayUTC;
   } else if (this.applicationType === 'Permission') {
-    const permissionDate = new Date(this.permissionDate);
-    const startOfDay = new Date(permissionDate.setHours(0, 0, 0, 0));
-    const endOfDay = new Date(permissionDate.setHours(23, 59, 59, 999));
-    return now >= startOfDay && now <= endOfDay;
+    // For permissions, it's available for the entire day (IST)
+    const startOfDayUTC = this.permissionDate;
+    const endOfDayUTC = new Date(startOfDayUTC.getTime() + 24 * 60 * 60 * 1000 - 1);
+    return now >= startOfDayUTC && now <= endOfDayUTC;
   }
   
   return false;

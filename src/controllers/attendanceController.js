@@ -7,18 +7,14 @@ import {
   resolveCourseName
 } from '../utils/adminUtils.js';
 
-// Helper to normalize date to start of day
-function normalizeDate(date) {
-  const d = new Date(date);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
+import { normalizeToISTStartOfDay, getISTStartOfDay, getISTEndOfDay } from '../utils/dateUtils.js';
 import notificationService from '../utils/notificationService.js';
 
 // Get students for attendance taking
 export const getStudentsForAttendance = async (req, res, next) => {
   try {
     const { date, course, branch, gender, category, roomNumber } = req.query;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber });
     console.log('🔍 getStudentsForAttendance - Normalized date:', normalizedDate);
@@ -67,13 +63,11 @@ export const getStudentsForAttendance = async (req, res, next) => {
       .map(att => att.student._id.toString());
 
     // Get approved leaves for the date
-    const startOfDay = new Date(normalizedDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(normalizedDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const startOfDay = normalizedDate;
+    const endOfDay = new Date(normalizedDate.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       verificationStatus: { $ne: 'Completed' }, // Exclude completed leaves
       $or: [
         {
@@ -149,8 +143,8 @@ export const takeAttendance = async (req, res, next) => {
       throw createError(400, 'Date and attendance data are required');
     }
 
-    const normalizedDate = normalizeDate(date);
-    const today = normalizeDate(new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date);
+    const today = normalizeToISTStartOfDay(new Date());
     
     // Only allow taking attendance for today or past dates
     if (normalizedDate > today) {
@@ -284,7 +278,7 @@ export const takeAttendance = async (req, res, next) => {
 export const getAttendanceForDate = async (req, res, next) => {
   try {
     const { date, course, branch, gender, studentId, status } = req.query;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     // Build base query for attendance
     let attendanceQuery = { date: normalizedDate };
@@ -302,13 +296,11 @@ export const getAttendanceForDate = async (req, res, next) => {
       .populate('markedBy', 'username role');
 
     // Get approved leaves for the date
-    const startOfDay = new Date(normalizedDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(normalizedDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const startOfDay = normalizedDate;
+    const endOfDay = new Date(normalizedDate.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       $or: [
         // For Leave applications - check if the date falls within the leave period
         {
@@ -468,7 +460,7 @@ export const getAttendanceForDateRange = async (req, res, next) => {
 
     // Get approved leaves for the date range
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       $or: [
         // For Leave applications - check if any date in the range falls within the leave period
         {
@@ -618,15 +610,15 @@ export const getMyAttendance = async (req, res, next) => {
     const { startDate, endDate } = req.query;
     const studentId = req.user._id;
 
-    const start = startDate ? normalizeDate(new Date(startDate)) : normalizeDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)); // Default to last 30 days
-    const end = endDate ? normalizeDate(new Date(endDate)) : normalizeDate(new Date());
+    const start = startDate ? normalizeToISTStartOfDay(new Date(startDate)) : new Date(normalizeToISTStartOfDay(new Date()).getTime() - 30 * 24 * 60 * 60 * 1000); // Default to last 30 days
+    const end = endDate ? normalizeToISTStartOfDay(new Date(endDate)) : normalizeToISTStartOfDay(new Date());
 
     const attendance = await Attendance.getStudentAttendance(studentId, start, end);
 
     // Get approved leaves for the student in the date range
     const approvedLeaves = await Leave.find({
       student: studentId,
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       $or: [
         // For Leave applications - check if any date in the range falls within the leave period
         {
@@ -707,7 +699,7 @@ export const getMyAttendance = async (req, res, next) => {
 export const getAttendanceStats = async (req, res, next) => {
   try {
     const { date } = req.query;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     const stats = await Attendance.getAttendanceStats(normalizedDate);
     const statistics = stats[0] || {
@@ -797,7 +789,7 @@ export const deleteAttendance = async (req, res, next) => {
       throw createError(400, 'Student ID and date are required');
     }
 
-    const normalizedDate = normalizeDate(new Date(date));
+    const normalizedDate = normalizeToISTStartOfDay(new Date(date));
 
     const attendance = await Attendance.findOneAndDelete({
       student: studentId,
@@ -824,7 +816,7 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
   try {
     const { date, branch, gender, studentId, status } = req.query;
     const principal = req.principal;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     console.log('🎓 Principal attendance request:', {
       date: normalizedDate,
@@ -931,13 +923,11 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     }
 
     // Get approved leaves for the date
-    const startOfDay = new Date(normalizedDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(normalizedDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const startOfDay = normalizedDate;
+    const endOfDay = new Date(normalizedDate.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       verificationStatus: { $ne: 'Completed' }, // Exclude completed leaves
       $or: [
         {
@@ -1142,7 +1132,7 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
 
     // Get approved leaves for the date range
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       verificationStatus: { $ne: 'Completed' }, // Exclude completed leaves
       $or: [
         // For Leave applications - check if any date in the range falls within the leave period
@@ -1318,7 +1308,7 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
   try {
     const { date } = req.query;
     const principal = req.principal;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     console.log('🎓 Principal attendance stats - Principal data:', {
       principalId: principal._id,
@@ -1415,7 +1405,7 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
   try {
     const { date, status } = req.query;
     const principal = req.principal;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     console.log('🎓 Principal students by status request:', {
       date: normalizedDate,
@@ -1475,13 +1465,11 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
       });
 
     // Get approved leaves for the date
-    const startOfDay = new Date(normalizedDate);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(normalizedDate);
-    endOfDay.setHours(23, 59, 59, 999);
+    const startOfDay = normalizedDate;
+    const endOfDay = new Date(normalizedDate.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       verificationStatus: { $ne: 'Completed' },
       $or: [
         {
@@ -1637,7 +1625,7 @@ export const generateAttendanceReport = async (req, res, next) => {
 
     // Get approved leaves for the date range
     const approvedLeaves = await Leave.find({
-      status: 'Approved',
+      status: { $in: ['Approved', 'Principal Approved'] },
       $or: [
         {
           applicationType: 'Leave',

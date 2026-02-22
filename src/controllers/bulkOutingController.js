@@ -2,6 +2,7 @@ import BulkOuting from '../models/BulkOuting.js';
 import Leave from '../models/Leave.js';
 import User from '../models/User.js';
 import { createError } from '../utils/error.js';
+import { normalizeToISTStartOfDay } from '../utils/dateUtils.js';
 
 // Create bulk outing request (Warden)
 export const createBulkOuting = async (req, res, next) => {
@@ -15,11 +16,10 @@ export const createBulkOuting = async (req, res, next) => {
     }
 
     // Validate outing date (must be in the future)
-    const outing = new Date(outingDate);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const normalizedOutingDate = normalizeToISTStartOfDay(outingDate);
+    const today = normalizeToISTStartOfDay(new Date());
     
-    if (outing < today) {
+    if (normalizedOutingDate < today) {
       throw createError(400, 'Outing date cannot be in the past');
     }
 
@@ -56,7 +56,7 @@ export const createBulkOuting = async (req, res, next) => {
     // Create bulk outing request
     const bulkOuting = new BulkOuting({
       createdBy: wardenId,
-      outingDate,
+      outingDate: normalizedOutingDate,
       reason,
       selectedStudents: selectedStudentIds.map(studentId => ({
         student: studentId

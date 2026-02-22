@@ -8,6 +8,13 @@ import Notification from '../models/Notification.js';
 import { sendOneSignalNotification, sendOneSignalBulkNotification } from '../utils/oneSignalService.js';
 import { sendLeaveForwardedEmail } from '../utils/emailService.js';
 import { 
+  getISTStartOfDay, 
+  getISTEndOfDay, 
+  getISTNow, 
+  normalizeToISTStartOfDay, 
+  isISTDateBeforeToday 
+} from '../utils/dateUtils.js';
+import { 
   normalizeCourseName, 
   resolveCourseName, 
   resolveBranchName, 
@@ -28,80 +35,45 @@ const validateTimeFormat = (time) => {
 // Validate gate pass date and time
 const validateGatePassDateTime = (gatePassDateTime, startDate) => {
   const gatePass = new Date(gatePassDateTime);
-  const start = new Date(startDate);
-  const today = new Date();
+  const todayStart = normalizeToISTStartOfDay(new Date());
   
-  // Set dates to start of day for comparison
-  const startDateOnly = new Date(start);
-  startDateOnly.setHours(0, 0, 0, 0);
-  const todayOnly = new Date(today);
-  todayOnly.setHours(0, 0, 0, 0);
+  // startDate is already normalized to IST midnight in createLeaveRequest
+  const startDateOnly = new Date(startDate);
   
-  // Check if start date is today
-  const isStartDateToday = startDateOnly.getTime() === todayOnly.getTime();
+  // Check if start date is today (IST)
+  const isStartDateToday = startDateOnly.getTime() === todayStart.getTime();
   
   if (isStartDateToday) {
     // For same day leave, any time is allowed (but not past time)
-    const now = new Date();
-    return gatePass >= now;
+    // Compare directly against current UTC time
+    return gatePass >= new Date();
   } else {
-    // For future dates, gate pass must be after 4:30 PM
-    const fourThirtyPM = new Date(gatePass);
-    fourThirtyPM.setHours(16, 30, 0, 0); // 4:30 PM
+    // For future dates, gate pass must be after 4:30 PM IST
+    const IST_OFFSET = 5.5 * 60 * 60 * 1000;
+    
+    // Create a date for the gate pass at 4:30 PM IST
+    const fourThirtyPM_IST = new Date(gatePass);
+    // Shift to IST to set hours reliably
+    const shifted = new Date(fourThirtyPM_IST.getTime() + IST_OFFSET);
+    shifted.setUTCHours(16, 30, 0, 0);
+    
+    // Shift back to UTC for comparison
+    const fourThirtyPM = new Date(shifted.getTime() - IST_OFFSET);
     
     return gatePass >= fourThirtyPM;
   }
 };
 
-// Helper function to get IST date range for daily limit
-const getISTDateRange = () => {
-  const now = new Date();
-  
-  // Create a Date object for the current time in IST
-  // IST is UTC + 5:30
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istNow = new Date(now.getTime() + istOffset);
-  
-  // Set to 12:00 AM IST
-  const todayIST = new Date(istNow);
-  todayIST.setUTCHours(0, 0, 0, 0);
-  
-  // Convert back to UTC to get the comparison time
-  const today = new Date(todayIST.getTime() - istOffset);
-  
-  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
-  
-  return { today, tomorrow };
-};
-
-// Helper function to check if a date is before today (IST)
-const isDateBeforeToday = (dateToCheck) => {
-  const { today } = getISTDateRange();
-  const checkDate = new Date(dateToCheck);
-  
-  // Set the check date to start of day IST for comparison
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istCheck = new Date(checkDate.getTime() + istOffset);
-  istCheck.setUTCHours(0, 0, 0, 0);
-  const normalizedCheckDate = new Date(istCheck.getTime() - istOffset);
-  
-  return normalizedCheckDate < today;
-};
-
 // Helper function to check if a leave request has expired
 const isLeaveExpired = (leave) => {
   if (leave.applicationType === 'Leave') {
-    // For Leave requests, expire only after the end date has passed
-    return isDateBeforeToday(leave.endDate);
+    return isISTDateBeforeToday(leave.endDate);
   } else if (leave.applicationType === 'Permission') {
-    // For Permission requests, expire at end of day
-    return isDateBeforeToday(leave.permissionDate);
+    return isISTDateBeforeToday(leave.permissionDate);
   } else if (leave.applicationType === 'Stay in Hostel') {
-    // For Stay in Hostel requests, expire at end of day
-    return isDateBeforeToday(leave.stayDate);
-  } else {
-    return false; // Unknown application type
+    return isISTDateBeforeToday(leave.stayDate);
   }
+  return false;
 };
 
 // Function to automatically delete expired leave requests
@@ -248,7 +220,8 @@ export const createLeaveRequest = async (req, res, next) => {
     }
 
     // Check daily limit for this application type
-    const { today, tomorrow } = getISTDateRange();
+    const today = normalizeToISTStartOfDay(new Date());
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
     
     console.log(`🔍 Daily limit check for student ${studentId}, application type: ${applicationType}`);
     console.log(`🔍 IST Date range: ${today.toISOString()} to ${tomorrow.toISOString()}`);
@@ -282,15 +255,12 @@ export const createLeaveRequest = async (req, res, next) => {
         throw createError(400, 'Start date, end date, and gate pass date/time are required for leave applications');
       }
 
-      const start = new Date(startDate);
-      const end = new Date(endDate);
+      const start = normalizeToISTStartOfDay(startDate);
+      const end = normalizeToISTStartOfDay(endDate);
       const gatePass = new Date(gatePassDateTime);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Set to start of today
-      const startDateOnly = new Date(start);
-      startDateOnly.setHours(0, 0, 0, 0); // Set to start of start date
+      const today = normalizeToISTStartOfDay(new Date());
       
-      if (startDateOnly < today) {
+      if (start < today) {
         throw createError(400, 'Start date cannot be in the past');
       }
       
@@ -299,15 +269,10 @@ export const createLeaveRequest = async (req, res, next) => {
       }
 
       // Validate gate pass date and time
-      if (!validateGatePassDateTime(gatePassDateTime, startDate)) {
-        const start = new Date(startDate);
-        const today = new Date();
-        const startDateOnly = new Date(start);
-        startDateOnly.setHours(0, 0, 0, 0);
-        const todayOnly = new Date(today);
-        todayOnly.setHours(0, 0, 0, 0);
+      if (!validateGatePassDateTime(gatePassDateTime, start)) {
+        const today = normalizeToISTStartOfDay(new Date());
         
-        if (startDateOnly.getTime() === todayOnly.getTime()) {
+        if (start.getTime() === today.getTime()) {
           throw createError(400, 'Gate pass time cannot be in the past for same day leave');
         } else {
           throw createError(400, 'Gate pass must be after 4:30 PM for future dates');
@@ -316,8 +281,8 @@ export const createLeaveRequest = async (req, res, next) => {
 
       leaveData = {
         ...leaveData,
-        startDate,
-        endDate,
+        startDate: normalizeToISTStartOfDay(startDate),
+        endDate: normalizeToISTStartOfDay(endDate),
         gatePassDateTime,
         parentPhone: student.parentPhone
       };
@@ -333,13 +298,10 @@ export const createLeaveRequest = async (req, res, next) => {
         throw createError(400, 'Permission date, out time, and in time are required for permission applications');
       }
 
-      const permission = new Date(permissionDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0); // Set to start of today
-      const permissionDateOnly = new Date(permission);
-      permissionDateOnly.setHours(0, 0, 0, 0); // Set to start of permission date
+      const permission = normalizeToISTStartOfDay(permissionDate);
+      const today = normalizeToISTStartOfDay(new Date());
       
-      if (permissionDateOnly < today) {
+      if (permission < today) {
         throw createError(400, 'Permission date cannot be in the past');
       }
 
@@ -355,7 +317,7 @@ export const createLeaveRequest = async (req, res, next) => {
 
       leaveData = {
         ...leaveData,
-        permissionDate,
+        permissionDate: normalizeToISTStartOfDay(permissionDate),
         outTime,
         inTime,
         parentPhone: student.parentPhone
@@ -379,11 +341,9 @@ export const createLeaveRequest = async (req, res, next) => {
         throw createError(400, 'Stay date is required for stay in hostel applications');
       }
 
-      const stay = new Date(stayDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
+      const stay = normalizeToISTStartOfDay(stayDate);
+      const today = normalizeToISTStartOfDay(new Date());
+      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
 
       if (stay < today || stay > tomorrow) {
         throw createError(400, 'Stay date must be today or tomorrow only');
@@ -391,7 +351,7 @@ export const createLeaveRequest = async (req, res, next) => {
 
       leaveData = {
         ...leaveData,
-        stayDate,
+        stayDate: normalizeToISTStartOfDay(stayDate),
         status: 'Pending' // No OTP needed for Stay in Hostel
       };
     }
@@ -1413,17 +1373,8 @@ export const getApprovedLeaves = async (req, res, next) => {
 
     // Add date filtering if selectedDate is provided
     if (selectedDate) {
-      // Parse YYYY-MM-DD string explicitly as an IST day
-      const [year, month, day] = selectedDate.split('-').map(Number);
-      const istOffset = 5.5 * 60 * 60 * 1000;
-      
-      // Midnight in IST for this date
-      const startOfDayIST = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
-      const startOfDay = new Date(startOfDayIST.getTime() - istOffset);
-      
-      // End of day in IST for this date
-      const endOfDayIST = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
-      const endOfDay = new Date(endOfDayIST.getTime() - istOffset);
+      const startOfDay = getISTStartOfDay(selectedDate);
+      const endOfDay = getISTEndOfDay(selectedDate);
 
       query.$or = [
         {
