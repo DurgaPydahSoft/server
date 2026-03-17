@@ -2,18 +2,14 @@ import StaffAttendance from '../models/StaffAttendance.js';
 import StaffGuest from '../models/StaffGuest.js';
 import { createError } from '../utils/error.js';
 import notificationService from '../utils/notificationService.js';
+import { normalizeToISTStartOfDay } from '../utils/dateUtils.js';
 
-// Helper to normalize date to start of day
-function normalizeDate(date) {
-  const d = new Date(date);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
 
 // Get staff/guests for attendance taking
 export const getStaffForAttendance = async (req, res, next) => {
   try {
     const { date, department, type, gender, hostelId } = req.query;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     console.log('🔍 getStaffForAttendance - Query params:', { date, department, type, gender, hostelId });
     console.log('🔍 getStaffForAttendance - Normalized date:', normalizedDate);
@@ -111,8 +107,8 @@ export const takeStaffAttendance = async (req, res, next) => {
       throw createError(400, 'Date and attendance data are required');
     }
 
-    const normalizedDate = normalizeDate(date);
-    const today = normalizeDate(new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date);
+    const today = normalizeToISTStartOfDay(new Date());
     
     // Only allow taking attendance for today or past dates
     if (normalizedDate > today) {
@@ -239,7 +235,7 @@ export const takeStaffAttendance = async (req, res, next) => {
 export const getStaffAttendanceForDate = async (req, res, next) => {
   try {
     const { date, department, type, gender, staffId, status, search } = req.query;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     // Build base query for attendance
     let attendanceQuery = { date: normalizedDate };
@@ -352,8 +348,8 @@ export const getStaffAttendanceForDateRange = async (req, res, next) => {
       throw createError(400, 'Start date and end date are required');
     }
 
-    const start = normalizeDate(new Date(startDate));
-    const end = normalizeDate(new Date(endDate));
+    const start = normalizeToISTStartOfDay(new Date(startDate));
+    const end = normalizeToISTStartOfDay(new Date(endDate));
 
     if (start > end) {
       throw createError(400, 'Start date cannot be after end date');
@@ -450,7 +446,7 @@ export const getStaffAttendanceForDateRange = async (req, res, next) => {
 export const getStaffAttendanceStats = async (req, res, next) => {
   try {
     const { date } = req.query;
-    const normalizedDate = normalizeDate(date || new Date());
+    const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     // Get all active staff
     const totalStaff = await StaffGuest.countDocuments({ isActive: true });
@@ -517,7 +513,7 @@ export const updateStaffAttendance = async (req, res, next) => {
       throw createError(400, 'Staff ID and date are required');
     }
 
-    const normalizedDate = normalizeDate(date);
+    const normalizedDate = normalizeToISTStartOfDay(date);
 
     // Check if attendance record exists
     let attendance = await StaffAttendance.findOne({
@@ -557,7 +553,7 @@ export const deleteStaffAttendance = async (req, res, next) => {
       throw createError(400, 'Staff ID and date are required');
     }
 
-    const normalizedDate = normalizeDate(new Date(date));
+    const normalizedDate = normalizeToISTStartOfDay(new Date(date));
 
     const attendance = await StaffAttendance.findOneAndDelete({
       staffId: staffId,

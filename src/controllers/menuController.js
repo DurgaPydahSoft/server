@@ -71,11 +71,10 @@ const processMenuItems = async (meals) => {
 };
 
 // Helper to get current date in IST (Indian Standard Time)
+// Uses manual offset calculation to be environment-independent (EC2/Lightsail)
 function getISTDate() {
-  const now = new Date();
-  // Get time in Kolkata
-  const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  return istTime;
+  const IST_OFFSET = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+  return new Date(Date.now() + IST_OFFSET);
 }
 
 // Create or update menu for a specific date
@@ -676,27 +675,26 @@ export const testS3Access = async (req, res, next) => {
 // Evening: 5:00 PM - 7:00 PM (17 - 19)
 // Night: 8:00 PM - 10:00 PM (20 - 22)
 const getCurrentSession = () => {
-  const now = new Date();
-  // Convert to IST (Asia/Kolkata timezone)
-  const istTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const hour = istTime.getHours() + (istTime.getMinutes() / 60);
+  const istDate = getISTDate();
+  // Calculate IST hour based on the UTC time + offset
+  const hour = istDate.getUTCHours() + (istDate.getUTCMinutes() / 60);
   
   // Morning session: 7:30 AM - 9:30 AM
   if (hour >= 7.5 && hour < 9.5) {
-    return { session: 'morning', date: normalizeToISTStartOfDay(istTime), description: 'Based on today\'s morning attendance' };
+    return { session: 'morning', date: normalizeToISTStartOfDay(istDate), description: 'Based on today\'s morning attendance' };
   }
   // Evening session: 5:00 PM - 7:00 PM
   else if (hour >= 17 && hour < 19) {
-    return { session: 'evening', date: normalizeToISTStartOfDay(istTime), description: 'Based on today\'s evening attendance' };
+    return { session: 'evening', date: normalizeToISTStartOfDay(istDate), description: 'Based on today\'s evening attendance' };
   }
   // Night session: 8:00 PM - 10:00 PM
   else if (hour >= 20 && hour < 22) {
-    return { session: 'night', date: normalizeToISTStartOfDay(istTime), description: 'Based on today\'s night attendance' };
+    return { session: 'night', date: normalizeToISTStartOfDay(istDate), description: 'Based on today\'s night attendance' };
   }
   // After night session (after 10:00 PM) or before morning session (before 7:30 AM): use yesterday's night attendance
   else {
-    const yesterday = new Date(istTime);
-    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterday = new Date(istDate);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
     return { session: 'night', date: normalizeToISTStartOfDay(yesterday), description: 'Based on yesterday\'s night attendance' };
   }
 };
