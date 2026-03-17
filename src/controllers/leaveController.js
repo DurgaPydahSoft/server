@@ -78,11 +78,11 @@ const isLeaveExpired = (leave) => {
 
 const autoDeleteExpiredLeaves = async () => {
   try {
-    // Find expired requests that should be deleted
+    // Find expired requests that should be marked as expired
     // All requests now expire at end of day (IST):
-    // - Leave requests: Delete if start date is before today
-    // - Permission requests: Delete if permission date is before today
-    // - Stay in Hostel requests: Delete if stay date is before today
+    // - Leave requests: Mark expired if end date is before today
+    // - Permission requests: Mark expired if permission date is before today
+    // - Stay in Hostel requests: Mark expired if stay date is before today
     
     // Get all pending requests first
     const allPendingLeaves = await Leave.find({
@@ -104,28 +104,28 @@ const autoDeleteExpiredLeaves = async () => {
       return false;
     });
     
-    // Only log if there are expired leaves to delete
+    // Only log if there are expired leaves
     if (expiredLeaves.length > 0) {
-      console.log(`🗑️ Auto-deleting ${expiredLeaves.length} expired leave requests`);
+      console.log(`⏰ Marking ${expiredLeaves.length} expired leave requests as Expired`);
       
       for (const leave of expiredLeaves) {
         try {
-          // Notify student about deletion
+          // Notify student about expiry
           if (leave.student) {
-            const notificationTitle = 'Leave Request Auto-Deleted';
+            const notificationTitle = 'Leave Request Expired';
             let notificationMessage;
             
             if (leave.status === 'Warden Verified') {
               if (leave.applicationType === 'Leave') {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the entire leave period has passed without principal approval.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically marked as expired because the entire leave period has passed without principal approval.`;
               } else {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the date has passed without principal approval.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically marked as expired because the date has passed without principal approval.`;
               }
             } else {
               if (leave.applicationType === 'Leave') {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically deleted because the entire leave period has passed without OTP verification.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.startDate).toLocaleDateString()} to ${new Date(leave.endDate).toLocaleDateString()} has been automatically marked as expired because the entire leave period has passed without OTP verification.`;
               } else {
-                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically deleted because the date has passed without OTP verification.`;
+                notificationMessage = `Your ${leave.applicationType} request for ${new Date(leave.permissionDate || leave.stayDate).toLocaleDateString()} has been automatically marked as expired because the date has passed without OTP verification.`;
               }
             }
             
@@ -135,7 +135,7 @@ const autoDeleteExpiredLeaves = async () => {
               recipientModel: 'User', // Add the required recipientModel field
               title: notificationTitle,
               message: notificationMessage,
-              type: 'leave', // Use 'leave' instead of 'leave_deleted' as it's a valid enum value
+              type: 'leave', // Use 'leave' instead of 'leave_expired' as it's a valid enum value
               relatedId: leave._id
             });
             
@@ -145,17 +145,18 @@ const autoDeleteExpiredLeaves = async () => {
                 playerIds: [leave.student.oneSignalId],
                 title: notificationTitle,
                 message: notificationMessage,
-                data: { type: 'leave_deleted', leaveId: leave._id.toString() }
+                data: { type: 'leave_expired', leaveId: leave._id.toString() }
               });
             }
           }
           
-          // Delete the leave request
-          await Leave.findByIdAndDelete(leave._id);
-          console.log(`🗑️ Deleted expired leave request: ${leave._id} for student: ${leave.student?.name || 'Unknown'}`);
+          // Update status to Expired instead of deleting
+          leave.status = 'Expired';
+          await leave.save();
+          console.log(`⏰ Marked expired leave request as Expired: ${leave._id} for student: ${leave.student?.name || 'Unknown'}`);
           
         } catch (error) {
-          console.error(`Error deleting expired leave ${leave._id}:`, error);
+          console.error(`Error marking expired leave ${leave._id} as Expired:`, error);
         }
       }
     }
@@ -174,7 +175,7 @@ export const cleanupExpiredLeaves = async (req, res, next) => {
     
     res.json({
       success: true,
-      message: `Cleanup completed. Deleted ${deletedCount} expired leave requests.`,
+      message: `Cleanup completed. Marked ${deletedCount} expired leave requests as Expired.`,
       deletedCount
     });
   } catch (error) {
@@ -1938,12 +1939,13 @@ export const wardenRejectLeave = async (req, res, next) => {
 };
 
 // Get leave requests for principal (all types except Stay in Hostel)
+// Get leave requests for principal (all types except Stay in Hostel)
 export const getPrincipalLeaveRequests = async (req, res, next) => {
   try {
     // Auto-delete expired leaves before fetching
     await autoDeleteExpiredLeaves();
     
-    const { status, applicationType, page = 1, limit = 10 } = req.query;
+    const { status, applicationType, page = 1, limit = 10, fromDate, toDate } = req.query;
     const principalId = req.principal._id;
     
     // Get principal's assigned details
@@ -1969,7 +1971,30 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       });
     }
     
-    const query = {};
+    // Optimization: Find students in these courses first
+    // We need to account for course names, normalized names, and SQL IDs
+    const allSQLCourses = await getCoursesFromSQL();
+    const matchedSQLIds = allSQLCourses
+      .filter(c => normalizedAllowedCourses.includes(normalizeCourseName(c.name)))
+      .map(c => c._id);
+    
+    const studentCourseFilter = [...new Set([...allowedCourseNames, ...normalizedAllowedCourses, ...matchedSQLIds])];
+    
+    const studentQuery = {
+      course: { $in: studentCourseFilter }
+    };
+
+    // Add branch filter if principal is restricted to a specific branch
+    if (principal.branch) {
+      studentQuery.branch = principal.branch;
+    }
+
+    const students = await User.find(studentQuery).select('_id');
+    const studentIds = students.map(s => s._id);
+
+    const query = {
+      student: { $in: studentIds }
+    };
 
     // Build applicationType filter
     if (applicationType) {
@@ -1985,63 +2010,59 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     if (status) {
       query.status = status;
     } else {
-      query.status = { $in: ['Warden Verified', 'Pending Principal Approval'] };
+      // Default statuses for Principal view - include both verified and pending
+      query.status = { $in: ['Warden Verified', 'Pending Principal Approval', 'Approved', 'Rejected'] };
     }
 
-    // Fetch leaves matching the query
-    const allLeaves = await Leave.find(query)
+    // Date filtering (overlapping ranges)
+    if (fromDate || toDate) {
+      const start = fromDate ? getISTStartOfDay(fromDate) : null;
+      const end = toDate ? getISTEndOfDay(toDate) : null;
+
+      query.$and = query.$and || [];
+      
+      const dateSubQuery = {
+        $or: [
+          {
+            applicationType: 'Leave',
+            ...(start && end ? {
+              $or: [
+                { startDate: { $lte: end }, endDate: { $gte: start } }
+              ]
+            } : start ? { endDate: { $gte: start } } : { startDate: { $lte: end } })
+          },
+          {
+            applicationType: 'Permission',
+            ...(start && end ? {
+              permissionDate: { $gte: start, $lte: end }
+            } : start ? { permissionDate: { $gte: start } } : { permissionDate: { $lte: end } })
+          }
+        ]
+      };
+      
+      query.$and.push(dateSubQuery);
+    }
+
+    const leaves = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto sqlCourseId sqlBranchId'
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
       })
       .populate('approvedBy', 'name')
       .populate('verifiedBy', 'name')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(limit * 1)
+      .skip((page - 1) * limit);
 
-    // Filter leaves in memory (necessary because course is stored as mixed types/SQL IDs)
-    const filteredLeaves = [];
-    for (const leave of allLeaves) {
-      // Resolve student course
-      let studentCourse = leave.student?.course;
-      if (studentCourse) {
-        studentCourse = await resolveCourseName(studentCourse);
-      }
-      
-      const normalizedStudentCourse = studentCourse ? normalizeCourseName(studentCourse.trim()) : null;
-      const matches = normalizedStudentCourse && normalizedAllowedCourses.includes(normalizedStudentCourse);
-      
-      if (matches) {
-        // Also check branch if principal has a specific branch assigned
-        if (principal.branch) {
-          let studentBranch = leave.student?.branch;
-          if (studentBranch) {
-            studentBranch = await resolveBranchName(studentBranch);
-          }
-          
-          const normalizedStudentBranch = studentBranch ? studentBranch.trim() : null;
-          const normalizedPrincipalBranch = principal.branch?.trim();
-          
-          if (normalizedStudentBranch === normalizedPrincipalBranch) {
-            filteredLeaves.push(leave);
-          }
-        } else {
-          filteredLeaves.push(leave);
-        }
-      }
-    }
-
-    // Apply pagination to filtered results
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + limit;
-    const paginatedLeaves = filteredLeaves.slice(startIndex, endIndex);
+    const count = await Leave.countDocuments(query);
 
     res.json({
       success: true,
       data: {
-        leaves: paginatedLeaves,
-        totalPages: Math.ceil(filteredLeaves.length / limit),
+        leaves,
+        totalPages: Math.ceil(count / limit),
         currentPage: page,
-        totalRequests: filteredLeaves.length
+        totalRequests: count
       }
     });
   } catch (error) {
