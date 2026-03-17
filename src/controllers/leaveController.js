@@ -76,12 +76,8 @@ const isLeaveExpired = (leave) => {
   return false;
 };
 
-// Function to automatically delete expired leave requests
 const autoDeleteExpiredLeaves = async () => {
   try {
-    // Get IST date range for proper date comparison
-    const { today, tomorrow } = getISTDateRange();
-    
     // Find expired requests that should be deleted
     // All requests now expire at end of day (IST):
     // - Leave requests: Delete if start date is before today
@@ -97,13 +93,13 @@ const autoDeleteExpiredLeaves = async () => {
     const expiredLeaves = allPendingLeaves.filter(leave => {
       if (leave.applicationType === 'Leave') {
         // For Leave requests, check if end date is before today
-        return isDateBeforeToday(leave.endDate);
+        return isISTDateBeforeToday(leave.endDate);
       } else if (leave.applicationType === 'Permission') {
         // For Permission requests, check if permission date is before today
-        return isDateBeforeToday(leave.permissionDate);
+        return isISTDateBeforeToday(leave.permissionDate);
       } else if (leave.applicationType === 'Stay in Hostel') {
         // For Stay in Hostel requests, check if stay date is before today
-        return isDateBeforeToday(leave.stayDate);
+        return isISTDateBeforeToday(leave.stayDate);
       }
       return false;
     });
