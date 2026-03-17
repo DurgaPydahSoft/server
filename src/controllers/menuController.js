@@ -669,33 +669,34 @@ export const testS3Access = async (req, res, next) => {
   }
 };
 
-// Helper function to determine current session
-// Session timings match the attendance system (IST):
-// Morning: 7:30 AM - 9:30 AM (7.5 - 9.5)
-// Evening: 5:00 PM - 7:00 PM (17 - 19)
-// Night: 8:00 PM - 10:00 PM (20 - 22)
 const getCurrentSession = () => {
+  const now = new Date();
   const istDate = getISTDate();
-  // Calculate IST hour based on the UTC time + offset
   const hour = istDate.getUTCHours() + (istDate.getUTCMinutes() / 60);
+  
+  const todayIST = normalizeToISTStartOfDay(now);
+  
+  console.log(`🔍 [Session Logic] Current IST Time: ${istDate.toISOString()}, Hour: ${hour.toFixed(2)}`);
   
   // Morning session (Breakfast & Lunch): 7:30 AM - 3:00 PM
   if (hour >= 7.5 && hour < 15) {
-    return { session: 'morning', date: normalizeToISTStartOfDay(istDate), description: 'Based on today\'s morning attendance' };
+    return { session: 'morning', date: todayIST, description: 'Based on today\'s morning attendance' };
   }
   // Evening session (Snacks): 3:00 PM - 7:00 PM
   else if (hour >= 15 && hour < 19) {
-    return { session: 'evening', date: normalizeToISTStartOfDay(istDate), description: 'Based on today\'s evening attendance' };
+    return { session: 'evening', date: todayIST, description: 'Based on today\'s evening attendance' };
   }
   // Night session (Dinner): 7:00 PM - 12:00 AM
   else if (hour >= 19 && hour < 24) {
-    return { session: 'night', date: normalizeToISTStartOfDay(istDate), description: 'Based on today\'s night attendance' };
+    return { session: 'night', date: todayIST, description: 'Based on today\'s night attendance' };
   }
   // Early morning (before breakfast): use yesterday's night attendance
   else {
-    const yesterday = new Date(istDate);
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    return { session: 'night', date: normalizeToISTStartOfDay(yesterday), description: 'Based on yesterday\'s night attendance' };
+    const yesterdayIST = new Date(todayIST);
+    yesterdayIST.setUTCDate(yesterdayIST.getUTCDate() - 1);
+    // Re-normalize to ensure exact 18:30 UTC of previous day
+    const finalizedYesterday = normalizeToISTStartOfDay(yesterdayIST);
+    return { session: 'night', date: finalizedYesterday, description: 'Based on yesterday\'s night attendance' };
   }
 };
 
