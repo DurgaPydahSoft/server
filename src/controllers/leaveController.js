@@ -21,6 +21,43 @@ import {
   getAllowedCourseNames 
 } from '../utils/adminUtils.js';
 
+/**
+ * Helper to resolve student course and branch names from SQL IDs if needed.
+ * Works with a single leave object or an array of leaves.
+ */
+const resolveStudentMetadata = async (leaves) => {
+  if (!leaves) return leaves;
+  const isArray = Array.isArray(leaves);
+  const items = isArray ? leaves : [leaves];
+
+  const resolvedItems = await Promise.all(items.map(async (item) => {
+    // Check if item is a Mongoose document or a plain object
+    const itemObj = (item && typeof item.toObject === 'function') ? item.toObject() : item;
+    
+    if (itemObj && itemObj.student) {
+      if (itemObj.student.course) {
+        const resolvedName = await resolveCourseName(itemObj.student.course);
+        itemObj.student.course = {
+          name: resolvedName,
+          _id: itemObj.student.course, // Keep original for reference
+          id: itemObj.student.course
+        };
+      }
+      if (itemObj.student.branch) {
+        const resolvedName = await resolveBranchName(itemObj.student.branch);
+        itemObj.student.branch = {
+          name: resolvedName,
+          _id: itemObj.student.branch,
+          id: itemObj.student.branch
+        };
+      }
+    }
+    return itemObj;
+  }));
+
+  return isArray ? resolvedItems : resolvedItems[0];
+};
+
 // Generate OTP (4 digits)
 const generateOTP = () => {
   return Math.floor(1000 + Math.random() * 9000).toString();
@@ -1484,20 +1521,18 @@ export const getStayInHostelRequestsForWarden = async (req, res, next) => {
       if (toDate) query.stayDate.$lte = getISTEndOfDay(toDate);
     }
 
-    const leaves = await Leave.find(query)
+    const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
         select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
       })
       .populate('recommendedBy', 'name')
       .populate('decidedBy', 'name')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
+
+    const leaves = await resolveStudentMetadata(leavesData);
 
     const count = await Leave.countDocuments(query);
 
@@ -1591,20 +1626,18 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       if (toDate) query.stayDate.$lte = getISTEndOfDay(toDate);
     }
 
-    const leaves = await Leave.find(query)
+    const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
       })
       .populate('recommendedBy', 'name')
       .populate('decidedBy', 'name')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
+
+    const leaves = await resolveStudentMetadata(leavesData);
 
     const count = await Leave.countDocuments(query);
 
