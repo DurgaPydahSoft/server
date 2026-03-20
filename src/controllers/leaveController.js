@@ -1480,8 +1480,8 @@ export const getStayInHostelRequestsForWarden = async (req, res, next) => {
 
     if (fromDate || toDate) {
       query.stayDate = {};
-      if (fromDate) query.stayDate.$gte = new Date(fromDate);
-      if (toDate) query.stayDate.$lte = new Date(toDate);
+      if (fromDate) query.stayDate.$gte = getISTStartOfDay(fromDate);
+      if (toDate) query.stayDate.$lte = getISTEndOfDay(toDate);
     }
 
     const leaves = await Leave.find(query)
@@ -1587,8 +1587,8 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
 
     if (fromDate || toDate) {
       query.stayDate = {};
-      if (fromDate) query.stayDate.$gte = new Date(fromDate);
-      if (toDate) query.stayDate.$lte = new Date(toDate);
+      if (fromDate) query.stayDate.$gte = getISTStartOfDay(fromDate);
+      if (toDate) query.stayDate.$lte = getISTEndOfDay(toDate);
     }
 
     const leaves = await Leave.find(query)
