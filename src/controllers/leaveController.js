@@ -1575,6 +1575,7 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
 
     // 1. Get all allowed courses for this principal
     const allowedCourseNames = await getAllowedCourseNames(principal);
+    const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
 
     if (allowedCourseNames.length === 0) {
       return res.json({
@@ -1588,9 +1589,32 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       });
     }
 
+    // Optimization: Find students in these courses first
+    // Account for course names, normalized names, and SQL IDs
+    const allSQLCoursesData = await getCoursesFromSQL();
+    const allSQLCourses = Array.isArray(allSQLCoursesData) ? allSQLCoursesData : (allSQLCoursesData.data || []);
+    
+    const matchedSQLIds = allSQLCourses
+      .filter(c => normalizedAllowedCourses.includes(normalizeCourseName(c.name)))
+      .map(c => c.sqlId)
+      .filter(id => id);
+    
+    const studentCourseFilter = [...new Set([
+      ...allowedCourseNames, 
+      ...normalizedAllowedCourses, 
+      ...matchedSQLIds,
+      ...matchedSQLIds.map(id => id.toString()),
+      ...matchedSQLIds.map(id => `sql_${id}`)
+    ])];
+
+    console.log(`🎓 [StayInHostel] Resolved filter for principal ${req.principal._id}:`, {
+      allowedCourseNames,
+      studentCourseFilterLength: studentCourseFilter.length
+    });
+
     // 2. Get students who belong to these courses
     const studentQuery = { 
-      course: { $in: allowedCourseNames },
+      course: { $in: studentCourseFilter },
       role: 'student'
     };
 
@@ -2010,9 +2034,21 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     const allSQLCourses = await getCoursesFromSQL();
     const matchedSQLIds = allSQLCourses
       .filter(c => normalizedAllowedCourses.includes(normalizeCourseName(c.name)))
-      .map(c => c._id);
+      .map(c => c.sqlId)
+      .filter(id => id);
     
-    const studentCourseFilter = [...new Set([...allowedCourseNames, ...normalizedAllowedCourses, ...matchedSQLIds])];
+    const studentCourseFilter = [...new Set([
+      ...allowedCourseNames, 
+      ...normalizedAllowedCourses, 
+      ...matchedSQLIds,
+      ...matchedSQLIds.map(id => id.toString()),
+      ...matchedSQLIds.map(id => `sql_${id}`)
+    ])];
+
+    console.log(`🎓 [GeneralLeave] Resolved filter for principal ${req.principal._id}:`, {
+      allowedCourseNames,
+      studentCourseFilterLength: studentCourseFilter.length
+    });
     
     const studentQuery = {
       course: { $in: studentCourseFilter }
@@ -2077,7 +2113,7 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       query.$and.push(dateSubQuery);
     }
 
-    const leaves = await Leave.find(query)
+    const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
         select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
@@ -2087,6 +2123,8 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
+
+    const leaves = await resolveStudentMetadata(leavesData);
 
     const count = await Leave.countDocuments(query);
 
