@@ -20,6 +20,7 @@ import {
   resolveBranchName, 
   getAllowedCourseNames 
 } from '../utils/adminUtils.js';
+import { getCoursesFromSQL } from '../utils/courseBranchMapper.js';
 
 /**
  * Helper to resolve student course and branch names from SQL IDs if needed.
