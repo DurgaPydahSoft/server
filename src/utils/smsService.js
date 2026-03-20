@@ -409,7 +409,22 @@ export const checkBalance = async () => {
       throw createError(500, 'SMS service configuration missing');
     }
     const response = await axios.get(`http://www.bulksmsapps.com/api/apicheckbalancev2.aspx?apikey=${BULKSMS_API_KEY}`);
-    return response.data;
+    
+    let balanceData = response.data;
+    if (typeof balanceData === 'string') {
+      // The API often returns "X credit balance <BR> <!DOCTYPE..."
+      // Extract the part before <BR> or handle HTML tags
+      const cleanBalance = balanceData.split(/<BR>|<br>|<!DOCTYPE/i)[0].trim();
+      
+      // Optionally extract just the number if it matches "X credit balance"
+      const numberMatch = cleanBalance.match(/^\d+/);
+      if (numberMatch) {
+        return numberMatch[0];
+      }
+      return cleanBalance;
+    }
+    
+    return balanceData;
   } catch (error) {
     console.error('Error checking SMS balance:', error);
     throw createError(500, 'Failed to check SMS balance');

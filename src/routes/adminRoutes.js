@@ -59,6 +59,7 @@ import {
   verifyOTPAndApprove,
   rejectLeaveRequest
 } from '../controllers/leaveController.js';
+import { getSMSBalance } from '../controllers/smsController.js';
 import { adminAuth, wardenAuth, superAdminAuth, checkPermission } from '../middleware/authMiddleware.js';
 
 // Middleware for concession management permission
@@ -190,6 +191,7 @@ router.post('/email/test', async (req, res) => {
 router.get('/leave/all', getAllLeaveRequests);
 router.post('/leave/verify-otp', verifyOTPAndApprove);
 router.post('/leave/reject', rejectLeaveRequest);
+router.get('/sms/balance', getSMSBalance);
 
 // Student management routes
 // Specific sub-paths of /students/ should come before dynamic /students/:id
