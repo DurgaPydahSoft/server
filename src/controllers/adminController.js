@@ -572,44 +572,7 @@ export const addStudent = async (req, res, next) => {
   }
 };
 
-// Add batch validation function
-const validateBatch = async (batch, courseId) => {
-  // Check if batch matches the format YYYY-YYYY
-  if (!/^\d{4}-\d{4}$/.test(batch)) {
-    return false;
-  }
 
-  const [startYear, endYear] = batch.split('-').map(Number);
-  const duration = endYear - startYear;
-  
-  // If courseId is provided, fetch the course to get its duration
-  if (courseId) {
-    // Only attempt to find by ID if it's a valid MongoDB ObjectId
-    if (/^[0-9a-fA-F]{24}$/.test(String(courseId))) {
-      try {
-        const course = await Course.findById(courseId);
-        if (course && course.duration) {
-          return duration === course.duration;
-        }
-      } catch (error) {
-        console.error('Error fetching course for batch validation:', error);
-      }
-    }
-  }
-  
-  // Fallback to old validation for backward compatibility
-  if (typeof courseId === 'string' && !courseId.includes('-')) {
-    // This might be a course name (old format)
-    if (courseId === 'B.Tech' || courseId === 'Pharmacy') {
-      return duration === 4;
-    } else if (courseId === 'Diploma' || courseId === 'Degree') {
-      return duration === 3;
-    }
-  }
-  
-  // If we can't determine the expected duration, allow common durations (3-4 years)
-  return duration >= 3 && duration <= 4;
-};
 
 // Helper to get course duration based on course name
 function getCourseDuration(courseName) {
@@ -1517,11 +1480,11 @@ export const updateStudent = async (req, res, next) => {
 
     // Resolve hostel/category for room validation under new hierarchy
     const targetHostelId = hostel || student.hostel;
-    let targetCategoryId = hostelCategory || student.hostelCategory;
-    let targetCategoryName = category || student.category;
+    let targetCategoryId = hostelCategory;
+    let targetCategoryName = category;
 
-    // If category is provided as a name, try to resolve to HostelCategory _id within the target hostel
-    if (!targetCategoryId && category) {
+    // If category name is provided in payload, resolve its ID to ensure consistency
+    if (category) {
       if (!targetHostelId) {
         throw createError(400, 'Hostel is required to resolve category.');
       }
@@ -1531,15 +1494,15 @@ export const updateStudent = async (req, res, next) => {
       }
       targetCategoryId = categoryDoc._id;
       targetCategoryName = categoryDoc.name;
+    } 
+    // If category name wasn't provided but hostelCategory ID was, use it
+    else if (hostelCategory) {
+      targetCategoryId = hostelCategory;
     }
 
-    // If category not provided, derive from hostelCategory document
-    if (!category && targetCategoryId && !targetCategoryName) {
-      const catDoc = await HostelCategory.findById(targetCategoryId);
-      if (catDoc) {
-        targetCategoryName = catDoc.name;
-      }
-    }
+    // Fallback to existing student values if not provided in request
+    if (!targetCategoryId) targetCategoryId = student.hostelCategory;
+    if (!targetCategoryName) targetCategoryName = student.category;
 
     // Validate hostel exists if provided
     if (targetHostelId) {
@@ -1570,23 +1533,7 @@ export const updateStudent = async (req, res, next) => {
       }
     }
 
-    // Validate batch format and duration based on course
-    if (batch) {
-      const isValidBatch = await validateBatch(batch, course || student.course);
-      if (!isValidBatch) {
-        // Try to get course details for better error message
-        let expectedDuration = '3-4';
-        try {
-          const courseDoc = await Course.findById(course || student.course);
-          if (courseDoc && courseDoc.duration) {
-            expectedDuration = courseDoc.duration.toString();
-          }
-        } catch (error) {
-          console.error('Error fetching course for error message:', error);
-        }
-        throw createError(400, `Invalid batch format. Must be YYYY-YYYY with correct duration (${expectedDuration} years).`);
-      }
-    }
+    // Update student fields
 
     // Validate academic year
     if (academicYear && !validateAcademicYear(academicYear)) {
