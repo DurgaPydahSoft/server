@@ -10,6 +10,87 @@ import {
 import { normalizeToISTStartOfDay, getISTStartOfDay, getISTEndOfDay } from '../utils/dateUtils.js';
 import notificationService from '../utils/notificationService.js';
 
+// Shared helpers: same student pool as Take Attendance (getStudentsForAttendance)
+const buildActiveStudentsQuery = ({ course, branch, gender, category, roomNumber }) => {
+  const query = { role: 'student', hostelStatus: 'Active' };
+  if (course?.trim()) query.course = course.trim();
+  if (branch?.trim()) query.branch = branch.trim();
+  if (gender?.trim()) query.gender = gender.trim();
+  if (category?.trim()) query.category = category.trim();
+  if (roomNumber?.trim()) query.roomNumber = roomNumber.trim();
+  return query;
+};
+
+const fetchApprovedLeavesForDate = async (normalizedDate) => {
+  const startOfDay = normalizedDate;
+  const endOfDay = new Date(normalizedDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return Leave.find({
+    status: { $in: ['Approved', 'Principal Approved'] },
+    verificationStatus: { $ne: 'Completed' },
+    $or: [
+      {
+        applicationType: 'Leave',
+        startDate: { $lte: endOfDay },
+        endDate: { $gte: startOfDay }
+      },
+      {
+        applicationType: 'Permission',
+        permissionDate: { $gte: startOfDay, $lte: endOfDay }
+      }
+    ]
+  }).populate('student', '_id name');
+};
+
+const resolveCourseBranchFilterParams = async (course, branch) => {
+  let resolvedCourse = course?.trim() || '';
+  let resolvedBranch = branch?.trim() || '';
+
+  if (resolvedCourse && (resolvedCourse.startsWith('sql_') || /^\d+$/.test(resolvedCourse))) {
+    const { getCourseById } = await import('../utils/courseBranchHelper.js');
+    const courseDoc = await getCourseById(resolvedCourse);
+    if (courseDoc?.name) resolvedCourse = courseDoc.name;
+  }
+
+  if (resolvedBranch && (resolvedBranch.startsWith('sql_') || /^\d+$/.test(resolvedBranch))) {
+    const { getBranchById } = await import('../utils/courseBranchHelper.js');
+    const branchDoc = await getBranchById(resolvedBranch);
+    if (branchDoc?.name) resolvedBranch = branchDoc.name;
+  }
+
+  return { course: resolvedCourse, branch: resolvedBranch };
+};
+
+const getRecordAttendanceStatus = (record) => {
+  if (record.student?.isOnLeave) return 'On Leave';
+  if (record.morning && record.evening && record.night) return 'Present';
+  if (record.morning || record.evening || record.night) return 'Partial';
+  return 'Absent';
+};
+
+const computeAttendanceStatistics = (records) => {
+  const totalStudents = records.length;
+  const morningPresent = records.filter(att => att.morning).length;
+  const eveningPresent = records.filter(att => att.evening).length;
+  const nightPresent = records.filter(att => att.night).length;
+  const fullyPresent = records.filter(att => att.morning && att.evening && att.night).length;
+  const partiallyPresent = records.filter(att =>
+    (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)
+  ).length;
+  const absent = records.filter(att =>
+    !att.student?.isOnLeave && !att.morning && !att.evening && !att.night
+  ).length;
+
+  return {
+    totalStudents,
+    morningPresent,
+    eveningPresent,
+    nightPresent,
+    fullyPresent,
+    partiallyPresent,
+    absent
+  };
+};
+
 // Get students for attendance taking
 export const getStudentsForAttendance = async (req, res, next) => {
   try {
@@ -280,131 +361,73 @@ export const getAttendanceForDate = async (req, res, next) => {
     const { date, course, branch, gender, studentId, status } = req.query;
     const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
-    // Build base query for attendance
-    let attendanceQuery = { date: normalizedDate };
+    const { course: resolvedCourse, branch: resolvedBranch } = await resolveCourseBranchFilterParams(course, branch);
 
-    // Get all attendance records for the date first
-    let attendance = await Attendance.find(attendanceQuery)
-      .populate({
-        path: 'student',
-        select: 'name rollNumber course branch year gender roomNumber',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
-      })
-      .populate('markedBy', 'username role');
+    // Same active student pool as Take Attendance
+    const studentQuery = buildActiveStudentsQuery({
+      course: resolvedCourse,
+      branch: resolvedBranch,
+      gender,
+      category: req.query.category,
+      roomNumber: req.query.roomNumber
+    });
 
-    // Get approved leaves for the date
-    const startOfDay = normalizedDate;
-    const endOfDay = new Date(normalizedDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+    const students = await User.find(studentQuery)
+      .select('name rollNumber course branch year gender roomNumber category')
+      .sort({ name: 1 })
+      .lean();
 
-    const approvedLeaves = await Leave.find({
-      status: { $in: ['Approved', 'Principal Approved'] },
-      $or: [
-        // For Leave applications - check if the date falls within the leave period
-        {
-          applicationType: 'Leave',
-          startDate: { $lte: endOfDay },
-          endDate: { $gte: startOfDay }
-        },
-        // For Permission applications - check if the date matches the permission date
-        {
-          applicationType: 'Permission',
-          permissionDate: { $gte: startOfDay, $lte: endOfDay }
-        }
-      ]
-    }).populate('student', '_id name');
+    const studentIds = students.map(s => s._id);
 
-    // Create a set of student IDs who are on approved leave
-    const studentsOnLeave = new Set(approvedLeaves
-      .filter(leave => leave.student) // Filter out leaves with null student
-      .map(leave => leave.student._id.toString())
+    const existingAttendance = await Attendance.find({
+      date: normalizedDate,
+      student: { $in: studentIds }
+    })
+      .populate('markedBy', 'username role')
+      .lean();
+
+    const attendanceByStudentId = new Map(
+      existingAttendance
+        .filter(att => att.student)
+        .map(att => [att.student.toString(), att])
     );
 
-    // Add isOnLeave flag to attendance records
-    attendance = attendance.map(att => {
-      // Skip records with null student
-      if (!att.student) {
-        return {
-          ...att.toObject(),
-          student: null,
-          isOnLeave: false
-        };
-      }
-      
-      const isOnLeave = studentsOnLeave.has(att.student._id.toString());
+    const approvedLeaves = await fetchApprovedLeavesForDate(normalizedDate);
+    const studentsOnLeave = new Set(
+      approvedLeaves
+        .filter(leave => leave.student)
+        .map(leave => leave.student._id.toString())
+    );
+
+    // Merge every eligible student with their attendance (or default absent)
+    let attendance = students.map(student => {
+      const att = attendanceByStudentId.get(student._id.toString());
+      const isOnLeave = studentsOnLeave.has(student._id.toString());
+
       return {
-        ...att.toObject(),
-        student: {
-          ...att.student.toObject(),
-          isOnLeave: isOnLeave
-        }
+        _id: att?._id,
+        student: { ...student, isOnLeave },
+        morning: att?.morning || false,
+        evening: att?.evening || false,
+        night: att?.night || false,
+        date: normalizedDate,
+        markedBy: att?.markedBy || null,
+        notes: att?.notes || '',
+        isOnLeave
       };
     });
 
-
-
-    // Apply filters to the populated attendance records
-    if (course) {
-      attendance = attendance.filter(att => 
-        att.student?.course?._id?.toString() === course || 
-        att.student?.course?.toString() === course
-      );
-    }
-
-    if (branch) {
-      attendance = attendance.filter(att => 
-        att.student?.branch?._id?.toString() === branch || 
-        att.student?.branch?.toString() === branch
-      );
-    }
-
-    if (gender) {
-      attendance = attendance.filter(att => 
-        att.student?.gender === gender
-      );
-    }
-
     if (studentId) {
-      attendance = attendance.filter(att => 
+      attendance = attendance.filter(att =>
         att.student?.rollNumber?.toLowerCase().includes(studentId.toLowerCase())
       );
     }
 
     if (status) {
-      attendance = attendance.filter(att => {
-        const isPresent = att.morning && att.evening && att.night;
-        const isPartial = (att.morning || att.evening || att.night) && !isPresent;
-        const isAbsent = !att.morning && !att.evening && !att.night;
-        
-        if (status === 'Present') return isPresent;
-        if (status === 'Partial') return isPartial;
-        if (status === 'Absent') return isAbsent;
-        return true;
-      });
+      attendance = attendance.filter(att => getRecordAttendanceStatus(att) === status);
     }
 
-    // Calculate statistics from filtered attendance
-    const totalStudents = attendance.length;
-    const morningPresent = attendance.filter(att => att.morning).length;
-    const eveningPresent = attendance.filter(att => att.evening).length;
-    const nightPresent = attendance.filter(att => att.night).length;
-    const fullyPresent = attendance.filter(att => att.morning && att.evening && att.night).length;
-    const partiallyPresent = attendance.filter(att => 
-      (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)
-    ).length;
-    const absent = attendance.filter(att => !att.morning && !att.evening && !att.night).length;
-
-    const statistics = {
-      totalStudents,
-      morningPresent,
-      eveningPresent,
-      nightPresent,
-      fullyPresent,
-      partiallyPresent,
-      absent
-    };
+    const statistics = computeAttendanceStatistics(attendance);
 
     res.json({
       success: true,
