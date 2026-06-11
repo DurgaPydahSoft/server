@@ -1607,8 +1607,7 @@ export const updateStudent = async (req, res, next) => {
     if (targetCategoryId) student.hostelCategory = targetCategoryId;
     if (bedNumber !== undefined) student.bedNumber = bedNumber;
     if (lockerNumber !== undefined) student.lockerNumber = lockerNumber;
-    if (studentPhone !== undefined) student.studentPhone = studentPhone;
-    if (parentPhone) student.parentPhone = parentPhone;
+    // studentPhone / parentPhone — read from SQL at display time (not updated in MongoDB)
     if (batch) student.batch = normalizeBatchToYear(batch);
     if (academicYear) student.academicYear = academicYear;
     if (hostelStatus) student.hostelStatus = hostelStatus;
@@ -1727,6 +1726,8 @@ export const updateStudent = async (req, res, next) => {
 
     await student.save();
 
+    const enrichedStudent = await enrichStudentAcademics(student.toObject());
+
     res.json({
       success: true,
       data: {
@@ -1735,17 +1736,17 @@ export const updateStudent = async (req, res, next) => {
           name: student.name,
           rollNumber: student.rollNumber,
           gender: student.gender,
-          course: academicSnapshot.course,
-          year: academicSnapshot.year,
-          branch: academicSnapshot.branch,
+          course: enrichedStudent.course ?? academicSnapshot.course,
+          year: enrichedStudent.year ?? academicSnapshot.year,
+          branch: enrichedStudent.branch ?? academicSnapshot.branch,
           category: student.category,
           mealType: student.mealType,
           parentPermissionForOuting: student.parentPermissionForOuting,
           roomNumber: student.roomNumber,
           bedNumber: student.bedNumber,
           lockerNumber: student.lockerNumber,
-          studentPhone: student.studentPhone,
-          parentPhone: student.parentPhone,
+          studentPhone: enrichedStudent.studentPhone,
+          parentPhone: enrichedStudent.parentPhone,
           email: student.email,
           batch: student.batch,
           academicYear: student.academicYear,

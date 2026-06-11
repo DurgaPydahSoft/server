@@ -348,12 +348,13 @@ export const createLeaveRequest = async (req, res, next) => {
     } = req.body;
     const studentId = req.user.id;
 
-    // Get student details
-    const student = await User.findById(studentId);
-    if (!student) {
+    // Get student details (phones from SQL when available)
+    const studentDoc = await User.findById(studentId).lean();
+    if (!studentDoc) {
       throw createError(404, 'Student not found');
     }
-    
+    const student = await enrichStudentAcademics(studentDoc);
+
     console.log('Student details:', {
       name: student.name,
       gender: student.gender,
@@ -921,11 +922,7 @@ export const resendOTP = async (req, res, next) => {
     const leave = await Leave.findById(leaveId)
       .populate({
         path: 'student',
-        select: 'name parentPhone gender course',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: 'name rollNumber admissionNumber parentPhone gender'
       });
       
     if (!leave) {
@@ -936,6 +933,8 @@ export const resendOTP = async (req, res, next) => {
     if (leave.student._id.toString() !== studentId) {
       throw createError(403, 'You can only resend OTP for your own requests');
     }
+
+    const enrichedStudent = await enrichStudentAcademics(leave.student);
 
     if (leave.status !== 'Pending OTP Verification') {
       throw createError(400, 'Invalid leave status for OTP resend');
@@ -961,19 +960,19 @@ export const resendOTP = async (req, res, next) => {
     // Send same OTP via SMS
     try {
       // Get gender in Telugu
-      const genderInTelugu = leave.student.gender === 'Male' ? 'కొడుకు' : 'కూతురు';
+      const genderInTelugu = enrichedStudent.gender === 'Male' ? 'కొడుకు' : 'కూతురు';
       
       console.log('Resending SMS with params:', {
-        phone: leave.student.parentPhone,
+        phone: enrichedStudent.parentPhone,
         otp: sameOtp,
         gender: genderInTelugu,
-        name: leave.student.name
+        name: enrichedStudent.name
       });
       
-      const smsResult = await sendSMS(leave.student.parentPhone, '', { 
+      const smsResult = await sendSMS(enrichedStudent.parentPhone, '', { 
         otp: sameOtp,
         gender: genderInTelugu,
-        name: leave.student.name
+        name: enrichedStudent.name
       });
       
       if (smsResult.success) {

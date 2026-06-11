@@ -1,8 +1,95 @@
+import mongoose from 'mongoose';
 import FeeStructure from '../models/FeeStructure.js';
 import Course from '../models/Course.js';
 import { createError } from '../utils/error.js';
 import Hostel from '../models/Hostel.js';
 import HostelCategory from '../models/HostelCategory.js';
+import {
+  resolveCourseName,
+  resolveBranchName,
+  normalizeCourseName as normCourseKey,
+} from '../utils/adminUtils.js';
+import { getCoursesFromSQL } from '../utils/courseBranchMapper.js';
+
+const isObjectIdString = (value) => {
+  if (!value) return false;
+  const str = String(value);
+  return mongoose.Types.ObjectId.isValid(str) && str.length === 24;
+};
+
+/** Resolve legacy Mongo / sql_* course keys to SQL course name for storage & display */
+const normalizeCourseForFeeStructure = async (courseValue) => {
+  if (!courseValue) return courseValue;
+  const trimmed = String(courseValue).trim();
+
+  const resolved = await resolveCourseName(trimmed);
+  if (resolved && !isObjectIdString(resolved)) {
+    return String(resolved).trim();
+  }
+
+  if (isObjectIdString(trimmed)) {
+    const legacy = await Course.findById(trimmed).select('name').lean();
+    if (legacy?.name) return legacy.name.trim();
+  }
+
+  const legacyByName = await Course.findOne({ name: trimmed }).select('name').lean();
+  if (legacyByName?.name) return legacyByName.name.trim();
+
+  return trimmed;
+};
+
+/** Match fee rows whether course was stored as name or legacy id */
+const buildCourseQueryVariants = async (courseFilter) => {
+  if (!courseFilter) return [];
+  const variants = new Set([String(courseFilter).trim()]);
+
+  const resolvedName = await normalizeCourseForFeeStructure(courseFilter);
+  if (resolvedName) variants.add(resolvedName);
+
+  if (isObjectIdString(courseFilter)) {
+    variants.add(String(courseFilter));
+  }
+
+  const legacy = isObjectIdString(courseFilter)
+    ? await Course.findById(courseFilter).select('name').lean()
+    : await Course.findOne({ name: courseFilter.trim() }).select('_id name').lean();
+
+  if (legacy?._id) variants.add(legacy._id.toString());
+  if (legacy?.name) variants.add(legacy.name.trim());
+
+  try {
+    const sqlCourses = await getCoursesFromSQL();
+    const targetNorm = normCourseKey(resolvedName || courseFilter);
+    for (const c of sqlCourses) {
+      const matches =
+        normCourseKey(c.name) === targetNorm ||
+        c._id === courseFilter ||
+        String(c.sqlId) === String(courseFilter) ||
+        `sql_${c.sqlId}` === courseFilter;
+      if (matches) {
+        variants.add(c.name);
+        if (c._id) variants.add(c._id);
+        if (c.sqlId != null) {
+          variants.add(String(c.sqlId));
+          variants.add(`sql_${c.sqlId}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error building SQL course variants for fee filter:', err);
+  }
+
+  return [...variants];
+};
+
+const enrichFeeStructureRow = async (doc) => {
+  const plain = doc.toObject ? doc.toObject() : { ...doc };
+  plain.course = (await normalizeCourseForFeeStructure(plain.course)) || plain.course;
+  if (plain.branch) {
+    plain.branch = (await resolveBranchName(plain.branch)) || plain.branch;
+  }
+  return plain;
+};
 
 // Test endpoint to verify fee structure routes are working
 export const testFeeStructure = async (req, res) => {
@@ -151,7 +238,10 @@ export const listAdminFeeStructures = async (req, res) => {
 
     const query = {};
     if (academicYear) query.academicYear = academicYear;
-    if (course) query.course = course;
+    if (course) {
+      const variants = await buildCourseQueryVariants(course);
+      query.course = variants.length > 1 ? { $in: variants } : variants[0] || course;
+    }
     if (branch) query.branch = branch;
     if (year) query.year = parseInt(year, 10);
     if (hostelId) query.hostelId = hostelId;
@@ -164,7 +254,9 @@ export const listAdminFeeStructures = async (req, res) => {
       .populate('categoryId', 'name hostel')
       .sort({ academicYear: -1, course: 1, branch: 1, year: 1, feeType: 1 });
 
-    res.json({ success: true, data });
+    const enriched = await Promise.all(data.map(enrichFeeStructureRow));
+
+    res.json({ success: true, data: enriched });
   } catch (error) {
     console.error('Error listing fee structures:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch fee structures', error: error.message });
@@ -189,6 +281,11 @@ export const createAdminFeeStructure = async (req, res, next) => {
       throw createError(400, 'academicYear, course, year, feeType, and amount are required');
     }
 
+    const normalizedCourse = await normalizeCourseForFeeStructure(course);
+    const normalizedBranch = branch
+      ? ((await resolveBranchName(branch)) || branch)
+      : branch;
+
     // Validate hostel/category if provided
     let hostelDoc = null;
     let categoryDoc = null;
@@ -207,8 +304,8 @@ export const createAdminFeeStructure = async (req, res, next) => {
     // Duplicate guard
     const existing = await FeeStructure.findOne({
       academicYear,
-      course,
-      branch: branch || null,
+      course: normalizedCourse,
+      branch: normalizedBranch || null,
       year,
       hostelId: hostelId || null,
       categoryId: categoryId || null,
@@ -232,8 +329,8 @@ export const createAdminFeeStructure = async (req, res, next) => {
 
     const doc = await FeeStructure.create({
       academicYear,
-      course,
-      branch,
+      course: normalizedCourse,
+      branch: normalizedBranch,
       year,
       hostelId: hostelId || null,
       categoryId: categoryId || null,
@@ -248,7 +345,7 @@ export const createAdminFeeStructure = async (req, res, next) => {
       isActive: true,
     });
 
-    res.status(201).json({ success: true, data: doc });
+    res.status(201).json({ success: true, data: await enrichFeeStructureRow(doc) });
   } catch (error) {
     next(error);
   }
@@ -275,6 +372,13 @@ export const updateAdminFeeStructure = async (req, res, next) => {
       throw createError(404, 'Fee rule not found');
     }
 
+    const normalizedCourse = course
+      ? await normalizeCourseForFeeStructure(course)
+      : await normalizeCourseForFeeStructure(fee.course);
+    const normalizedBranch = branch !== undefined
+      ? (branch ? ((await resolveBranchName(branch)) || branch) : branch)
+      : fee.branch;
+
     // Validate hostel/category if provided
     let hostelDoc = null;
     let categoryDoc = null;
@@ -294,8 +398,8 @@ export const updateAdminFeeStructure = async (req, res, next) => {
     const duplicate = await FeeStructure.findOne({
       _id: { $ne: id },
       academicYear: academicYear || fee.academicYear,
-      course: course || fee.course,
-      branch: branch ?? fee.branch,
+      course: normalizedCourse,
+      branch: normalizedBranch ?? fee.branch,
       year: year || fee.year,
       hostelId: hostelId ?? fee.hostelId,
       categoryId: categoryId ?? fee.categoryId,
@@ -306,8 +410,8 @@ export const updateAdminFeeStructure = async (req, res, next) => {
     }
 
     fee.academicYear = academicYear || fee.academicYear;
-    fee.course = course || fee.course;
-    fee.branch = branch ?? fee.branch;
+    fee.course = normalizedCourse;
+    fee.branch = normalizedBranch ?? fee.branch;
     fee.year = year || fee.year;
     fee.hostelId = hostelId ?? fee.hostelId;
     fee.categoryId = categoryId ?? fee.categoryId;
@@ -334,7 +438,7 @@ export const updateAdminFeeStructure = async (req, res, next) => {
     fee.updatedBy = req.admin?._id || req.user?._id;
 
     await fee.save();
-    res.json({ success: true, data: fee });
+    res.json({ success: true, data: await enrichFeeStructureRow(fee) });
   } catch (error) {
     next(error);
   }

@@ -51,6 +51,10 @@ export const parseSqlStudentRow = async (sqlRow) => {
     branchId,
     sqlCourseId,
     sqlBranchId,
+    // Contact phones — SQL source of truth (same as academics)
+    studentPhone: (sqlRow.student_mobile || '').toString().trim(),
+    parentPhone: (sqlRow.parent_mobile1 || '').toString().trim(),
+    motherPhone: (sqlRow.parent_mobile2 || '').toString().trim(),
     academicSource: 'sql'
   };
 };
@@ -78,7 +82,7 @@ export const loadAcademicsFromSQL = async (identifier) => {
 };
 
 /**
- * Overlay SQL academics onto a student document for API responses.
+ * Overlay SQL academics and contact phones onto a student document for API responses.
  */
 export const enrichStudentAcademics = async (student) => {
   const plain = toPlainStudent(student);
