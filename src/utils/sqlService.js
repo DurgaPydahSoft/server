@@ -22,8 +22,8 @@ export const initializeSQLPool = () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
       waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
+      connectionLimit: parseInt(process.env.SQL_POOL_SIZE, 10) || 10,
+      queueLimit: 50,
       enableKeepAlive: true,
       keepAliveInitialDelay: 0,
       // Connection timeout settings
@@ -116,26 +116,7 @@ export const executeQuery = async (query, params = []) => {
   }
 };
 
-/**
- * Fetch student by PIN number or Admission number
- */
-export const fetchStudentByIdentifier = async (identifier) => {
-  let connection = null;
-  try {
-    const pool = getSQLPool();
-    
-    // Get connection with timeout
-    const connectionPromise = pool.getConnection();
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Connection timeout after 30 seconds')), 30000)
-    );
-    
-    connection = await Promise.race([connectionPromise, timeoutPromise]);
-    
-    // Try PIN number and admission numbers
-    // Note: Removed custom_fields and student_data as they may not exist in all database versions
-    const query = `
-      SELECT 
+const STUDENT_SELECT_COLUMNS = `
         id,
         admission_number,
         admission_no,
@@ -167,45 +148,88 @@ export const fetchStudentByIdentifier = async (identifier) => {
         student_photo,
         remarks,
         created_at,
-        updated_at
+        updated_at`;
+
+let lastSqlStudentFetchErrorLog = 0;
+
+const logSqlStudentFetchError = (error, context = 'student') => {
+  const now = Date.now();
+  if (now - lastSqlStudentFetchErrorLog > 30000) {
+    console.error(`❌ Error fetching ${context} from SQL:`, error?.message || error);
+    lastSqlStudentFetchErrorLog = now;
+  }
+};
+
+const formatSqlFetchError = (error) => {
+  let errorMessage = error.message;
+  if (error.code === 'ETIMEDOUT' || error.message.includes('timeout')) {
+    errorMessage = 'Database connection timeout. Please check network connectivity and database server status.';
+  } else if (error.code === 'ECONNREFUSED') {
+    errorMessage = 'Database connection refused. Please check if the database server is running.';
+  } else if (error.code === 'ENOTFOUND') {
+    errorMessage = 'Database host not found. Please check the database host configuration.';
+  }
+  return { errorMessage, code: error.code };
+};
+
+/**
+ * Fetch student by PIN number or Admission number
+ */
+export const fetchStudentByIdentifier = async (identifier) => {
+  try {
+    const pool = getSQLPool();
+    const query = `
+      SELECT ${STUDENT_SELECT_COLUMNS}
       FROM students
       WHERE pin_no = ? OR admission_number = ? OR admission_no = ?
       LIMIT 1
     `;
-    
-    const [rows] = await connection.execute(query, [identifier, identifier, identifier]);
-    
-    // Release connection before returning
-    connection.release();
-    connection = null;
-    
+
+    const [rows] = await pool.execute(query, [identifier, identifier, identifier]);
+
     if (rows.length === 0) {
       return { success: false, error: 'Student not found in central database' };
     }
-    
+
     return { success: true, data: rows[0] };
   } catch (error) {
-    // Release connection if it was acquired
-    if (connection) {
-      try {
-        connection.release();
-      } catch (releaseError) {
-        console.error('Error releasing connection:', releaseError);
-      }
-    }
-    
-    console.error('❌ Error fetching student from SQL:', error);
-    
-    let errorMessage = error.message;
-    if (error.code === 'ETIMEDOUT' || error.message.includes('timeout')) {
-      errorMessage = 'Database connection timeout. Please check network connectivity and database server status.';
-    } else if (error.code === 'ECONNREFUSED') {
-      errorMessage = 'Database connection refused. Please check if the database server is running.';
-    } else if (error.code === 'ENOTFOUND') {
-      errorMessage = 'Database host not found. Please check the database host configuration.';
-    }
-    
-    return { success: false, error: errorMessage, code: error.code };
+    logSqlStudentFetchError(error);
+    const { errorMessage, code } = formatSqlFetchError(error);
+    return { success: false, error: errorMessage, code };
+  }
+};
+
+/**
+ * Batch-fetch students by PIN / admission numbers (single query per chunk).
+ */
+export const fetchStudentsByIdentifiers = async (identifiers = []) => {
+  const unique = [...new Set(
+    identifiers
+      .map((id) => (id || '').toString().trim().toUpperCase())
+      .filter(Boolean)
+  )];
+
+  if (unique.length === 0) {
+    return { success: true, data: [] };
+  }
+
+  try {
+    const pool = getSQLPool();
+    const placeholders = unique.map(() => '?').join(', ');
+    const query = `
+      SELECT ${STUDENT_SELECT_COLUMNS}
+      FROM students
+      WHERE pin_no IN (${placeholders})
+         OR admission_number IN (${placeholders})
+         OR admission_no IN (${placeholders})
+    `;
+    const params = [...unique, ...unique, ...unique];
+    const [rows] = await pool.execute(query, params);
+    return { success: true, data: rows };
+  } catch (error) {
+    logSqlStudentFetchError(error, 'students (batch)');
+    const { errorMessage, code } = formatSqlFetchError(error);
+    return { success: false, error: errorMessage, code };
   }
 };
 
