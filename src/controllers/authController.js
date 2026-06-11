@@ -7,6 +7,29 @@ import Admin from '../models/Admin.js';
 import TempStudent from '../models/TempStudent.js';
 import { createError } from '../utils/error.js';
 import { fetchStudentCredentialsSQL } from '../utils/sqlService.js';
+import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
+
+const buildStudentAuthPayload = (enriched) => ({
+  id: enriched._id,
+  name: enriched.name,
+  rollNumber: enriched.rollNumber,
+  course: enriched.course,
+  branch: enriched.branch,
+  roomNumber: enriched.roomNumber,
+  isPasswordChanged: enriched.isPasswordChanged,
+  gender: enriched.gender,
+  category: enriched.category,
+  year: enriched.year,
+  studentPhone: enriched.studentPhone,
+  parentPhone: enriched.parentPhone,
+  hostelStatus: enriched.hostelStatus,
+  batch: enriched.batch,
+  academicYear: enriched.academicYear,
+  email: enriched.email,
+  studentPhoto: enriched.studentPhoto,
+  guardianPhoto1: enriched.guardianPhoto1,
+  guardianPhoto2: enriched.guardianPhoto2
+});
 
 // Generate JWT token
 const generateToken = (user) => {
@@ -88,34 +111,14 @@ export const studentLogin = async (req, res, next) => {
       throw createError(401, 'Invalid roll number or password');
     }
 
-    // Generate token
     const token = generateToken(student);
+    const enriched = await enrichStudentAcademics(student);
 
     res.json({
       success: true,
       data: {
         token,
-        student: {
-          id: student._id,
-          name: student.name,
-          rollNumber: student.rollNumber,
-          course: student.course,
-          branch: student.branch,
-          roomNumber: student.roomNumber,
-          isPasswordChanged: student.isPasswordChanged,
-          gender: student.gender,
-          category: student.category,
-          year: student.year,
-          studentPhone: student.studentPhone,
-          parentPhone: student.parentPhone,
-          hostelStatus: student.hostelStatus,
-          batch: student.batch,
-          academicYear: student.academicYear,
-          email: student.email,
-          studentPhoto: student.studentPhoto,
-          guardianPhoto1: student.guardianPhoto1,
-          guardianPhoto2: student.guardianPhoto2
-        },
+        student: buildStudentAuthPayload(enriched),
         requiresPasswordChange: !student.isPasswordChanged
       }
     });
@@ -270,11 +273,9 @@ export const completeRegistration = async (req, res) => {
 export const validate = async (req, res, next) => {
   try {
     if (req.user.role === 'student') {
-      const populatedUser = await User.findById(req.user._id)
-        .select('-password')
-        .populate('course', 'name code')
-        .populate('branch', 'name code');
-      return res.json({ success: true, data: { user: populatedUser } });
+      const student = await User.findById(req.user._id).select('-password').lean();
+      const enriched = await enrichStudentAcademics(student);
+      return res.json({ success: true, data: { user: enriched } });
     }
     // For admins and others, just return req.user
     const userResponse = req.user.toObject ? req.user.toObject() : { ...req.user };
@@ -393,31 +394,12 @@ export const verifySSOToken = async (req, res, next) => {
       }
 
       const token = generateToken(student);
+      const enriched = await enrichStudentAcademics(student);
       return res.json({
         success: true,
         data: {
           token,
-          student: {
-            id: student._id,
-            name: student.name,
-            rollNumber: student.rollNumber,
-            course: student.course,
-            branch: student.branch,
-            roomNumber: student.roomNumber,
-            isPasswordChanged: student.isPasswordChanged,
-            gender: student.gender,
-            category: student.category,
-            year: student.year,
-            studentPhone: student.studentPhone,
-            parentPhone: student.parentPhone,
-            hostelStatus: student.hostelStatus,
-            batch: student.batch,
-            academicYear: student.academicYear,
-            email: student.email,
-            studentPhoto: student.studentPhoto,
-            guardianPhoto1: student.guardianPhoto1,
-            guardianPhoto2: student.guardianPhoto2
-          },
+          student: buildStudentAuthPayload(enriched),
           requiresPasswordChange: !student.isPasswordChanged
         }
       });

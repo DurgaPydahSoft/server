@@ -92,13 +92,12 @@ const userSchema = new mongoose.Schema({
     default: 'student'
   },
   /**
-   * Course/Branch stored as strings sourced from SQL (single source of truth).
-   * Old ObjectId refs are removed; these fields now hold exact names/codes
-   * coming from SQL (e.g., "B.Tech", "CSE", "Diploma", "DCME").
+   * Legacy fields — academics (course/branch/year) are sourced from SQL at read time.
+   * Optional on new registrations; may exist on older records.
    */
   course: {
     type: String,
-    required: function() { return this.role === 'student'; },
+    required: false,
     trim: true
   },
   // College Details (Synced from SQL)
@@ -109,7 +108,7 @@ const userSchema = new mongoose.Schema({
   },
   branch: {
     type: String,
-    required: function() { return this.role === 'student'; },
+    required: false,
     trim: true
   },
   // Hostel hierarchy references
@@ -169,7 +168,7 @@ const userSchema = new mongoose.Schema({
   },
   year: {
     type: Number,
-    required: function() { return this.role === 'student'; },
+    required: false,
     validate: {
       validator: async function(v) {
         if (this.role !== 'student') return true;

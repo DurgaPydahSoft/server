@@ -295,13 +295,8 @@ export const updateProfile = async (req, res) => {
 export const getProfile = async (req, res) => {
   try {
     const studentId = req.user.id;
-    const student = await User.findById(studentId)
-      .select('-password')
-      .populate('course', 'name code')
-      .populate('branch', 'name code');
-    
-    console.log('Student profile response:', student);
-    
+    const student = await User.findById(studentId).select('-password').lean();
+
     if (!student) {
       return res.status(404).json({
         success: false,
@@ -309,9 +304,12 @@ export const getProfile = async (req, res) => {
       });
     }
 
+    const { enrichStudentAcademics } = await import('../utils/studentAcademicEnricher.js');
+    const enriched = await enrichStudentAcademics(student);
+
     res.json({
       success: true,
-      data: student
+      data: enriched
     });
   } catch (error) {
     console.error('Error fetching profile:', error);

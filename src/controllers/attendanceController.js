@@ -6,19 +6,29 @@ import {
   getAllowedCourseNames,
   resolveCourseName
 } from '../utils/adminUtils.js';
+import {
+  enrichStudentsAcademics,
+  matchesAcademicFilters
+} from '../utils/studentAcademicEnricher.js';
 
 import { normalizeToISTStartOfDay, getISTStartOfDay, getISTEndOfDay } from '../utils/dateUtils.js';
 import notificationService from '../utils/notificationService.js';
 
 // Shared helpers: same student pool as Take Attendance (getStudentsForAttendance)
-const buildActiveStudentsQuery = ({ course, branch, gender, category, roomNumber }) => {
+const buildActiveStudentsQuery = ({ gender, category, roomNumber }) => {
   const query = { role: 'student', hostelStatus: 'Active' };
-  if (course?.trim()) query.course = course.trim();
-  if (branch?.trim()) query.branch = branch.trim();
   if (gender?.trim()) query.gender = gender.trim();
   if (category?.trim()) query.category = category.trim();
   if (roomNumber?.trim()) query.roomNumber = roomNumber.trim();
   return query;
+};
+
+const filterStudentsByCourseBranch = async (students, course, branch) => {
+  const { course: resolvedCourse, branch: resolvedBranch } = await resolveCourseBranchFilterParams(course, branch);
+  if (!resolvedCourse && !resolvedBranch) return students;
+  return students.filter(s =>
+    matchesAcademicFilters(s, { course: resolvedCourse, branch: resolvedBranch })
+  );
 };
 
 const fetchApprovedLeavesForDate = async (normalizedDate) => {
@@ -100,25 +110,17 @@ export const getStudentsForAttendance = async (req, res, next) => {
     console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber });
     console.log('🔍 getStudentsForAttendance - Normalized date:', normalizedDate);
 
-    // Build query for active students
-    const query = { 
-      role: 'student', 
-      hostelStatus: 'Active' 
-    };
-
-    // Add filters if provided (only if they have valid values)
-    if (course && course.trim() !== '') query.course = course;
-    if (branch && branch.trim() !== '') query.branch = branch;
-    if (gender && gender.trim() !== '') query.gender = gender;
-    if (category && category.trim() !== '') query.category = category;
-    if (roomNumber && roomNumber.trim() !== '') query.roomNumber = roomNumber;
+    const query = buildActiveStudentsQuery({ gender, category, roomNumber });
 
     console.log('🔍 getStudentsForAttendance - Query:', query);
-    
-    const students = await User.find(query)
-      .select('name rollNumber course branch year gender roomNumber')
+
+    let students = await User.find(query)
+      .select('name rollNumber admissionNumber course branch year gender roomNumber')
       .sort({ name: 1 })
-      .lean(); // Use lean() for better performance and to avoid mongoose document issues
+      .lean();
+
+    students = await enrichStudentsAcademics(students);
+    students = await filterStudentsByCourseBranch(students, course, branch);
 
     console.log('🔍 getStudentsForAttendance - Found students:', students.length);
 
@@ -361,21 +363,19 @@ export const getAttendanceForDate = async (req, res, next) => {
     const { date, course, branch, gender, studentId, status } = req.query;
     const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
-    const { course: resolvedCourse, branch: resolvedBranch } = await resolveCourseBranchFilterParams(course, branch);
-
-    // Same active student pool as Take Attendance
     const studentQuery = buildActiveStudentsQuery({
-      course: resolvedCourse,
-      branch: resolvedBranch,
       gender,
       category: req.query.category,
       roomNumber: req.query.roomNumber
     });
 
-    const students = await User.find(studentQuery)
-      .select('name rollNumber course branch year gender roomNumber category')
+    let students = await User.find(studentQuery)
+      .select('name rollNumber admissionNumber course branch year gender roomNumber category')
       .sort({ name: 1 })
       .lean();
+
+    students = await enrichStudentsAcademics(students);
+    students = await filterStudentsByCourseBranch(students, course, branch);
 
     const studentIds = students.map(s => s._id);
 

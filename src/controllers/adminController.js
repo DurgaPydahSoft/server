@@ -21,31 +21,12 @@ import axios from 'axios';
 import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
 import { extractSQLIds, ensureMongoDBCourse, ensureMongoDBBranch } from '../utils/courseBranchResolver.js';
 import { normalizeBatchToYear, getBatchEndYear } from '../utils/batchUtils.js';
-import { getCoursesFromSQL } from '../utils/courseBranchMapper.js';
-
-const buildCourseNameLookup = (courses) => {
-  const lookup = new Map();
-  for (const course of courses) {
-    lookup.set(course._id, course.name);
-    lookup.set(course.name, course.name);
-    lookup.set(String(course.name).trim().toUpperCase(), course.name);
-    if (course.sqlId != null) {
-      lookup.set(`sql_${course.sqlId}`, course.name);
-    }
-  }
-  return lookup;
-};
-
-const resolveStudentCourseName = (courseValue, courseLookup) => {
-  if (!courseValue) return 'Unknown';
-  const raw = typeof courseValue === 'object' && courseValue?.name
-    ? courseValue.name
-    : String(courseValue).trim();
-  if (!raw) return 'Unknown';
-  return courseLookup.get(raw)
-    || courseLookup.get(raw.toUpperCase())
-    || raw;
-};
+import {
+  enrichStudentAcademics,
+  enrichStudentsAcademics,
+  parseSqlStudentRow,
+  matchesAcademicFilters
+} from '../utils/studentAcademicEnricher.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -136,29 +117,23 @@ export const addStudent = async (req, res, next) => {
       throw createError(400, 'Student with this roll number already exists');
     }
 
-    // Validate student exists in SQL database
+    // Validate student exists in SQL and load academics (source of truth)
+    let sqlAcademics = null;
     try {
-      // Test SQL connection first
       const connectionTest = await testSQLConnection();
       if (!connectionTest.success) {
         throw createError(503, 'SQL database connection failed. Cannot proceed with registration.', connectionTest.error);
       }
 
-      // Fetch student from SQL using rollNumber (PIN) or admission number
-      const sqlResult = await fetchStudentByIdentifier(rollNumber);
-      
-      if (!sqlResult.success) {
-        // Also try with admission number if provided in request
-        if (admissionNumber && admissionNumber !== rollNumber) {
-          const sqlResultAdmission = await fetchStudentByIdentifier(admissionNumber);
-          if (!sqlResultAdmission.success) {
-            throw createError(404, 'Student not found in central database. Please verify the PIN number or Admission number.');
-          }
-        } else {
-          throw createError(404, 'Student not found in central database. Please verify the PIN number or Admission number.');
-        }
+      let sqlResult = await fetchStudentByIdentifier(rollNumber);
+      if (!sqlResult.success && admissionNumber && admissionNumber !== rollNumber) {
+        sqlResult = await fetchStudentByIdentifier(admissionNumber);
       }
-      
+      if (!sqlResult.success) {
+        throw createError(404, 'Student not found in central database. Please verify the PIN number or Admission number.');
+      }
+
+      sqlAcademics = await parseSqlStudentRow(sqlResult.data);
       console.log('✅ Student validated in SQL database');
     } catch (error) {
       // If it's already a createError, re-throw it
@@ -254,13 +229,15 @@ export const addStudent = async (req, res, next) => {
     let totalCalculatedFee = 0;
 
     try {
-      // Fetch fee structure for the category and academic year
       const FeeStructure = (await import('../models/FeeStructure.js')).default;
+      const feeCourse = sqlAcademics?.course || course;
+      const feeBranch = sqlAcademics?.branch || branch;
+      const feeYear = sqlAcademics?.year || year;
       const feeStructure = await FeeStructure.getFeeStructure(
         academicYear,
-        finalCourseName,
-        finalBranchName,
-        year,
+        feeCourse,
+        feeBranch,
+        feeYear,
         finalCategoryName
       );
       
@@ -360,76 +337,9 @@ export const addStudent = async (req, res, next) => {
       concessionRequestedAt: null
     };
     
-    // Handle SQL course/branch IDs - ensure MongoDB documents exist
-    let finalCourseId = course;
-    let finalBranchId = branch;
-    let sqlCourseId = null;
-    let sqlBranchId = null;
-    
-    // Extract SQL IDs if course/branch are from SQL
-    const sqlIds = extractSQLIds(course, branch);
-    sqlCourseId = sqlIds.sqlCourseId;
-    sqlBranchId = sqlIds.sqlBranchId;
-    
-    // Resolve course/branch names (we store strings in User.course/branch)
-    let finalCourseName = course; // fallback to incoming value
-    let finalBranchName = branch; // fallback to incoming value
+    const sqlCourseId = sqlAcademics?.sqlCourseId || null;
+    const sqlBranchId = sqlAcademics?.sqlBranchId || null;
 
-    // If course is from SQL, ensure MongoDB document exists AND capture course name
-    if (sqlCourseId) {
-      const mongoCourseId = await ensureMongoDBCourse(sqlCourseId);
-      if (mongoCourseId) {
-        finalCourseId = mongoCourseId;
-        const mongoCourse = await Course.findById(mongoCourseId).lean();
-        if (mongoCourse?.name) finalCourseName = mongoCourse.name.trim();
-      } else {
-        throw createError(400, `Failed to resolve course from SQL database`);
-      }
-    } else if (finalCourseId && /^[0-9a-fA-F]{24}$/.test(String(finalCourseId))) {
-      // Course provided as Mongo ObjectId; use its name
-      const mongoCourse = await Course.findById(finalCourseId).lean();
-      if (mongoCourse?.name) {
-        finalCourseName = mongoCourse.name.trim();
-      } else {
-        // If course not found by ID, try to use the incoming value as string
-        finalCourseName = typeof course === 'string' ? course.trim() : '';
-        if (!finalCourseName) {
-          throw createError(400, `Course not found with ID: ${finalCourseId}`);
-        }
-      }
-    } else if (typeof course === 'string') {
-      // Course is already a string - normalize and trim it
-      finalCourseName = normalizeCourseName(course.trim());
-    }
-    
-    // If branch is from SQL, ensure MongoDB document exists AND capture branch name
-    if (sqlBranchId) {
-      const mongoBranchId = await ensureMongoDBBranch(sqlBranchId, sqlCourseId || (course && course.toString().startsWith('sql_') ? parseInt(course.toString().replace('sql_', '')) : null));
-      if (mongoBranchId) {
-        finalBranchId = mongoBranchId;
-        const mongoBranch = await Branch.findById(mongoBranchId).lean();
-        if (mongoBranch?.name) finalBranchName = mongoBranch.name.trim();
-      } else {
-        console.warn(`⚠️ Failed to resolve branch from SQL database for sqlBranchId=${sqlBranchId}. Falling back to provided branch value.`);
-        finalBranchId = branch; // fall back to incoming value (string) to avoid hard failure
-      }
-    } else if (finalBranchId && /^[0-9a-fA-F]{24}$/.test(String(finalBranchId))) {
-      // Branch provided as Mongo ObjectId; use its name
-      const mongoBranch = await Branch.findById(finalBranchId).lean();
-      if (mongoBranch?.name) {
-        finalBranchName = mongoBranch.name.trim();
-      } else {
-        // If branch not found by ID, try to use the incoming value as string
-        finalBranchName = typeof branch === 'string' ? branch.trim() : '';
-        if (!finalBranchName) {
-          console.warn(`⚠️ Branch not found with ID: ${finalBranchId}, using empty string`);
-        }
-      }
-    } else if (typeof branch === 'string') {
-      // Branch is already a string - normalize and trim it
-      finalBranchName = branch.trim();
-    }
-    
     // If concession is set, track who requested it
     if (concessionAmount > 0 && req.admin) {
       concessionData.concessionRequestedBy = req.admin._id;
@@ -452,15 +362,10 @@ export const addStudent = async (req, res, next) => {
       password: generatedPassword,
       role: 'student',
       gender,
-      // Store course/branch as strings per schema (normalized and trimmed)
-      course: finalCourseName ? finalCourseName.trim() : '',
-      year,
-      branch: finalBranchName ? finalBranchName.trim() : '',
-      // Store College details
-      college: typeof college === 'string' ? JSON.parse(college) : college,
-      // Store SQL IDs for reference
+      // course / branch / year — read from SQL at display time (not stored)
       ...(sqlCourseId && { sqlCourseId }),
       ...(sqlBranchId && { sqlBranchId }),
+      college: typeof college === 'string' ? JSON.parse(college) : college,
       category: finalCategoryName,
       mealType,
       parentPermissionForOuting: parentPermissionForOuting !== undefined ? parentPermissionForOuting : true,
@@ -474,7 +379,7 @@ export const addStudent = async (req, res, next) => {
       motherPhone,
       localGuardianName,
       localGuardianPhone,
-      batch: normalizeBatchToYear(batch),
+      batch: normalizeBatchToYear(sqlAcademics?.batch || batch),
       academicYear,
       email: finalEmail,
       hostelId,
@@ -582,10 +487,12 @@ export const addStudent = async (req, res, next) => {
       console.log('📱 No student phone number provided, skipping SMS');
     }
 
+    const enrichedStudent = await enrichStudentAcademics(savedStudent);
+
     res.json({
       success: true,
       data: {
-        student: savedStudent,
+        student: enrichedStudent,
         generatedPassword,
         emailSent,
         emailError,
@@ -1389,42 +1296,56 @@ export const getStudents = async (req, res, next) => {
   try {
     const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel } = req.query;
     const query = { role: 'student' };
+    const academicFilters = { course, branch, year: year ? parseInt(year, 10) : undefined };
+    const hasAcademicFilter = !!(course || branch || year);
 
-    // Add filters if provided
-    if (course) query.course = course;
-    if (branch) query.branch = branch;
     if (gender) query.gender = gender;
     if (category) query.category = category;
     if (roomNumber) query.roomNumber = roomNumber;
     if (batch) query.batch = batch;
     if (academicYear) query.academicYear = academicYear;
-    if (year) query.year = parseInt(year); // Convert to number for proper filtering
     if (hostelStatus) query.hostelStatus = hostelStatus;
-    if (hostel) query.hostel = hostel; // Filter by hostel ObjectId
+    if (hostel) query.hostel = hostel;
 
-    // Add search functionality if search term is provided
     if (search) {
-      const searchRegex = new RegExp(search, 'i'); // 'i' for case-insensitive
+      const searchRegex = new RegExp(search, 'i');
       query.$or = [
         { name: searchRegex },
         { rollNumber: searchRegex }
       ];
     }
 
-    console.log('Query:', query); // Debug log
+    const populateOpts = [
+      { path: 'hostel', select: '_id name' },
+      { path: 'hostelCategory', select: '_id name' }
+    ];
 
-    // Note: After SQL migration, course and branch are stored as strings (names), not ObjectId references
-    // So we don't populate them - they're already strings
-    // However, we DO need to populate hostel and hostelCategory for fee structure matching
-    const students = await User.find(query)
-      .select('-password')
-      .populate('hostel', '_id name') // Populate hostel for fee structure matching
-      .populate('hostelCategory', '_id name') // Populate hostelCategory for fee structure matching
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+    let students;
+    let count;
 
-    const count = await User.countDocuments(query);
+    if (hasAcademicFilter) {
+      const allDocs = await User.find(query)
+        .select('-password')
+        .populate(populateOpts)
+        .sort({ createdAt: -1 })
+        .lean();
+      let enriched = await enrichStudentsAcademics(allDocs);
+      enriched = enriched.filter(s => matchesAcademicFilters(s, academicFilters));
+      count = enriched.length;
+      const pageNum = parseInt(page, 10);
+      const limitNum = parseInt(limit, 10);
+      students = enriched.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+    } else {
+      students = await User.find(query)
+        .select('-password')
+        .populate(populateOpts)
+        .sort({ createdAt: -1 })
+        .limit(limit * 1)
+        .skip((page - 1) * limit)
+        .lean();
+      students = await enrichStudentsAcademics(students);
+      count = await User.countDocuments(query);
+    }
 
     res.json({
       success: true,
@@ -1445,16 +1366,19 @@ export const getStudentById = async (req, res, next) => {
   try {
     const student = await User.findOne({ _id: req.params.id, role: 'student' })
       .select('-password')
-      .populate('course', 'name code')
-      .populate('branch', 'name code');
+      .populate('hostel', '_id name')
+      .populate('hostelCategory', '_id name')
+      .lean();
     
     if (!student) {
       throw createError(404, 'Student not found');
     }
 
+    const enriched = await enrichStudentAcademics(student);
+
     res.json({
       success: true,
-      data: student
+      data: enriched
     });
   } catch (error) {
     next(error);
@@ -1495,6 +1419,8 @@ export const updateStudent = async (req, res, next) => {
     if (!student) {
       throw createError(404, 'Student not found');
     }
+
+    const academicSnapshot = await enrichStudentAcademics(student);
 
     // Resolve hostel/category for room validation under new hierarchy
     const targetHostelId = hostel || student.hostel;
@@ -1661,9 +1587,7 @@ export const updateStudent = async (req, res, next) => {
     if (name) student.name = name;
     if (rollNumber) student.rollNumber = rollNumber;
     if (admissionNumber !== undefined) student.admissionNumber = admissionNumber ? admissionNumber.toUpperCase() : undefined;
-    if (course) student.course = course;
-    if (year) student.year = year;
-    if (branch) student.branch = branch;
+    // course, branch, year are managed in SQL — not updated in MongoDB
     if (gender) student.gender = gender;
     // Set category string from provided value or derived hostelCategory name
     if (category || targetCategoryName) student.category = category || targetCategoryName;
@@ -1727,9 +1651,9 @@ export const updateStudent = async (req, res, next) => {
             const FeeStructure = (await import('../models/FeeStructure.js')).default;
             const feeStructure = await FeeStructure.getFeeStructure(
               student.academicYear,
-              student.course,
-              student.branch,
-              student.year,
+              academicSnapshot.course,
+              academicSnapshot.branch,
+              academicSnapshot.year,
               student.category
             );
             if (feeStructure) {
@@ -1758,9 +1682,9 @@ export const updateStudent = async (req, res, next) => {
             const FeeStructure = (await import('../models/FeeStructure.js')).default;
             const feeStructure = await FeeStructure.getFeeStructure(
               student.academicYear,
-              student.course,
-              student.branch,
-              student.year,
+              academicSnapshot.course,
+              academicSnapshot.branch,
+              academicSnapshot.year,
               student.category
             );
             if (feeStructure) {
@@ -1776,32 +1700,22 @@ export const updateStudent = async (req, res, next) => {
       }
     }
 
-    // Graduation status auto-update on manual edit
-    let maxYear = 3; // Default
+    // Graduation status auto-update on manual edit (year/course from SQL)
+    let maxYear = 3;
     try {
-      const courseIdToCheck = course || student.course;
-      // Only attempt to find by ID if it's a valid MongoDB ObjectId
-      if (courseIdToCheck && /^[0-9a-fA-F]{24}$/.test(String(courseIdToCheck))) {
-        const courseDoc = await Course.findById(courseIdToCheck);
-        if (courseDoc && courseDoc.duration) {
-          maxYear = courseDoc.duration;
-        }
-      } else {
-        // Handle SQL course IDs or course names
-        const courseName = course || student.course;
-        maxYear = getCourseDuration(String(courseName));
-      }
+      const courseName = academicSnapshot.course;
+      maxYear = getCourseDuration(String(courseName));
     } catch (error) {
       console.error('Error fetching course for graduation status:', error);
-      // Fallback to old logic
-      const courseKey = Object.keys(COURSES).find(key => COURSES[key] === (course || student.course));
+      const courseKey = Object.keys(COURSES).find(key => COURSES[key] === academicSnapshot.course);
       maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
     }
-    
+
     const batchEndYear = getBatchEndYear(student.batch, maxYear);
     const academicEndYear = getEndYear(student.academicYear);
+    const effectiveYear = academicSnapshot.year || student.year;
     if (
-      student.year >= maxYear &&
+      effectiveYear >= maxYear &&
       batchEndYear &&
       academicEndYear &&
       batchEndYear === academicEndYear
@@ -1821,9 +1735,9 @@ export const updateStudent = async (req, res, next) => {
           name: student.name,
           rollNumber: student.rollNumber,
           gender: student.gender,
-          course: student.course,
-          year: student.year,
-          branch: student.branch,
+          course: academicSnapshot.course,
+          year: academicSnapshot.year,
+          branch: academicSnapshot.branch,
           category: student.category,
           mealType: student.mealType,
           parentPermissionForOuting: student.parentPermissionForOuting,
@@ -2002,16 +1916,12 @@ export const getCourseCounts = async (req, res, next) => {
     if (academicYear) query.academicYear = academicYear;
     if (hostelStatus) query.hostelStatus = hostelStatus;
 
-    const [courses, students] = await Promise.all([
-      getCoursesFromSQL(),
-      User.find(query).select('course')
-    ]);
-
-    const courseLookup = buildCourseNameLookup(courses);
+    const students = await User.find(query).select('rollNumber admissionNumber').lean();
+    const enriched = await enrichStudentsAcademics(students);
     const countsObject = {};
 
-    for (const student of students) {
-      const courseName = resolveStudentCourseName(student.course, courseLookup);
+    for (const student of enriched) {
+      const courseName = student.course || 'Unknown';
       countsObject[courseName] = (countsObject[courseName] || 0) + 1;
     }
 
@@ -2616,7 +2526,7 @@ export const searchStudentByRollNumber = async (req, res, next) => {
     }
 
     // Prepare student data based on settings
-    const studentObj = student.toObject();
+    let studentObj = await enrichStudentAcademics(student);
     if (!settings.viewProfilePictures) {
       studentObj.studentPhoto = undefined;
     }
@@ -2831,56 +2741,34 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
       );
     }
 
-    // Fetch all students matching the base query (we'll filter by course in memory)
     const allStudents = await User.find(baseQuery)
       .sort({ createdAt: -1 })
-      .select('-password');
+      .select('-password')
+      .lean();
 
-    // Filter students by course (resolving SQL IDs if needed)
-    const filteredStudents = [];
-    for (const student of allStudents) {
-      // Resolve student's course (might be SQL ID)
-      const studentCourseName = await resolveCourseName(student.course);
-      const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
-      
-      // Check if course matches any of the target courses
-      if (targetCourses.includes(normalizedStudentCourse)) {
-        // Also check branch if principal has a specific branch assigned (legacy single course behavior)
-        if (principal.assignedCourses && principal.assignedCourses.length > 1) {
-             // If multiple courses assigned, principal sees all branches for those courses
-             filteredStudents.push(student);
-        } else if (principal.branch) {
-          const principalBranch = principal.branch.trim();
-          const studentBranch = student.branch || '';
-          // Simple branch matching (can be enhanced to resolve SQL branch IDs if needed)
-          if (studentBranch.trim() === principalBranch || 
-              studentBranch.trim().toLowerCase() === principalBranch.toLowerCase()) {
-            filteredStudents.push(student);
-          }
-        } else {
-          filteredStudents.push(student);
-        }
+    let enrichedStudents = await enrichStudentsAcademics(allStudents);
+
+    const filteredStudents = enrichedStudents.filter((student) => {
+      const normalizedStudentCourse = student.course
+        ? normalizeCourseName(student.course.trim())
+        : null;
+      if (!targetCourses.includes(normalizedStudentCourse)) return false;
+
+      if (principal.assignedCourses && principal.assignedCourses.length > 1) {
+        return true;
       }
-    }
+      if (principal.branch) {
+        const principalBranch = principal.branch.trim();
+        const studentBranch = (student.branch || '').trim();
+        return studentBranch.toLowerCase() === principalBranch.toLowerCase();
+      }
+      return true;
+    });
 
-    // Apply pagination to filtered results
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
     const totalStudents = filteredStudents.length;
-    const totalPages = Math.ceil(totalStudents / parseInt(limit));
-    const paginatedStudents = filteredStudents.slice(skip, skip + parseInt(limit));
-
-    // Transform students to resolve course names (replace SQL IDs with actual course names)
-    const transformedStudents = await Promise.all(
-      paginatedStudents.map(async (student) => {
-        const studentObj = student.toObject ? student.toObject() : student;
-        // Resolve course name if it's a SQL ID
-        const resolvedCourseName = await resolveCourseName(studentObj.course);
-        return {
-          ...studentObj,
-          course: resolvedCourseName || studentObj.course
-        };
-      })
-    );
+    const totalPages = Math.ceil(totalStudents / parseInt(limit, 10));
+    const transformedStudents = filteredStudents.slice(skip, skip + parseInt(limit, 10));
 
     res.json({
       success: true,

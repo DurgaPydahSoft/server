@@ -21,10 +21,39 @@ import {
   getAllowedCourseNames 
 } from '../utils/adminUtils.js';
 import { getCoursesFromSQL } from '../utils/courseBranchMapper.js';
+import { enrichStudentAcademics, enrichStudentsAcademics } from '../utils/studentAcademicEnricher.js';
+
+const STUDENT_POPULATE_SELECT =
+  'name rollNumber admissionNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto';
+
+const isSqlStyleId = (value) => {
+  if (!value || typeof value !== 'string') return false;
+  return value.startsWith('sql_') || /^\d+$/.test(value);
+};
+
+const resolveDisplayCourseBranch = async (enriched) => {
+  let courseName = enriched?.course;
+  let branchName = enriched?.branch;
+
+  if (courseName && typeof courseName === 'object' && courseName.name) {
+    courseName = courseName.name;
+  }
+  if (branchName && typeof branchName === 'object' && branchName.name) {
+    branchName = branchName.name;
+  }
+
+  if (isSqlStyleId(courseName)) {
+    courseName = (await resolveCourseName(courseName)) || courseName;
+  }
+  if (isSqlStyleId(branchName)) {
+    branchName = (await resolveBranchName(branchName)) || branchName;
+  }
+
+  return { courseName: courseName || '', branchName: branchName || '' };
+};
 
 /**
- * Helper to resolve student course and branch names from SQL IDs if needed.
- * Works with a single leave object or an array of leaves.
+ * Overlay course / branch / year from SQL on leave student payloads.
  */
 const resolveStudentMetadata = async (leaves) => {
   if (!leaves) return leaves;
@@ -32,31 +61,113 @@ const resolveStudentMetadata = async (leaves) => {
   const items = isArray ? leaves : [leaves];
 
   const resolvedItems = await Promise.all(items.map(async (item) => {
-    // Check if item is a Mongoose document or a plain object
     const itemObj = (item && typeof item.toObject === 'function') ? item.toObject() : item;
-    
-    if (itemObj && itemObj.student) {
-      if (itemObj.student.course) {
-        const resolvedName = await resolveCourseName(itemObj.student.course);
-        itemObj.student.course = {
-          name: resolvedName,
-          _id: itemObj.student.course, // Keep original for reference
-          id: itemObj.student.course
-        };
-      }
-      if (itemObj.student.branch) {
-        const resolvedName = await resolveBranchName(itemObj.student.branch);
-        itemObj.student.branch = {
-          name: resolvedName,
-          _id: itemObj.student.branch,
-          id: itemObj.student.branch
-        };
-      }
+
+    if (itemObj?.student) {
+      const enriched = await enrichStudentAcademics(itemObj.student);
+      const { courseName, branchName } = await resolveDisplayCourseBranch(enriched);
+      itemObj.student = {
+        ...enriched,
+        course: courseName
+          ? { name: courseName, _id: enriched.courseId || courseName, id: enriched.courseId || courseName }
+          : courseName,
+        branch: branchName
+          ? { name: branchName, _id: enriched.branchId || branchName, id: enriched.branchId || branchName }
+          : branchName,
+        year: enriched.year
+      };
     }
     return itemObj;
   }));
 
   return isArray ? resolvedItems : resolvedItems[0];
+};
+
+const studentMatchesPrincipalScope = (enrichedStudent, normalizedAllowedCourses, principal) => {
+  const normalizedStudentCourse = enrichedStudent?.course
+    ? normalizeCourseName(enrichedStudent.course.toString().trim())
+    : null;
+
+  if (!normalizedStudentCourse || !normalizedAllowedCourses.includes(normalizedStudentCourse)) {
+    return false;
+  }
+
+  if (principal?.branch) {
+    const studentBranch = (enrichedStudent.branch || '').toString().trim();
+    const principalBranch = principal.branch.trim();
+    return studentBranch.toLowerCase() === principalBranch.toLowerCase();
+  }
+
+  return true;
+};
+
+/**
+ * Resolve student IDs in the principal's scope using SQL-enriched academics.
+ */
+const getPrincipalScopedStudentIds = async (principal, candidateStudentIds) => {
+  if (!candidateStudentIds?.length) return [];
+
+  const allowedCourseNames = await getAllowedCourseNames(principal);
+  const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
+  if (normalizedAllowedCourses.length === 0) return [];
+
+  const students = await User.find({ _id: { $in: candidateStudentIds }, role: 'student' })
+    .select('rollNumber admissionNumber course branch')
+    .lean();
+
+  const enriched = await enrichStudentsAcademics(students);
+  return enriched
+    .filter(s => studentMatchesPrincipalScope(s, normalizedAllowedCourses, principal))
+    .map(s => s._id);
+};
+
+const assertPrincipalCanAccessStudent = async (principal, student, errorMessage) => {
+  let studentDoc = student;
+  if (student?._id && !student.rollNumber && !student.admissionNumber) {
+    studentDoc = await User.findById(student._id)
+      .select('rollNumber admissionNumber course branch')
+      .lean();
+  }
+
+  const enriched = await enrichStudentAcademics(studentDoc);
+  const allowedCourseNames = await getAllowedCourseNames(principal);
+  const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
+
+  if (!studentMatchesPrincipalScope(enriched, normalizedAllowedCourses, principal)) {
+    throw createError(403, errorMessage);
+  }
+
+  return enriched;
+};
+
+/**
+ * Find active principals whose college/level (or legacy) scope covers this student.
+ */
+const findPrincipalsForStudent = async (student) => {
+  let studentDoc = student;
+  if (student?._id && !student.rollNumber && !student.admissionNumber) {
+    studentDoc = await User.findById(student._id)
+      .select('rollNumber admissionNumber course branch')
+      .lean();
+  }
+
+  const enriched = await enrichStudentAcademics(studentDoc);
+  const studentCourseNorm = enriched?.course
+    ? normalizeCourseName(enriched.course.toString().trim())
+    : null;
+  if (!studentCourseNorm) return [];
+
+  const allPrincipals = await Admin.find({ role: 'principal', isActive: true });
+  const matched = [];
+
+  for (const principal of allPrincipals) {
+    const allowed = (await getAllowedCourseNames(principal)).map(c => normalizeCourseName(c));
+    if (studentMatchesPrincipalScope(enriched, allowed, principal)) {
+      matched.push(principal);
+    }
+  }
+
+  return matched;
 };
 
 // Generate OTP (4 digits)
@@ -488,17 +599,15 @@ export const getStudentLeaveRequests = async (req, res, next) => {
     // Auto-delete expired leaves before fetching
     await autoDeleteExpiredLeaves();
     
-    const leaves = await Leave.find({ student: studentId })
+    const leavesData = await Leave.find({ student: studentId })
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: STUDENT_POPULATE_SELECT
       })
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 });
+
+    const leaves = await resolveStudentMetadata(leavesData);
 
     res.json({
       success: true,
@@ -598,21 +707,19 @@ export const getAllLeaveRequests = async (req, res, next) => {
 
     console.log('MongoDB query:', query);
 
-    const leaves = await Leave.find(query)
+    const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: STUDENT_POPULATE_SELECT
       })
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
-    console.log('Found leaves:', leaves);
+    const leaves = await resolveStudentMetadata(leavesData);
+
+    console.log('Found leaves:', leaves.length);
 
     const count = await Leave.countDocuments(query);
     console.log('Total count:', count);
@@ -652,36 +759,42 @@ export const verifyOTPAndApprove = async (req, res, next) => {
       throw createError(404, 'Leave request not found');
     }
 
-    // Check course permissions for sub-admin
+    // Check course permissions for sub-admin (course from SQL when available)
     if (req.admin.role === 'sub_admin' && req.admin.permissions && req.admin.permissions.includes('leave_management')) {
-      const studentCourse = leave.student.course.name || leave.student.course; // Handle populated or string
+      const enrichedStudent = await enrichStudentAcademics(leave.student);
+      const studentCourse = enrichedStudent.course || leave.student.course?.name || leave.student.course;
       const { assignedCourses, assignedCollegeId, assignedLevels } = req.admin;
       let hasPermission = false;
 
-      // 1. Check Legacy/Direct Assignment
-      if (assignedCourses && assignedCourses.includes(studentCourse)) {
-        hasPermission = true;
-      }
+      if (studentCourse) {
+        const normalizedStudentCourse = normalizeCourseName(studentCourse.toString().trim());
 
-      // 2. Check College & Level Assignment
-      if (!hasPermission && assignedCollegeId && assignedLevels) {
-        try {
-           const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
-           const allSQLCourses = await getCoursesFromSQL();
-           
-           // Find the details of the student's course
-           const studentCourseDetails = allSQLCourses.find(c => c.name === studentCourse);
-           
-           if (studentCourseDetails) {
-             const isCollegeMatch = studentCourseDetails.college && studentCourseDetails.college.id === assignedCollegeId;
-             const isLevelMatch = studentCourseDetails.level && assignedLevels.map(l => l.toLowerCase()).includes(studentCourseDetails.level.toLowerCase());
-             
-             if (isCollegeMatch && isLevelMatch) {
-               hasPermission = true;
-             }
-           }
-        } catch (err) {
-          console.error("Error validating permission for college/level:", err);
+        if (assignedCourses?.length) {
+          hasPermission = assignedCourses.some(
+            c => normalizeCourseName(c.trim()) === normalizedStudentCourse
+          );
+        }
+
+        if (!hasPermission && assignedCollegeId && assignedLevels) {
+          try {
+            const allSQLCourses = await getCoursesFromSQL();
+            const studentCourseDetails = allSQLCourses.find(
+              c => normalizeCourseName(c.name) === normalizedStudentCourse
+            );
+
+            if (studentCourseDetails) {
+              const isCollegeMatch = studentCourseDetails.college
+                && Number(studentCourseDetails.college.id) === Number(assignedCollegeId);
+              const isLevelMatch = studentCourseDetails.level
+                && assignedLevels.map(l => l.toLowerCase()).includes(studentCourseDetails.level.toLowerCase());
+
+              if (isCollegeMatch && isLevelMatch) {
+                hasPermission = true;
+              }
+            }
+          } catch (err) {
+            console.error('Error validating permission for college/level:', err);
+          }
         }
       }
 
@@ -706,19 +819,14 @@ export const verifyOTPAndApprove = async (req, res, next) => {
       leave.verifiedAt = new Date();
       await leave.save();
 
-      // Notify principals assigned to the student's course
-      const studentCourseId = leave.student.course._id || leave.student.course;
-      const principals = await Admin.find({ 
-        role: 'principal',
-        course: studentCourseId,
-        isActive: true
-      });
-      
+      // Notify principals whose scope covers this student (SQL-enriched course)
+      const principals = await findPrincipalsForStudent(leave.student);
+
       const admin = await Admin.findById(adminId);
       const notificationTitle = 'Leave Request Ready for Approval';
       const notificationMessage = `${leave.student?.name || 'A student'}'s ${leave.applicationType} request has been verified by admin and is ready for your approval`;
-      
-      console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseId}`);
+
+      console.log(`🔔 Notifying ${principals.length} principals for student leave request`);
       
       for (const principal of principals) {
         // Send in-app notification
@@ -1361,23 +1469,21 @@ export const getLeaveById = async (req, res, next) => {
     
     const leave = await Leave.findById(id).populate({
       path: 'student',
-      select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-      populate: [
-        { path: 'course', select: 'name code' },
-        { path: 'branch', select: 'name code' }
-      ]
+      select: STUDENT_POPULATE_SELECT
     });
     console.log('🔍 Leave found:', leave ? 'Yes' : 'No');
     
     if (!leave) {
       return res.status(404).json({ success: false, message: 'Leave not found' });
     }
+
+    const resolvedLeave = await resolveStudentMetadata(leave);
     
     // Add visit information to response
     const response = {
       success: true,
       data: {
-        ...leave.toObject(),
+        ...resolvedLeave,
         visitCount: leave.visits.length,
         outgoingVisitCount: leave.visits.filter(v => v.visitType === 'outgoing').length,
         incomingVisitCount: leave.visits.filter(v => v.visitType === 'incoming').length,
@@ -1430,17 +1536,18 @@ export const getApprovedLeaves = async (req, res, next) => {
 
     // Include both 'Approved' and 'Warden Verified' statuses
     // Note: course and branch are now stored as strings, not ObjectId references
-    const leaves = await Leave.find(query)
+    const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
-        // Removed populate for course and branch - they are now strings
+        select: STUDENT_POPULATE_SELECT
       })
       .populate('approvedBy', 'name')
-      .populate('verifiedBy', 'name') // Populate warden who verified
+      .populate('verifiedBy', 'name')
       .sort({ verifiedAt: -1, approvedAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
+
+    const leaves = await resolveStudentMetadata(leavesData);
 
     const count = await Leave.countDocuments(query);
 
@@ -1573,9 +1680,7 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       legacyCourse: principal.course
     });
 
-    // 1. Get all allowed courses for this principal
     const allowedCourseNames = await getAllowedCourseNames(principal);
-    const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
 
     if (allowedCourseNames.length === 0) {
       return res.json({
@@ -1589,48 +1694,9 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       });
     }
 
-    // Optimization: Find students in these courses first
-    // Account for course names, normalized names, and SQL IDs
-    const allSQLCoursesData = await getCoursesFromSQL();
-    const allSQLCourses = Array.isArray(allSQLCoursesData) ? allSQLCoursesData : (allSQLCoursesData.data || []);
-    
-    const matchedSQLIds = allSQLCourses
-      .filter(c => normalizedAllowedCourses.includes(normalizeCourseName(c.name)))
-      .map(c => c.sqlId)
-      .filter(id => id);
-    
-    const studentCourseFilter = [...new Set([
-      ...allowedCourseNames, 
-      ...normalizedAllowedCourses, 
-      ...matchedSQLIds,
-      ...matchedSQLIds.map(id => id.toString()),
-      ...matchedSQLIds.map(id => `sql_${id}`)
-    ])];
-
-    console.log(`🎓 [StayInHostel] Resolved filter for principal ${req.principal._id}:`, {
-      allowedCourseNames,
-      studentCourseFilterLength: studentCourseFilter.length
-    });
-
-    // 2. Get students who belong to these courses
-    const studentQuery = { 
-      course: { $in: studentCourseFilter },
-      role: 'student'
-    };
-
-    // Add branch filter if principal has a specific branch assigned
-    if (principal.branch) {
-      studentQuery.branch = principal.branch;
-    }
-    const studentsInCourse = await User.find(studentQuery).select('_id');
-
-    const studentIds = studentsInCourse.map(s => s._id);
-    console.log(`🎓 Found ${studentIds.length} students in principal's assigned courses`);
-
-    // Build query to filter by students
-    const query = { 
-      applicationType: 'Stay in Hostel',
-      student: { $in: studentIds }
+    // Build base query first, then scope students via SQL-enriched academics
+    const query = {
+      applicationType: 'Stay in Hostel'
     };
 
     if (status) {
@@ -1651,10 +1717,29 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
       if (toDate) query.stayDate.$lte = getISTEndOfDay(toDate);
     }
 
+    const candidateStudentIds = await Leave.distinct('student', query);
+    const studentIds = await getPrincipalScopedStudentIds(principal, candidateStudentIds);
+
+    console.log(`🎓 [StayInHostel] Scoped ${studentIds.length}/${candidateStudentIds.length} students for principal ${req.principal._id}`);
+
+    if (studentIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          leaves: [],
+          totalPages: 0,
+          currentPage: page,
+          totalRequests: 0
+        }
+      });
+    }
+
+    query.student = { $in: studentIds };
+
     const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
+        select: STUDENT_POPULATE_SELECT
       })
       .populate('recommendedBy', 'name')
       .populate('decidedBy', 'name')
@@ -1666,7 +1751,7 @@ export const getStayInHostelRequestsForPrincipal = async (req, res, next) => {
 
     const count = await Leave.countDocuments(query);
 
-    console.log(`🎓 Found ${leaves.length} stay in hostel requests for principal's course`);
+    console.log(`🎓 Found ${leaves.length} stay in hostel requests for principal's scope`);
 
     res.json({
       success: true,
@@ -1791,21 +1876,19 @@ export const getWardenLeaveRequests = async (req, res, next) => {
 
     console.log('MongoDB query:', query);
 
-    const leaves = await Leave.find(query)
+    const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto',
-        populate: [
-          { path: 'course', select: 'name code' },
-          { path: 'branch', select: 'name code' }
-        ]
+        select: STUDENT_POPULATE_SELECT
       })
       .populate('approvedBy', 'name')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
 
-    console.log('Found leaves:', leaves);
+    const leaves = await resolveStudentMetadata(leavesData);
+
+    console.log('Found leaves:', leaves.length);
 
     const count = await Leave.countDocuments(query);
     console.log('Total count:', count);
@@ -1866,20 +1949,14 @@ export const wardenVerifyOTP = async (req, res, next) => {
     console.log('Warden verified OTP. Updated leave status to:', leave.status);
     console.log('Leave ID:', leave._id);
 
-    // Notify principals assigned to the student's course
-    // After SQL migration: course is stored as string (course name), not ObjectId
-    const studentCourseName = leave.student.course?.name || leave.student.course;
-    const principals = await Admin.find({ 
-      role: 'principal',
-      course: studentCourseName, // Now using course name (string) instead of ObjectId
-      isActive: true
-    });
-    
+    // Notify principals whose scope covers this student (SQL-enriched course)
+    const principals = await findPrincipalsForStudent(leave.student);
+
     const warden = await Admin.findById(wardenId);
     const notificationTitle = 'Leave Request Ready for Approval';
     const notificationMessage = `${leave.student?.name || 'A student'}'s ${leave.applicationType} request has been verified by warden and is ready for your approval`;
-    
-    console.log(`🔔 Notifying ${principals.length} principals for course: ${studentCourseName}`);
+
+    console.log(`🔔 Notifying ${principals.length} principals for student leave request`);
     
     for (const principal of principals) {
       // Send in-app notification
@@ -2029,42 +2106,7 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       });
     }
     
-    // Optimization: Find students in these courses first
-    // We need to account for course names, normalized names, and SQL IDs
-    const allSQLCourses = await getCoursesFromSQL();
-    const matchedSQLIds = allSQLCourses
-      .filter(c => normalizedAllowedCourses.includes(normalizeCourseName(c.name)))
-      .map(c => c.sqlId)
-      .filter(id => id);
-    
-    const studentCourseFilter = [...new Set([
-      ...allowedCourseNames, 
-      ...normalizedAllowedCourses, 
-      ...matchedSQLIds,
-      ...matchedSQLIds.map(id => id.toString()),
-      ...matchedSQLIds.map(id => `sql_${id}`)
-    ])];
-
-    console.log(`🎓 [GeneralLeave] Resolved filter for principal ${req.principal._id}:`, {
-      allowedCourseNames,
-      studentCourseFilterLength: studentCourseFilter.length
-    });
-    
-    const studentQuery = {
-      course: { $in: studentCourseFilter }
-    };
-
-    // Add branch filter if principal is restricted to a specific branch
-    if (principal.branch) {
-      studentQuery.branch = principal.branch;
-    }
-
-    const students = await User.find(studentQuery).select('_id');
-    const studentIds = students.map(s => s._id);
-
-    const query = {
-      student: { $in: studentIds }
-    };
+    const query = {};
 
     // Build applicationType filter
     if (applicationType) {
@@ -2113,10 +2155,29 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
       query.$and.push(dateSubQuery);
     }
 
+    const candidateStudentIds = await Leave.distinct('student', query);
+    const studentIds = await getPrincipalScopedStudentIds(principal, candidateStudentIds);
+
+    console.log(`🎓 [GeneralLeave] Scoped ${studentIds.length}/${candidateStudentIds.length} students for principal ${req.principal._id}`);
+
+    if (studentIds.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          leaves: [],
+          totalPages: 0,
+          currentPage: page,
+          totalRequests: 0
+        }
+      });
+    }
+
+    query.student = { $in: studentIds };
+
     const leavesData = await Leave.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender studentPhone parentPhone email hostelId category batch academicYear hostelStatus graduationStatus studentPhoto'
+        select: STUDENT_POPULATE_SELECT
       })
       .populate('approvedBy', 'name')
       .populate('verifiedBy', 'name')
@@ -2177,32 +2238,11 @@ export const principalApproveLeave = async (req, res, next) => {
       principalCourse: principal.course
     });
 
-    // Check if principal is assigned to the student's course
-    const allowedCourseNames = await getAllowedCourseNames(principal);
-    const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
-
-    const rawStudentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
-    const studentCourseName = await resolveCourseName(rawStudentCourse);
-    const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
-    
-    console.log('🔍 Course comparison:', {
-      studentCourseName,
-      normalizedStudentCourse,
-      allowedCourses: normalizedAllowedCourses,
-      matches: normalizedStudentCourse && normalizedAllowedCourses.includes(normalizedStudentCourse)
-    });
-    
-    if (!normalizedStudentCourse || !normalizedAllowedCourses.includes(normalizedStudentCourse)) {
-      throw createError(403, 'You are not authorized to approve leave requests for this student\'s course');
-    }
-    
-    // Also check branch if principal has a specific branch assigned
-    if (principal.branch) {
-      const studentBranch = typeof leave.student.branch === 'object' ? leave.student.branch.name : leave.student.branch;
-      if (studentBranch !== principal.branch) {
-        throw createError(403, 'You are not authorized to approve leave requests for this student\'s branch');
-      }
-    }
+    await assertPrincipalCanAccessStudent(
+      principal,
+      leave.student,
+      'You are not authorized to approve leave requests for this student\'s course'
+    );
 
     if (leave.applicationType === 'Stay in Hostel') {
       throw createError(400, 'Stay in Hostel requests have a different workflow');
@@ -2285,35 +2325,11 @@ export const principalRejectLeave = async (req, res, next) => {
       throw createError(404, 'Leave request not found');
     }
 
-    // Check if principal is assigned to the student's course
-    const allowedCourseNames = await getAllowedCourseNames(principal);
-    const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
-
-    const rawStudentCourse = typeof leave.student.course === 'object' ? leave.student.course.name : leave.student.course;
-    const studentCourseName = await resolveCourseName(rawStudentCourse);
-    const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
-    
-    console.log('🔍 Course comparison in reject:', {
-      studentCourseName,
-      normalizedStudentCourse,
-      allowedCourses: normalizedAllowedCourses,
-      matches: normalizedStudentCourse && normalizedAllowedCourses.includes(normalizedStudentCourse)
-    });
-    
-    if (!normalizedStudentCourse || !normalizedAllowedCourses.includes(normalizedStudentCourse)) {
-      throw createError(403, 'You are not authorized to reject leave requests for this student\'s course');
-    }
-    
-    // Also check branch if principal has a specific branch assigned
-    if (principal.branch) {
-      const studentBranch = typeof leave.student.branch === 'object' ? leave.student.branch.name : leave.student.branch;
-      const normalizedStudentBranch = studentBranch ? studentBranch.trim() : null;
-      const normalizedPrincipalBranch = principal.branch?.trim();
-      
-      if (normalizedStudentBranch !== normalizedPrincipalBranch) {
-        throw createError(403, 'You are not authorized to reject leave requests for this student\'s branch');
-      }
-    }
+    await assertPrincipalCanAccessStudent(
+      principal,
+      leave.student,
+      'You are not authorized to reject leave requests for this student\'s course'
+    );
 
     if (leave.applicationType === 'Stay in Hostel') {
       throw createError(400, 'Stay in Hostel requests have a different workflow');
@@ -2400,35 +2416,11 @@ export const principalDecision = async (req, res, next) => {
       throw createError(400, 'Invalid request type');
     }
 
-    // Verify the student belongs to the principal's course
-    const allowedCourseNames = await getAllowedCourseNames(principal);
-    const normalizedAllowedCourses = allowedCourseNames.map(c => normalizeCourseName(c));
-
-    const rawStudentCourse = typeof request.student?.course === 'object' ? request.student.course.name : request.student?.course;
-    const studentCourseName = await resolveCourseName(rawStudentCourse);
-    const normalizedStudentCourse = studentCourseName ? normalizeCourseName(studentCourseName.trim()) : null;
-    
-    console.log('🔍 Course comparison in principalDecision:', {
-      studentCourseName,
-      normalizedStudentCourse,
-      allowedCourses: normalizedAllowedCourses,
-      matches: normalizedStudentCourse && normalizedAllowedCourses.includes(normalizedStudentCourse)
-    });
-    
-    if (!normalizedStudentCourse || !normalizedAllowedCourses.includes(normalizedStudentCourse)) {
-      throw createError(403, 'You can only make decisions for students in your assigned course(s)');
-    }
-    
-    // Also check branch if principal has a specific branch assigned
-    if (principal.branch) {
-      const studentBranch = typeof request.student?.branch === 'object' ? request.student.branch.name : request.student?.branch;
-      const normalizedStudentBranch = studentBranch ? studentBranch.trim() : null;
-      const normalizedPrincipalBranch = principal.branch?.trim();
-      
-      if (normalizedStudentBranch !== normalizedPrincipalBranch) {
-        throw createError(403, 'You can only make decisions for students in your assigned branch');
-      }
-    }
+    await assertPrincipalCanAccessStudent(
+      principal,
+      request.student,
+      'You can only make decisions for students in your assigned course(s)'
+    );
 
     // Verify the request is in a status that allows principal decision
     // Accept: Pending, Warden Recommended, Rejected (for re-review)
