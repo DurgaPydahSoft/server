@@ -21,6 +21,31 @@ import axios from 'axios';
 import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
 import { extractSQLIds, ensureMongoDBCourse, ensureMongoDBBranch } from '../utils/courseBranchResolver.js';
 import { normalizeBatchToYear, getBatchEndYear } from '../utils/batchUtils.js';
+import { getCoursesFromSQL } from '../utils/courseBranchMapper.js';
+
+const buildCourseNameLookup = (courses) => {
+  const lookup = new Map();
+  for (const course of courses) {
+    lookup.set(course._id, course.name);
+    lookup.set(course.name, course.name);
+    lookup.set(String(course.name).trim().toUpperCase(), course.name);
+    if (course.sqlId != null) {
+      lookup.set(`sql_${course.sqlId}`, course.name);
+    }
+  }
+  return lookup;
+};
+
+const resolveStudentCourseName = (courseValue, courseLookup) => {
+  if (!courseValue) return 'Unknown';
+  const raw = typeof courseValue === 'object' && courseValue?.name
+    ? courseValue.name
+    : String(courseValue).trim();
+  if (!raw) return 'Unknown';
+  return courseLookup.get(raw)
+    || courseLookup.get(raw.toUpperCase())
+    || raw;
+};
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -1961,17 +1986,13 @@ export const getStudentsCount = async (req, res, next) => {
   }
 };
 
-// Get course counts for admin dashboard
+// Get course counts for admin dashboard (resolves sql_* and course name strings)
 export const getCourseCounts = async (req, res, next) => {
   try {
     const { course, branch, gender, category, roomNumber, batch, academicYear, hostelStatus } = req.query;
-    
-    // Build query for students
-    const query = { 
-      role: 'student'
-    };
 
-    // Add filters if provided
+    const query = { role: 'student' };
+
     if (course) query.course = course;
     if (branch) query.branch = branch;
     if (gender) query.gender = gender;
@@ -1981,38 +2002,18 @@ export const getCourseCounts = async (req, res, next) => {
     if (academicYear) query.academicYear = academicYear;
     if (hostelStatus) query.hostelStatus = hostelStatus;
 
-    // Aggregate to get counts by course
-    const courseCounts = await User.aggregate([
-      { $match: query },
-      {
-        $lookup: {
-          from: 'courses',
-          localField: 'course',
-          foreignField: '_id',
-          as: 'courseData'
-        }
-      },
-      {
-        $group: {
-          _id: '$course',
-          count: { $sum: 1 },
-          courseName: { $first: { $arrayElemAt: ['$courseData.name', 0] } }
-        }
-      },
-      {
-        $project: {
-          courseName: 1,
-          count: 1
-        }
-      }
+    const [courses, students] = await Promise.all([
+      getCoursesFromSQL(),
+      User.find(query).select('course')
     ]);
 
-    // Convert to object format
+    const courseLookup = buildCourseNameLookup(courses);
     const countsObject = {};
-    courseCounts.forEach(item => {
-      const courseName = item.courseName || 'Unknown Course';
-      countsObject[courseName] = item.count;
-    });
+
+    for (const student of students) {
+      const courseName = resolveStudentCourseName(student.course, courseLookup);
+      countsObject[courseName] = (countsObject[courseName] || 0) + 1;
+    }
 
     res.status(200).json({
       success: true,
