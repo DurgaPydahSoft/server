@@ -20,6 +20,7 @@ import Counter from '../models/Counter.js';
 import axios from 'axios';
 import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
 import { extractSQLIds, ensureMongoDBCourse, ensureMongoDBBranch } from '../utils/courseBranchResolver.js';
+import { normalizeBatchToYear, getBatchEndYear } from '../utils/batchUtils.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -448,7 +449,7 @@ export const addStudent = async (req, res, next) => {
       motherPhone,
       localGuardianName,
       localGuardianPhone,
-      batch,
+      batch: normalizeBatchToYear(batch),
       academicYear,
       email: finalEmail,
       hostelId,
@@ -1218,50 +1219,42 @@ export const bulkAddStudents = async (req, res, next) => {
         continue;
       }
 
-        // Calculate year based on batch and current date, or use provided year if available
-        let yearValue;
-        if (Year) {
-          yearValue = parseInt(Year, 10);
-          if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
-            results.failureCount++;
-            results.errors.push({ 
-              error: `Invalid year "${Year}". Must be a number between 1 and 10.`, 
-              details: studentData 
-            });
-            continue;
-          }
-        } else {
-          // Calculate year based on batch and current date
-          const courseDuration = courseDoc.duration || 4;
-          yearValue = await calculateCurrentYear(finalBatch, courseDuration, courseDoc._id);
-          console.log(`Calculated year for batch ${finalBatch}: ${yearValue} (course duration: ${courseDuration})`);
-        }
+      // Store batch as admission start year (YYYY), matching SQL
+      const finalBatch = normalizeBatchToYear(Batch);
+      if (!finalBatch || !/^\d{4}$/.test(finalBatch)) {
+        results.failureCount++;
+        results.errors.push({
+          error: `Invalid batch "${Batch}". Use YYYY (e.g., 2024).`,
+          details: studentData
+        });
+        continue;
+      }
+      const batchStartYear = parseInt(finalBatch, 10);
+      if (batchStartYear < 2000 || batchStartYear > 2100) {
+        results.failureCount++;
+        results.errors.push({
+          error: `Invalid batch year "${finalBatch}". Must be between 2000-2100.`,
+          details: studentData
+        });
+        continue;
+      }
 
-      // Handle batch - if only starting year is provided, calculate end year based on course duration
-      let finalBatch = String(Batch).trim();
-      if (finalBatch && !finalBatch.includes('-')) {
-        // Only starting year provided, calculate end year
-        const startYear = parseInt(finalBatch, 10);
-        if (isNaN(startYear) || startYear < 2000 || startYear > 2100) {
+      // Calculate year based on batch and current date, or use provided year if available
+      let yearValue;
+      if (Year) {
+        yearValue = parseInt(Year, 10);
+        if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
           results.failureCount++;
-          results.errors.push({ 
-            error: `Invalid batch starting year "${finalBatch}". Must be a valid year between 2000-2100.`, 
-            details: studentData 
+          results.errors.push({
+            error: `Invalid year "${Year}". Must be a number between 1 and 10.`,
+            details: studentData
           });
           continue;
         }
-        
-        const courseDuration = courseDoc.duration || 4; // Default to 4 years
-        const endYear = startYear + courseDuration;
-        finalBatch = `${startYear}-${endYear}`;
-        console.log(`Auto-generated batch: ${startYear} → ${finalBatch} (${courseDuration} years)`);
-      } else if (finalBatch && !/^\d{4}-\d{4}$/.test(finalBatch)) {
-        results.failureCount++;
-        results.errors.push({ 
-          error: `Invalid batch format "${finalBatch}". Use YYYY-YYYY or just YYYY.`, 
-          details: studentData 
-        });
-        continue;
+      } else {
+        const courseDuration = courseDoc.duration || 4;
+        yearValue = await calculateCurrentYear(finalBatch, courseDuration, courseDoc._id);
+        console.log(`Calculated year for batch ${finalBatch}: ${yearValue} (course duration: ${courseDuration})`);
       }
 
       const newStudent = new User({
@@ -1667,7 +1660,7 @@ export const updateStudent = async (req, res, next) => {
     if (lockerNumber !== undefined) student.lockerNumber = lockerNumber;
     if (studentPhone !== undefined) student.studentPhone = studentPhone;
     if (parentPhone) student.parentPhone = parentPhone;
-    if (batch) student.batch = batch;
+    if (batch) student.batch = normalizeBatchToYear(batch);
     if (academicYear) student.academicYear = academicYear;
     if (hostelStatus) student.hostelStatus = hostelStatus;
     if (email) student.email = email;
@@ -1780,7 +1773,7 @@ export const updateStudent = async (req, res, next) => {
       maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
     }
     
-    const batchEndYear = getEndYear(student.batch);
+    const batchEndYear = getBatchEndYear(student.batch, maxYear);
     const academicEndYear = getEndYear(student.academicYear);
     if (
       student.year >= maxYear &&
@@ -2322,7 +2315,7 @@ export const renewBatches = async (req, res, next) => {
         }
 
         // Graduation logic: only if final year AND batch end year matches new academic year end year
-        const batchEndYear = getEndYear(student.batch);
+        const batchEndYear = getBatchEndYear(student.batch, maxYear);
         const toAcademicEndYear = getEndYear(toAcademicYear);
 
         if (

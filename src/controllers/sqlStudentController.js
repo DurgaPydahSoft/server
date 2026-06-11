@@ -1,5 +1,6 @@
 import { fetchStudentByIdentifier, testSQLConnection, fetchCollegesFromSQL } from '../utils/sqlService.js';
 import { matchCourseAndBranch } from '../utils/courseBranchMatcher.js';
+import { normalizeBatchToYear } from '../utils/batchUtils.js';
 import { createError } from '../utils/error.js';
 
 /**
@@ -49,7 +50,7 @@ const mapStudentData = (sqlData) => {
     course: sqlData.course || '',
     branch: sqlData.branch || '',
     year: sqlData.current_year || 1,
-    batch: sqlData.batch || '',
+    batch: normalizeBatchToYear(sqlData.batch),
     
     // Personal info
     gender: mapGender(sqlData.gender),
