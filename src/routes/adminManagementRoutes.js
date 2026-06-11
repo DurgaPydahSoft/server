@@ -13,7 +13,8 @@ import {
   updatePrincipal,
   deletePrincipal,
   adminLogin,
-  resetAdminPassword
+  resetAdminPassword,
+  searchHrmsEmployees
 } from '../controllers/adminManagementController.js';
 import { adminAuth, superAdminAuth } from '../middleware/authMiddleware.js';
 import customRoleRoutes from './customRoleRoutes.js';
@@ -92,6 +93,9 @@ router.post('/reset-password', adminAuth, resetAdminPassword);
 
 // Protected routes - only super admin can access
 router.use(superAdminAuth);
+
+// HRMS employee search (users + employees collections)
+router.get('/hrms-employees/search', searchHrmsEmployees);
 
 // Sub-admin routes
 router.post('/sub-admins', createSubAdmin);

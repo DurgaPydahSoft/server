@@ -3,6 +3,84 @@ import jwt from 'jsonwebtoken';
 import { createError } from '../utils/error.js';
 import { sendSubAdminRegistrationEmail } from '../utils/emailService.js';
 import { sendAdminCredentialsSMS } from '../utils/smsService.js';
+import {
+  validateHrmsEmployeeLink,
+  verifyHrmsPassword,
+  searchHrmsEmployees as searchHrmsFromDb
+} from '../utils/hrmsService.js';
+
+const applyHrmsLinkToAdmin = async (adminInstance, hrmsData, excludeAdminId = null) => {
+  const { employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = hrmsData || {};
+  if (!employeeId && !hrmsUserId && !hrmsEmployeeRef) return;
+
+  const validation = await validateHrmsEmployeeLink({
+    employeeId,
+    hrmsUserId,
+    hrmsEmployeeRef,
+    linkType: hrmsLinkType
+  });
+  if (!validation.valid) {
+    throw createError(400, validation.message);
+  }
+
+  const duplicateQuery = { employeeId: validation.employeeId };
+  if (excludeAdminId) {
+    duplicateQuery._id = { $ne: excludeAdminId };
+  }
+
+  const existing = await Admin.findOne(duplicateQuery);
+  if (existing) {
+    throw createError(400, `Employee ID ${validation.employeeId} is already linked to another admin`);
+  }
+
+  adminInstance.employeeId = validation.employeeId;
+  adminInstance.hrmsLinkType = validation.linkType;
+  adminInstance.hrmsUserId = validation.hrmsUserId || undefined;
+  adminInstance.hrmsEmployeeRef = validation.hrmsEmployeeRef || undefined;
+  if (validation.name) adminInstance.name = validation.name;
+  if (validation.email && !adminInstance.email) {
+    adminInstance.email = validation.email.toLowerCase();
+  }
+  if (name) adminInstance.name = name;
+  if (email && !adminInstance.email) adminInstance.email = email.toLowerCase();
+};
+
+const setupNewHrmsOnlyAdmin = async (adminInstance, hrmsData) => {
+  const { employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = hrmsData || {};
+
+  if (!employeeId || !hrmsLinkType) {
+    throw createError(400, 'HRMS employee link is required for new users');
+  }
+
+  await applyHrmsLinkToAdmin(adminInstance, {
+    employeeId,
+    hrmsUserId,
+    hrmsEmployeeRef,
+    hrmsLinkType,
+    name,
+    email
+  });
+
+  const loginUsername = adminInstance.employeeId;
+  const existingUsername = await Admin.findOne({ username: loginUsername });
+  if (existingUsername) {
+    throw createError(400, `Employee ID ${loginUsername} is already registered as an admin`);
+  }
+
+  adminInstance.username = loginUsername;
+  adminInstance.password = Admin.generateRandomPassword();
+  adminInstance.usesHrmsAuth = true;
+};
+
+export const searchHrmsEmployees = async (req, res, next) => {
+  try {
+    const { q } = req.query;
+    const results = await searchHrmsFromDb(q);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    next(error);
+  }
+};
 
 // Create a new sub-admin
 export const createSubAdmin = async (req, res, next) => {
@@ -16,16 +94,13 @@ export const createSubAdmin = async (req, res, next) => {
       passwordDeliveryMethod,
       email,
       phoneNumber,
-      customRoleId // New field for custom role assignment
+      customRoleId,
+      employeeId,
+      hrmsUserId,
+      hrmsEmployeeRef,
+      hrmsLinkType,
+      name
     } = req.body;
-
-    console.log('🔧 Creating sub-admin with delivery method:', passwordDeliveryMethod);
-
-    // Check if username already exists
-    const existingAdmin = await Admin.findOne({ username });
-    if (existingAdmin) {
-      throw createError(400, 'Username already exists');
-    }
 
     // If custom role is assigned, validate it exists and get its permissions
     let rolePermissions = permissions;
@@ -78,39 +153,8 @@ export const createSubAdmin = async (req, res, next) => {
       roleLeaveManagementCourses = validatedCourses;
     }
 
-    // Validate password delivery method (optional)
-    if (passwordDeliveryMethod && passwordDeliveryMethod !== '' && !['email', 'mobile'].includes(passwordDeliveryMethod)) {
-      throw createError(400, 'Password delivery method must be either "email" or "mobile"');
-    }
-
-    // Validate email if email delivery is selected
-    if (passwordDeliveryMethod === 'email') {
-      if (!email || !email.trim()) {
-        throw createError(400, 'Email address is required for email delivery');
-      }
-      // Basic email validation
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        throw createError(400, 'Invalid email address format');
-      }
-    }
-
-    // Validate phone number if mobile delivery is selected
-    if (passwordDeliveryMethod === 'mobile') {
-      if (!phoneNumber || !phoneNumber.trim()) {
-        throw createError(400, 'Phone number is required for mobile delivery');
-      }
-      // Basic phone number validation (at least 10 digits)
-      const phoneRegex = /^\d{10,}$/;
-      if (!phoneRegex.test(phoneNumber.replace(/\D/g, ''))) {
-        throw createError(400, 'Invalid phone number format');
-      }
-    }
-
     // Create new admin
     const adminData = {
-      username,
-      password,
       role: adminRole,
       permissions: rolePermissions,
       permissionAccessLevels: roleAccessLevels || {},
@@ -125,44 +169,19 @@ export const createSubAdmin = async (req, res, next) => {
     }
 
     const newAdmin = new Admin(adminData);
+    await setupNewHrmsOnlyAdmin(newAdmin, {
+      employeeId,
+      hrmsUserId,
+      hrmsEmployeeRef,
+      hrmsLinkType,
+      name,
+      email
+    });
     const savedAdmin = await newAdmin.save();
-    
-    // Send credentials via selected method (if any)
-    let deliveryResult = null;
-    
-    if (passwordDeliveryMethod === 'email') {
-      try {
-        console.log('📧 Sending admin credentials via email to:', email);
-        deliveryResult = await sendSubAdminRegistrationEmail(
-          email,
-          username, // Using username as admin name for now
-          username,
-          password
-        );
-        console.log('📧 Email sent successfully:', deliveryResult);
-      } catch (emailError) {
-        console.error('📧 Error sending email:', emailError);
-        // Don't fail the creation if email fails, but log it
-        deliveryResult = { error: emailError.message };
-      }
-    } else if (passwordDeliveryMethod === 'mobile') {
-      try {
-        console.log('📱 Sending admin credentials via SMS to:', phoneNumber);
-        deliveryResult = await sendAdminCredentialsSMS(
-          phoneNumber,
-          username,
-          password
-        );
-        console.log('📱 SMS sent successfully:', deliveryResult);
-      } catch (smsError) {
-        console.error('📱 Error sending SMS:', smsError);
-        // Don't fail the creation if SMS fails, but log it
-        deliveryResult = { error: smsError.message };
-      }
-    } else if (!passwordDeliveryMethod) {
-      // No delivery method selected
-      deliveryResult = { message: 'No credentials sent - admin can provide credentials manually' };
-    }
+
+    const deliveryResult = {
+      message: 'User will login with HRMS employee ID and linked HRMS password'
+    };
     
     // Remove password from response
     const adminResponse = savedAdmin.toObject();
@@ -181,13 +200,7 @@ export const createSubAdmin = async (req, res, next) => {
 // Create a new warden
 export const createWarden = async (req, res, next) => {
   try {
-    const { username, password, hostelType } = req.body;
-
-    // Check if username already exists
-    const existingAdmin = await Admin.findOne({ username });
-    if (existingAdmin) {
-      throw createError(400, 'Username already exists');
-    }
+    const { hostelType, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
 
     // Validate hostel type
     if (!hostelType || !['boys', 'girls'].includes(hostelType)) {
@@ -207,14 +220,20 @@ export const createWarden = async (req, res, next) => {
 
     // Create new warden
     const warden = new Admin({
-      username,
-      password,
       role: 'warden',
       hostelType,
       permissions: wardenPermissions,
       createdBy: req.admin._id
     });
 
+    await setupNewHrmsOnlyAdmin(warden, {
+      employeeId,
+      hrmsUserId,
+      hrmsEmployeeRef,
+      hrmsLinkType,
+      name,
+      email
+    });
     const savedWarden = await warden.save();
     
     // Remove password from response
@@ -292,7 +311,7 @@ export const getWardens = async (req, res, next) => {
 export const updateSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, permissions, isActive, leaveManagementCourses, permissionAccessLevels, customRoleId } = req.body;
+    const { username, password, permissions, isActive, leaveManagementCourses, permissionAccessLevels, customRoleId, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
 
     console.log('📝 Updating admin:', id);
     console.log('📝 Update data:', { username, permissions, isActive, leaveManagementCourses, customRoleId });
@@ -380,6 +399,7 @@ export const updateSubAdmin = async (req, res, next) => {
     }
     if (password) {
       admin.password = password;
+      admin.usesHrmsAuth = false;
     }
     if (permissions !== undefined && !customRoleId) {
       console.log('📝 Updating permissions from:', admin.permissions, 'to:', permissions);
@@ -395,6 +415,17 @@ export const updateSubAdmin = async (req, res, next) => {
     }
     if (typeof isActive === 'boolean') {
       admin.isActive = isActive;
+    }
+
+    if (employeeId !== undefined || hrmsLinkType !== undefined) {
+      if (employeeId || hrmsUserId || hrmsEmployeeRef) {
+        await applyHrmsLinkToAdmin(admin, { employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email }, admin._id);
+      } else {
+        admin.employeeId = undefined;
+        admin.hrmsUserId = undefined;
+        admin.hrmsEmployeeRef = undefined;
+        admin.hrmsLinkType = undefined;
+      }
     }
 
     console.log('📝 Saving admin with permissions:', admin.permissions);
@@ -420,7 +451,7 @@ export const updateSubAdmin = async (req, res, next) => {
 export const updateWarden = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, isActive, hostelType } = req.body;
+    const { username, password, isActive, hostelType, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
 
     console.log('🏠 Updating warden:', id);
     console.log('🏠 Update data:', { username, isActive, hostelType });
@@ -452,12 +483,24 @@ export const updateWarden = async (req, res, next) => {
     }
     if (password) {
       warden.password = password;
+      warden.usesHrmsAuth = false;
     }
     if (typeof isActive === 'boolean') {
       warden.isActive = isActive;
     }
     if (hostelType && ['boys', 'girls'].includes(hostelType)) {
       warden.hostelType = hostelType;
+    }
+
+    if (employeeId !== undefined || hrmsLinkType !== undefined) {
+      if (employeeId || hrmsUserId || hrmsEmployeeRef) {
+        await applyHrmsLinkToAdmin(warden, { employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email }, warden._id);
+      } else {
+        warden.employeeId = undefined;
+        warden.hrmsUserId = undefined;
+        warden.hrmsEmployeeRef = undefined;
+        warden.hrmsLinkType = undefined;
+      }
     }
 
     console.log('🏠 Saving warden');
@@ -545,17 +588,44 @@ export const deleteWarden = async (req, res, next) => {
 export const adminLogin = async (req, res, next) => {
   try {
     const { username, password } = req.body;
+    const identifier = username?.trim();
 
-    // Find admin
-    let admin = await Admin.findOne({ username, isActive: true })
-      .populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
+    if (!identifier || !password) {
+      throw createError(401, 'Invalid credentials');
+    }
+
+    // Find admin by username or linked employee ID
+    let admin = await Admin.findOne({
+      $or: [
+        { username: identifier },
+        { employeeId: identifier }
+      ],
+      isActive: true
+    }).populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
     
     if (!admin) {
       throw createError(401, 'Invalid credentials');
     }
 
-    // Check password
-    const isMatch = await admin.comparePassword(password);
+    let isMatch = false;
+
+    if (admin.usesHrmsAuth) {
+      try {
+        isMatch = await verifyHrmsPassword(admin, password);
+      } catch (hrmsError) {
+        console.error('HRMS password verification failed:', hrmsError.message);
+      }
+    } else {
+      isMatch = await admin.comparePassword(password);
+      if (!isMatch) {
+        try {
+          isMatch = await verifyHrmsPassword(admin, password);
+        } catch (hrmsError) {
+          console.error('HRMS password verification failed:', hrmsError.message);
+        }
+      }
+    }
+
     if (!isMatch) {
       throw createError(401, 'Invalid credentials');
     }
@@ -702,13 +772,7 @@ export const adminLogin = async (req, res, next) => {
 // Create a new principal
 export const createPrincipal = async (req, res, next) => {
   try {
-    const { username, password, assignedCollegeId, assignedCollegeIds, assignedLevels, email } = req.body;
-
-    // Check if username already exists
-    const existingAdmin = await Admin.findOne({ username });
-    if (existingAdmin) {
-      throw createError(400, 'Username already exists');
-    }
+    const { assignedCollegeId, assignedCollegeIds, assignedLevels, email, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name } = req.body;
 
     // Validate College & Levels
     // Support both single ID (legacy) and array of IDs (new)
@@ -739,8 +803,6 @@ export const createPrincipal = async (req, res, next) => {
 
     // Create new principal
     const principalData = {
-      username,
-      password,
       role: 'principal',
       assignedCollegeIds: assignedCollegeIds || (assignedCollegeId ? [assignedCollegeId] : []), // Normalize to array
       assignedCollegeId: assignedCollegeId, // Keep for backward compatibility if needed, or remove if schema handles it
@@ -755,6 +817,14 @@ export const createPrincipal = async (req, res, next) => {
     }
 
     const principal = new Admin(principalData);
+    await setupNewHrmsOnlyAdmin(principal, {
+      employeeId,
+      hrmsUserId,
+      hrmsEmployeeRef,
+      hrmsLinkType,
+      name,
+      email
+    });
     const savedPrincipal = await principal.save();
     
     // Remove password from response
@@ -802,7 +872,7 @@ export const getPrincipals = async (req, res, next) => {
 export const updatePrincipal = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, assignedCollegeId, assignedCollegeIds, assignedLevels, isActive, email } = req.body;
+    const { username, password, assignedCollegeId, assignedCollegeIds, assignedLevels, isActive, email, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name } = req.body;
 
     console.log('🎓 Updating principal:', id);
     console.log('🎓 Update data:', { username, assignedCollegeId, assignedCollegeIds, assignedLevels, isActive, email });
@@ -834,6 +904,7 @@ export const updatePrincipal = async (req, res, next) => {
     }
     if (password) {
       principal.password = password;
+      principal.usesHrmsAuth = false;
     }
     
     if (assignedCollegeIds) {
@@ -858,6 +929,17 @@ export const updatePrincipal = async (req, res, next) => {
     
     if (email !== undefined) {
       principal.email = email;
+    }
+
+    if (employeeId !== undefined || hrmsLinkType !== undefined) {
+      if (employeeId || hrmsUserId || hrmsEmployeeRef) {
+        await applyHrmsLinkToAdmin(principal, { employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email }, principal._id);
+      } else {
+        principal.employeeId = undefined;
+        principal.hrmsUserId = undefined;
+        principal.hrmsEmployeeRef = undefined;
+        principal.hrmsLinkType = undefined;
+      }
     }
 
     console.log('🎓 Saving principal');

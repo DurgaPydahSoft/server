@@ -8,6 +8,33 @@ const adminSchema = new mongoose.Schema({
     unique: true,
     trim: true
   },
+  employeeId: {
+    type: String,
+    trim: true,
+    sparse: true,
+    unique: true
+  },
+  name: {
+    type: String,
+    trim: true
+  },
+  hrmsUserId: {
+    type: String,
+    trim: true
+  },
+  hrmsEmployeeRef: {
+    type: String,
+    trim: true
+  },
+  hrmsLinkType: {
+    type: String,
+    enum: ['user', 'employee'],
+    trim: true
+  },
+  usesHrmsAuth: {
+    type: Boolean,
+    default: false
+  },
   password: {
     type: String,
     required: true
