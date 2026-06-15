@@ -79,6 +79,8 @@ export const parseSqlStudentRow = async (sqlRow) => {
   const studentPhoto = formatSqlStudentPhoto(sqlRow.student_photo);
 
   return {
+    rollNumber: (sqlRow.pin_no || '').toString().trim().toUpperCase() || null,
+    pin_no: (sqlRow.pin_no || '').toString().trim().toUpperCase() || null,
     admissionNumber:
       (sqlRow.admission_number || sqlRow.admission_no || '').toString().trim() || null,
     course,
@@ -183,6 +185,30 @@ export const loadAcademicsFromSQL = async (identifier) => {
 /**
  * Overlay SQL academics and contact phones onto a student document for API responses.
  */
+/**
+ * Restore roll number on legacy/corrupt records (e.g. null rollNumber in MongoDB).
+ */
+export const repairMissingRollNumber = async (student, academicSnapshot = null) => {
+  if (student.rollNumber?.trim()) return false;
+
+  const snapshot = academicSnapshot || (await enrichStudentAcademics(student));
+  const resolved = (
+    snapshot?.pin_no ||
+    snapshot?.rollNumber ||
+    student.admissionNumber ||
+    ''
+  )
+    .toString()
+    .trim()
+    .toUpperCase();
+
+  if (resolved) {
+    student.rollNumber = resolved;
+    return true;
+  }
+  return false;
+};
+
 export const enrichStudentAcademics = async (student) => {
   const plain = toPlainStudent(student);
   if (!plain) return plain;

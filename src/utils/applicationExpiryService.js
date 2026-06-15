@@ -6,7 +6,8 @@ import FeeReminder from '../models/FeeReminder.js';
 import {
   enrichStudentAcademics,
   enrichStudentsAcademics,
-  matchesAcademicFilters
+  matchesAcademicFilters,
+  repairMissingRollNumber
 } from './studentAcademicEnricher.js';
 import {
   deleteStudentHostelFeesForAcademicYearSafely,
@@ -185,7 +186,8 @@ export const removeStudentEnrollmentForAcademicYear = async ({
 
     if (previousHistory) {
       applyHistorySnapshotToStudent(student, previousHistory);
-      await student.save();
+      await repairMissingRollNumber(student);
+      await student.save({ validateModifiedOnly: true });
     }
   }
 
@@ -205,7 +207,8 @@ export const expireStudentApplication = async (student, reason = 'academic_year_
   student.applicationStatus = 'Expired';
   student.bedNumber = undefined;
   student.lockerNumber = undefined;
-  await student.save();
+  await repairMissingRollNumber(student);
+  await student.save({ validateModifiedOnly: true });
 
   await closeActiveOccupancyHistory({
     studentId: student._id,
@@ -297,7 +300,10 @@ export const overlayStudentWithEnrollmentHistory = (student, history) => {
     room: history.room ?? student.room,
     hostel: history.hostel ?? student.hostel,
     hostelCategory,
-    category: hostelCategory?.name || student.category,
+    category:
+      (typeof hostelCategory === 'object' && hostelCategory?.name) ||
+      (typeof student.category === 'string' ? student.category : student.category?.name) ||
+      '',
     course: history.course || student.course,
     branch: history.branch || student.branch,
     year: history.yearOfStudy ?? student.year,
@@ -433,7 +439,10 @@ export const fetchStudentsForAcademicYear = async ({
       course: history.course || student.course,
       branch: history.branch || student.branch,
       year: history.yearOfStudy ?? student.year,
-      category: history.hostelCategory?.name || student.category,
+      category:
+        (typeof history.hostelCategory === 'object' && history.hostelCategory?.name) ||
+        (typeof student.category === 'string' ? student.category : student.category?.name) ||
+        '',
       roomNumber: history.roomNumber ?? student.roomNumber,
       bedNumber: history.bedNumber,
       lockerNumber: history.lockerNumber,
@@ -511,6 +520,7 @@ export const extendStudentApplicationExpiry = async ({
     );
   }
 
-  await student.save();
+  await repairMissingRollNumber(student);
+  await student.save({ validateModifiedOnly: true });
   return student;
 };

@@ -26,7 +26,8 @@ import {
   enrichStudentAcademics,
   enrichStudentsAcademics,
   parseSqlStudentRow,
-  matchesAcademicFilters
+  matchesAcademicFilters,
+  repairMissingRollNumber
 } from '../utils/studentAcademicEnricher.js';
 import {
   createOccupancyHistory,
@@ -435,7 +436,8 @@ export const addStudent = async (req, res, next) => {
       student.calculatedTerm3Fee = calculatedTerm3Fee;
       student.totalCalculatedFee = totalCalculatedFee;
 
-      await student.save();
+      await repairMissingRollNumber(student, sqlAcademics);
+      await student.save({ validateModifiedOnly: true });
 
       await createOccupancyHistory({
         student,
@@ -1746,7 +1748,7 @@ export const updateStudent = async (req, res, next) => {
 
     // Update fields
     if (name) student.name = name;
-    if (rollNumber) student.rollNumber = rollNumber;
+    if (rollNumber?.trim()) student.rollNumber = rollNumber.trim().toUpperCase();
     if (admissionNumber !== undefined) student.admissionNumber = admissionNumber ? admissionNumber.toUpperCase() : undefined;
     // course, branch, year are managed in SQL — not updated in MongoDB
     if (gender) student.gender = gender;
@@ -1899,7 +1901,8 @@ export const updateStudent = async (req, res, next) => {
       });
     }
 
-    await student.save();
+    await repairMissingRollNumber(student, academicSnapshot);
+    await student.save({ validateModifiedOnly: true });
 
     await syncStudentHostelFeeSafely(student);
 
@@ -2465,8 +2468,9 @@ export const resetStudentPassword = async (req, res, next) => {
     // Update password
     student.password = newPassword;
     student.isPasswordChanged = true;
-    
-    await student.save();
+
+    await repairMissingRollNumber(student);
+    await student.save({ validateModifiedOnly: true });
 
     // Attempt to delete TempStudent record if exists
     try {
@@ -3584,7 +3588,8 @@ export const approveConcession = async (req, res, next) => {
     student.concessionApprovedBy = req.admin._id;
     student.concessionApprovedAt = new Date();
     
-    await student.save();
+    await repairMissingRollNumber(student);
+    await student.save({ validateModifiedOnly: true });
 
     await syncStudentHostelFeeSafely(student);
 
@@ -3764,7 +3769,8 @@ export const rejectConcession = async (req, res, next) => {
       });
     }
     
-    await student.save();
+    await repairMissingRollNumber(student);
+    await student.save({ validateModifiedOnly: true });
 
     await syncStudentHostelFeeSafely(student);
 

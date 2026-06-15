@@ -72,12 +72,18 @@ export const studentLogin = async (req, res, next) => {
       throw createError(403, 'Your hostel access has been deactivated. Please contact the administration for assistance.');
     }
 
-    // Verify password with MongoDB first
-    let isMatch = await student.comparePassword(password);
+    // Verify password with MongoDB first (skip if no hostel password stored)
+    let isMatch = student.password
+      ? await student.comparePassword(password)
+      : false;
     
-    // If MongoDB password doesn't match, check against SQL database
+    // If MongoDB password doesn't match or isn't set, check against SQL database
     if (!isMatch) {
-      console.log('MongoDB password verification failed. Checking SQL database...');
+      if (!student.password) {
+        console.log('No MongoDB password stored. Checking SQL database...');
+      } else {
+        console.log('MongoDB password verification failed. Checking SQL database...');
+      }
       try {
         const sqlCredentials = await fetchStudentCredentialsSQL(identifier);
         
