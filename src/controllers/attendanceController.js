@@ -890,9 +890,12 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     if (studentId) studentQuery.rollNumber = { $regex: studentId, $options: 'i' };
 
     // Get students
-    const students = await User.find(studentQuery)
+    let students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean();
+
+    students = await enrichStudentsAcademics(students);
 
     console.log('🎓 Found students:', students.length);
     if (students.length > 0) {
@@ -996,7 +999,7 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
       }
       
       const result = {
-        ...student.toObject(),
+        ...student,
         morning: studentAttendance?.morning || false,
         evening: studentAttendance?.evening || false,
         night: studentAttendance?.night || false,
@@ -1463,9 +1466,12 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
     }
 
     // Get students
-    const students = await User.find(studentQuery)
+    let students = await User.find(studentQuery)
       .select('_id name rollNumber course branch year gender roomNumber studentPhoto')
-      .sort({ name: 1 });
+      .sort({ name: 1 })
+      .lean();
+
+    students = await enrichStudentsAcademics(students);
 
     console.log('🎓 Found students:', students.length);
 
@@ -1537,7 +1543,7 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
       }
       
       return {
-        ...student.toObject(),
+        ...student,
         morning: studentAttendance?.morning || false,
         evening: studentAttendance?.evening || false,
         night: studentAttendance?.night || false,

@@ -333,20 +333,8 @@ export const updateProfilePhotos = async (req, res) => {
       });
     }
 
-    // Handle photo uploads
+    // Handle guardian photo uploads (student profile photo comes from SDMS)
     if (req.files) {
-      if (req.files.studentPhoto && req.files.studentPhoto[0]) {
-        // Delete old photo if exists
-        if (student.studentPhoto) {
-          try {
-            await deleteFromS3(student.studentPhoto);
-          } catch (error) {
-            console.error('Error deleting old student photo:', error);
-          }
-        }
-        // Upload new photo
-        student.studentPhoto = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
-      }
       if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
         // Delete old photo if exists
         if (student.guardianPhoto1) {
@@ -375,11 +363,14 @@ export const updateProfilePhotos = async (req, res) => {
 
     await student.save();
 
+    const { enrichStudentAcademics } = await import('../utils/studentAcademicEnricher.js');
+    const enriched = await enrichStudentAcademics(student.toObject());
+
     res.json({
       success: true,
       message: 'Profile photos updated successfully',
       data: {
-        studentPhoto: student.studentPhoto,
+        studentPhoto: enriched.studentPhoto || null,
         guardianPhoto1: student.guardianPhoto1,
         guardianPhoto2: student.guardianPhoto2
       }

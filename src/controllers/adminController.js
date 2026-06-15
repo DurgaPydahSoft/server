@@ -7,6 +7,7 @@ import Hostel from '../models/Hostel.js';
 import HostelCategory from '../models/HostelCategory.js';
 import SecuritySettings from '../models/SecuritySettings.js';
 import FeeReminder from '../models/FeeReminder.js';
+import RoomOccupancyHistory from '../models/RoomOccupancyHistory.js';
 import StudentPreRegistration from '../models/StudentPreRegistration.js';
 import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
@@ -20,13 +21,32 @@ import Counter from '../models/Counter.js';
 import axios from 'axios';
 import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
 import { extractSQLIds, ensureMongoDBCourse, ensureMongoDBBranch } from '../utils/courseBranchResolver.js';
-import { normalizeBatchToYear, getBatchEndYear } from '../utils/batchUtils.js';
+import { normalizeBatchToYear, getBatchEndYear, validateAcademicYearForBatch } from '../utils/batchUtils.js';
 import {
   enrichStudentAcademics,
   enrichStudentsAcademics,
   parseSqlStudentRow,
   matchesAcademicFilters
 } from '../utils/studentAcademicEnricher.js';
+import {
+  createOccupancyHistory,
+  closeActiveOccupancyHistory,
+  removeStudentEnrollmentForAcademicYear,
+  attachResolvedExpiryDates,
+  fetchStudentsForAcademicYear
+} from '../utils/applicationExpiryService.js';
+import {
+  getOccupiedBedsAndLockersForAcademicYear,
+  countStudentsInRoomForAcademicYear,
+  isBedOccupiedForAcademicYear,
+  isLockerOccupiedForAcademicYear
+} from '../utils/roomOccupancyUtils.js';
+import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
+import {
+  syncStudentHostelFeeSafely,
+  deleteAllStudentHostelFeesSafely,
+  resolveFeesStudentId
+} from '../services/feesSyncService.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -111,10 +131,19 @@ export const addStudent = async (req, res, next) => {
       college
     } = req.body;
 
-    // Check if student already exists in MongoDB
-    const existingStudent = await User.findOne({ rollNumber });
-    if (existingStudent) {
-      throw createError(400, 'Student with this roll number already exists');
+    const rollUpper = String(rollNumber || '').trim().toUpperCase();
+    if (!rollUpper) {
+      throw createError(400, 'Roll number is required');
+    }
+
+    const existingStudent = await User.findOne({ rollNumber: rollUpper, role: 'student' });
+    const isRenewal = Boolean(existingStudent && existingStudent.hostelStatus === 'Inactive');
+
+    if (existingStudent && existingStudent.hostelStatus === 'Active') {
+      throw createError(
+        400,
+        `Student is already active for academic year ${existingStudent.academicYear}. Register again only after the application expires.`
+      );
     }
 
     // Validate student exists in SQL and load academics (source of truth)
@@ -125,8 +154,8 @@ export const addStudent = async (req, res, next) => {
         throw createError(503, 'SQL database connection failed. Cannot proceed with registration.', connectionTest.error);
       }
 
-      let sqlResult = await fetchStudentByIdentifier(rollNumber);
-      if (!sqlResult.success && admissionNumber && admissionNumber !== rollNumber) {
+      let sqlResult = await fetchStudentByIdentifier(rollUpper);
+      if (!sqlResult.success && admissionNumber && admissionNumber.toUpperCase() !== rollUpper) {
         sqlResult = await fetchStudentByIdentifier(admissionNumber);
       }
       if (!sqlResult.success) {
@@ -145,12 +174,29 @@ export const addStudent = async (req, res, next) => {
       throw createError(500, 'Error validating student in SQL database', error.message);
     }
 
+    const resolvedAdmissionNumber =
+      admissionNumber?.toString().trim().toUpperCase() ||
+      sqlAcademics?.admissionNumber?.toString().trim().toUpperCase() ||
+      undefined;
+
     // Hostel / category (hostelCategory) validation under new hierarchy
     if (!hostel) {
       throw createError(400, 'Hostel is required');
     }
     if (!hostelCategory) {
       throw createError(400, 'Hostel category is required');
+    }
+    if (!academicYear || !validateAcademicYear(academicYear)) {
+      throw createError(400, 'Valid academic year (YYYY-YYYY) is required');
+    }
+
+    const ayValidation = validateAcademicYearForBatch(
+      sqlAcademics?.batch || batch,
+      sqlAcademics?.year || year,
+      academicYear
+    );
+    if (!ayValidation.valid) {
+      throw createError(400, ayValidation.message);
     }
 
     const hostelExists = await Hostel.exists({ _id: hostel });
@@ -171,29 +217,26 @@ export const addStudent = async (req, res, next) => {
       throw createError(400, 'Invalid room number for the selected hostel/category.');
     }
 
-    // Check bed count limit (by room reference)
-    const studentCount = await User.countDocuments({
-      room: roomDoc._id,
-      role: 'student',
-      hostelStatus: 'Active'
-    });
+    // Check bed count limit for the selected academic year
+    const studentCount = await countStudentsInRoomForAcademicYear(roomDoc, academicYear);
     if (studentCount >= roomDoc.bedCount) {
-      throw createError(400, 'Room is full. Cannot register more students.');
+      throw createError(400, 'Room is full for the selected academic year. Cannot register more students.');
     }
 
-    // Validate bed and locker assignment if provided
+    const excludeStudentId = isRenewal ? existingStudent._id : null;
+
+    // Validate bed and locker assignment if provided (scoped to academic year)
     if (bedNumber) {
-      // Check if bed is already occupied
-      const bedOccupied = await User.findOne({ 
-        bedNumber, 
-        role: 'student',
-        hostelStatus: 'Active'
-      });
+      const bedOccupied = await isBedOccupiedForAcademicYear(
+        roomDoc,
+        bedNumber,
+        academicYear,
+        excludeStudentId
+      );
       if (bedOccupied) {
-        throw createError(400, 'Selected bed is already occupied');
+        throw createError(400, 'Selected bed is already occupied for this academic year');
       }
-      
-      // Validate bed format matches room
+
       const expectedBedFormat = `${roomNumber} Bed `;
       if (!bedNumber.startsWith(expectedBedFormat)) {
         throw createError(400, 'Invalid bed number format for this room');
@@ -201,26 +244,21 @@ export const addStudent = async (req, res, next) => {
     }
 
     if (lockerNumber) {
-      // Check if locker is already occupied
-      const lockerOccupied = await User.findOne({ 
-        lockerNumber, 
-        role: 'student',
-        hostelStatus: 'Active'
-      });
+      const lockerOccupied = await isLockerOccupiedForAcademicYear(
+        roomDoc,
+        lockerNumber,
+        academicYear,
+        excludeStudentId
+      );
       if (lockerOccupied) {
-        throw createError(400, 'Selected locker is already occupied');
+        throw createError(400, 'Selected locker is already occupied for this academic year');
       }
-      
-      // Validate locker format matches room
+
       const expectedLockerFormat = `${roomNumber} Locker `;
       if (!lockerNumber.startsWith(expectedLockerFormat)) {
         throw createError(400, 'Invalid locker number format for this room');
       }
     }
-
-    // Generate hostel ID
-    const hostelId = await generateHostelId(gender || 'Male');
-    console.log('Generated hostel ID:', hostelId);
 
     // Calculate fees with concession
     let calculatedTerm1Fee = 0;
@@ -278,21 +316,12 @@ export const addStudent = async (req, res, next) => {
       // Don't fail the registration if fee calculation fails
     }
 
-    // Generate random password
-    const generatedPassword = User.generateRandomPassword();
-
-    // Handle photo uploads
-    let studentPhotoUrl = null;
+    // Handle guardian photo uploads (student photo comes from SDMS at display time)
     let guardianPhoto1Url = null;
     let guardianPhoto2Url = null;
 
     if (req.files) {
       try {
-        if (req.files.studentPhoto && req.files.studentPhoto[0]) {
-          console.log('📸 Uploading student photo to S3...');
-          studentPhotoUrl = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
-          console.log('✅ Student photo uploaded successfully:', studentPhotoUrl);
-        }
         if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
           console.log('📸 Uploading guardian 1 photo to S3...');
           guardianPhoto1Url = await uploadToS3(req.files.guardianPhoto1[0], 'guardian-photos');
@@ -313,10 +342,7 @@ export const addStudent = async (req, res, next) => {
       }
     }
 
-    // Handle photo URLs from preregistration (if no file uploads)
-    if (!studentPhotoUrl && req.body.studentPhotoUrl) {
-      studentPhotoUrl = req.body.studentPhotoUrl;
-    }
+    // Handle guardian photo URLs from preregistration (if no file uploads)
     if (!guardianPhoto1Url && req.body.guardianPhoto1Url) {
       guardianPhoto1Url = req.body.guardianPhoto1Url;
     }
@@ -354,15 +380,128 @@ export const addStudent = async (req, res, next) => {
       }];
     }
 
-    // Create new student
+    if (isRenewal) {
+      const student = existingStudent;
+      const previousAcademicYear = student.academicYear;
+
+      await closeActiveOccupancyHistory({ studentId: student._id });
+
+      student.name = name || student.name;
+      if (resolvedAdmissionNumber) {
+        student.admissionNumber = resolvedAdmissionNumber;
+      }
+      if (gender) student.gender = gender;
+      if (sqlCourseId) student.sqlCourseId = sqlCourseId;
+      if (sqlBranchId) student.sqlBranchId = sqlBranchId;
+      if (college) {
+        student.college = typeof college === 'string' ? JSON.parse(college) : college;
+      }
+      student.category = finalCategoryName;
+      if (mealType) student.mealType = mealType;
+      if (parentPermissionForOuting !== undefined) {
+        student.parentPermissionForOuting = Boolean(parentPermissionForOuting);
+      }
+      student.roomNumber = roomNumber;
+      student.room = roomDoc._id;
+      student.bedNumber = bedNumber;
+      student.lockerNumber = lockerNumber;
+      if (studentPhone) student.studentPhone = studentPhone;
+      if (parentPhone) student.parentPhone = parentPhone;
+      if (motherName) student.motherName = motherName;
+      if (motherPhone) student.motherPhone = motherPhone;
+      if (localGuardianName) student.localGuardianName = localGuardianName;
+      if (localGuardianPhone) student.localGuardianPhone = localGuardianPhone;
+      student.batch = normalizeBatchToYear(sqlAcademics?.batch || batch || student.batch);
+      student.academicYear = academicYear;
+      student.hostelStatus = 'Active';
+      student.applicationStatus = 'Active';
+      student.set('applicationExpiryDate', undefined);
+      student.set('applicationExpiryExtendedAt', undefined);
+      student.set('applicationExpiryExtendedBy', undefined);
+      if (finalEmail) student.email = finalEmail;
+      student.hostel = hostel;
+      student.hostelCategory = hostelCategory;
+      if (guardianPhoto1Url) student.guardianPhoto1 = guardianPhoto1Url;
+      if (guardianPhoto2Url) student.guardianPhoto2 = guardianPhoto2Url;
+      student.concession = concessionData.concession;
+      student.concessionApproved = concessionData.concessionApproved;
+      student.concessionRequestedBy = concessionData.concessionRequestedBy;
+      student.concessionRequestedAt = concessionData.concessionRequestedAt;
+      if (concessionData.concessionHistory) {
+        student.concessionHistory = concessionData.concessionHistory;
+      }
+      student.calculatedTerm1Fee = calculatedTerm1Fee;
+      student.calculatedTerm2Fee = calculatedTerm2Fee;
+      student.calculatedTerm3Fee = calculatedTerm3Fee;
+      student.totalCalculatedFee = totalCalculatedFee;
+
+      await student.save();
+
+      await createOccupancyHistory({
+        student,
+        academicYear,
+        courseName: sqlAcademics?.course,
+        branchName: sqlAcademics?.branch,
+        yearOfStudy: sqlAcademics?.year,
+        adminId: req.admin?._id,
+        expiryReason: 'registration'
+      });
+
+      try {
+        const preRegistration = await StudentPreRegistration.findOne({
+          rollNumber: student.rollNumber,
+          status: 'pending'
+        });
+        if (preRegistration) {
+          await StudentPreRegistration.findByIdAndDelete(preRegistration._id);
+        }
+      } catch (preregError) {
+        console.error('❌ Error deleting pre-registration record:', preregError);
+      }
+
+      try {
+        await FeeReminder.updateMany(
+          { student: student._id, isActive: true },
+          { $set: { isActive: false } }
+        );
+        await FeeReminder.createForStudent(student._id, new Date(), academicYear);
+      } catch (feeError) {
+        console.error('❌ Error creating fee reminder on renewal:', student.rollNumber, feeError);
+      }
+
+      await syncStudentHostelFeeSafely(student, { academicYear });
+
+      const enrichedStudent = await enrichStudentAcademics(student);
+      console.log(
+        `♻️ Renewed returning student ${student.rollNumber}: ${previousAcademicYear} → ${academicYear} (password unchanged)`
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          student: enrichedStudent,
+          isRenewal: true,
+          passwordReused: true,
+          generatedPassword: null,
+          emailSent: false,
+          smsSent: false,
+          message: `Returning student renewed for ${academicYear}. They can log in with their existing password.`
+        }
+      });
+    }
+
+    const generatedPassword = User.generateRandomPassword();
+    const hostelId = await generateHostelId(gender || 'Male');
+    console.log('Generated hostel ID:', hostelId);
+
+    // Create new student (no expiry date at registration — configured in Application Expiry Settings)
     const student = new User({
       name,
-      rollNumber: rollNumber.toUpperCase(),
-      admissionNumber: admissionNumber ? admissionNumber.toUpperCase() : undefined,
+      rollNumber: rollUpper,
+      admissionNumber: resolvedAdmissionNumber,
       password: generatedPassword,
       role: 'student',
       gender,
-      // course / branch / year — read from SQL at display time (not stored)
       ...(sqlCourseId && { sqlCourseId }),
       ...(sqlBranchId && { sqlBranchId }),
       college: typeof college === 'string' ? JSON.parse(college) : college,
@@ -381,12 +520,12 @@ export const addStudent = async (req, res, next) => {
       localGuardianPhone,
       batch: normalizeBatchToYear(sqlAcademics?.batch || batch),
       academicYear,
+      applicationStatus: 'Active',
       email: finalEmail,
       hostelId,
       hostel,
       hostelCategory,
       isPasswordChanged: false,
-      studentPhoto: studentPhotoUrl,
       guardianPhoto1: guardianPhoto1Url,
       guardianPhoto2: guardianPhoto2Url,
       ...concessionData,
@@ -397,6 +536,15 @@ export const addStudent = async (req, res, next) => {
     });
 
     const savedStudent = await student.save();
+
+    await createOccupancyHistory({
+      student: savedStudent,
+      academicYear,
+      courseName: sqlAcademics?.course,
+      branchName: sqlAcademics?.branch,
+      yearOfStudy: sqlAcademics?.year,
+      adminId: req.admin?._id
+    });
 
     // Check if this student was added from a pre-registration and delete the pre-registration record
     try {
@@ -440,6 +588,8 @@ export const addStudent = async (req, res, next) => {
       console.error('❌ Error creating fee reminder for student:', savedStudent.rollNumber, feeError);
       // Don't fail the registration if fee reminder creation fails
     }
+
+    await syncStudentHostelFeeSafely(savedStudent, { academicYear });
 
     // Send email notification to student
     let emailSent = false;
@@ -493,6 +643,8 @@ export const addStudent = async (req, res, next) => {
       success: true,
       data: {
         student: enrichedStudent,
+        isRenewal: false,
+        passwordReused: false,
         generatedPassword,
         emailSent,
         emailError,
@@ -1238,6 +1390,10 @@ export const bulkAddStudents = async (req, res, next) => {
         // Don't fail the registration if fee reminder creation fails
       }
 
+      await syncStudentHostelFeeSafely(savedStudent, {
+        academicYear: String(AcademicYear).trim()
+      });
+
       // Send email notification to student
       let emailSent = false;
       let emailError = null;
@@ -1295,57 +1451,71 @@ export const bulkAddStudents = async (req, res, next) => {
 export const getStudents = async (req, res, next) => {
   try {
     const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel } = req.query;
-    const query = { role: 'student' };
     const academicFilters = { course, branch, year: year ? parseInt(year, 10) : undefined };
     const hasAcademicFilter = !!(course || branch || year);
-
-    if (gender) query.gender = gender;
-    if (category) query.category = category;
-    if (roomNumber) query.roomNumber = roomNumber;
-    if (batch) query.batch = batch;
-    if (academicYear) query.academicYear = academicYear;
-    if (hostelStatus) query.hostelStatus = hostelStatus;
-    if (hostel) query.hostel = hostel;
-
-    if (search) {
-      const searchRegex = new RegExp(search, 'i');
-      query.$or = [
-        { name: searchRegex },
-        { rollNumber: searchRegex }
-      ];
-    }
-
-    const populateOpts = [
-      { path: 'hostel', select: '_id name' },
-      { path: 'hostelCategory', select: '_id name' }
-    ];
 
     let students;
     let count;
 
-    if (hasAcademicFilter) {
-      const allDocs = await User.find(query)
-        .select('-password')
-        .populate(populateOpts)
-        .sort({ createdAt: -1 })
-        .lean();
-      let enriched = await enrichStudentsAcademics(allDocs);
-      enriched = enriched.filter(s => matchesAcademicFilters(s, academicFilters));
-      count = enriched.length;
-      const pageNum = parseInt(page, 10);
-      const limitNum = parseInt(limit, 10);
-      students = enriched.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+    if (academicYear) {
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        filters: { gender, category, roomNumber, batch, search, hostelStatus, hostel },
+        page,
+        limit,
+        academicFilters
+      });
+      students = result.students;
+      count = result.count;
     } else {
-      students = await User.find(query)
-        .select('-password')
-        .populate(populateOpts)
-        .sort({ createdAt: -1 })
-        .limit(limit * 1)
-        .skip((page - 1) * limit)
-        .lean();
-      students = await enrichStudentsAcademics(students);
-      count = await User.countDocuments(query);
+      const query = { role: 'student' };
+
+      if (gender) query.gender = gender;
+      if (category) query.category = category;
+      if (roomNumber) query.roomNumber = roomNumber;
+      if (batch) query.batch = batch;
+      if (hostelStatus) query.hostelStatus = hostelStatus;
+      if (hostel) query.hostel = hostel;
+
+      if (search) {
+        const searchRegex = new RegExp(search, 'i');
+        query.$or = [
+          { name: searchRegex },
+          { rollNumber: searchRegex }
+        ];
+      }
+
+      const populateOpts = [
+        { path: 'hostel', select: '_id name' },
+        { path: 'hostelCategory', select: '_id name' }
+      ];
+
+      if (hasAcademicFilter) {
+        const allDocs = await User.find(query)
+          .select('-password')
+          .populate(populateOpts)
+          .sort({ createdAt: -1 })
+          .lean();
+        let enriched = await enrichStudentsAcademics(allDocs);
+        enriched = enriched.filter(s => matchesAcademicFilters(s, academicFilters));
+        count = enriched.length;
+        const pageNum = parseInt(page, 10);
+        const limitNum = parseInt(limit, 10);
+        students = enriched.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+      } else {
+        students = await User.find(query)
+          .select('-password')
+          .populate(populateOpts)
+          .sort({ createdAt: -1 })
+          .limit(limit * 1)
+          .skip((page - 1) * limit)
+          .lean();
+        students = await enrichStudentsAcademics(students);
+        count = await User.countDocuments(query);
+      }
     }
+
+    students = await attachResolvedExpiryDates(students);
 
     res.json({
       success: true,
@@ -1420,6 +1590,7 @@ export const updateStudent = async (req, res, next) => {
       throw createError(404, 'Student not found');
     }
 
+    const previousHostelStatus = student.hostelStatus;
     const academicSnapshot = await enrichStudentAcademics(student);
 
     // Resolve hostel/category for room validation under new hierarchy
@@ -1502,20 +1673,24 @@ export const updateStudent = async (req, res, next) => {
       throw createError(400, 'Invalid hostel status');
     }
 
-    // Validate bed and locker assignment if provided
-    if (bedNumber) {
-      // Check if bed is already occupied by another student
-      const bedOccupied = await User.findOne({ 
-        bedNumber, 
-        role: 'student',
-        hostelStatus: 'Active',
-        _id: { $ne: student._id } // Exclude current student
-      });
+    // Validate bed and locker assignment if provided (scoped to academic year)
+    const targetAcademicYear = academicYear || student.academicYear;
+    let occupancyRoomDoc = roomDoc;
+    if (!occupancyRoomDoc && (bedNumber || lockerNumber)) {
+      occupancyRoomDoc = await Room.findById(student.room);
+    }
+
+    if (bedNumber && occupancyRoomDoc) {
+      const bedOccupied = await isBedOccupiedForAcademicYear(
+        occupancyRoomDoc,
+        bedNumber,
+        targetAcademicYear,
+        student._id
+      );
       if (bedOccupied) {
-        throw createError(400, 'Selected bed is already occupied by another student');
+        throw createError(400, 'Selected bed is already occupied for this academic year');
       }
-      
-      // Validate bed format matches room
+
       const roomToCheck = roomNumber || student.roomNumber;
       const expectedBedFormat = `${roomToCheck} Bed `;
       if (!bedNumber.startsWith(expectedBedFormat)) {
@@ -1523,19 +1698,17 @@ export const updateStudent = async (req, res, next) => {
       }
     }
 
-    if (lockerNumber) {
-      // Check if locker is already occupied by another student
-      const lockerOccupied = await User.findOne({ 
-        lockerNumber, 
-        role: 'student',
-        hostelStatus: 'Active',
-        _id: { $ne: student._id } // Exclude current student
-      });
+    if (lockerNumber && occupancyRoomDoc) {
+      const lockerOccupied = await isLockerOccupiedForAcademicYear(
+        occupancyRoomDoc,
+        lockerNumber,
+        targetAcademicYear,
+        student._id
+      );
       if (lockerOccupied) {
-        throw createError(400, 'Selected locker is already occupied by another student');
+        throw createError(400, 'Selected locker is already occupied for this academic year');
       }
-      
-      // Validate locker format matches room
+
       const roomToCheck = roomNumber || student.roomNumber;
       const expectedLockerFormat = `${roomToCheck} Locker `;
       if (!lockerNumber.startsWith(expectedLockerFormat)) {
@@ -1543,20 +1716,8 @@ export const updateStudent = async (req, res, next) => {
       }
     }
 
-    // Handle photo uploads
+    // Handle guardian photo uploads (student photo comes from SDMS)
     if (req.files) {
-      if (req.files.studentPhoto && req.files.studentPhoto[0]) {
-        // Delete old photo if exists
-        if (student.studentPhoto) {
-          try {
-            await deleteFromS3(student.studentPhoto);
-          } catch (error) {
-            console.error('Error deleting old student photo:', error);
-          }
-        }
-        // Upload new photo
-        student.studentPhoto = await uploadToS3(req.files.studentPhoto[0], 'student-photos');
-      }
       if (req.files.guardianPhoto1 && req.files.guardianPhoto1[0]) {
         // Delete old photo if exists
         if (student.guardianPhoto1) {
@@ -1724,7 +1885,23 @@ export const updateStudent = async (req, res, next) => {
       student.graduationStatus = 'Enrolled';
     }
 
+    if (hostelStatus === 'Inactive' && previousHostelStatus === 'Active') {
+      student.bedNumber = undefined;
+      student.lockerNumber = undefined;
+      if (['Active', 'Extended'].includes(student.applicationStatus)) {
+        student.applicationStatus = 'Expired';
+      }
+      await closeActiveOccupancyHistory({
+        studentId: student._id,
+        academicYear: student.academicYear,
+        status: 'Withdrawn',
+        expiryReason: 'admin_inactive'
+      });
+    }
+
     await student.save();
+
+    await syncStudentHostelFeeSafely(student);
 
     const enrichedStudent = await enrichStudentAcademics(student.toObject());
 
@@ -1762,18 +1939,57 @@ export const updateStudent = async (req, res, next) => {
   }
 };
 
-// Delete student
+// Delete student (per academic year, or full account if last enrollment)
 export const deleteStudent = async (req, res, next) => {
   try {
     const student = await User.findOne({ _id: req.params.id, role: 'student' });
-    
+
     if (!student) {
       throw createError(404, 'Student not found');
     }
 
-    // Delete photos from S3
-    const photosToDelete = [student.studentPhoto, student.guardianPhoto1, student.guardianPhoto2].filter(Boolean);
-    
+    const academicYear = req.query.academicYear || student.academicYear;
+    if (!academicYear || !validateAcademicYear(academicYear)) {
+      throw createError(400, 'Valid academicYear is required (YYYY-YYYY)');
+    }
+
+    const removal = await removeStudentEnrollmentForAcademicYear({
+      studentId: student._id,
+      academicYear
+    });
+
+    if (!removal.ok) {
+      const status = removal.code === 'NOT_CURRENT_YEAR' ? 400 : 404;
+      throw createError(status, removal.message);
+    }
+
+    if (removal.action === 'year_removed') {
+      return res.json({
+        success: true,
+        message: `Removed enrollment for ${academicYear}. Student account kept for other academic years.`,
+        data: {
+          deletedCompletely: false,
+          academicYear,
+          remainingEnrollments: removal.remainingEnrollments,
+          studentId: student._id
+        }
+      });
+    }
+
+    const studentToRemove = removal.student;
+
+    const enrichedRemoved = await enrichStudentAcademics(studentToRemove.toObject());
+    const feesStudentId = resolveFeesStudentId(studentToRemove, enrichedRemoved);
+    if (feesStudentId) {
+      await deleteAllStudentHostelFeesSafely(feesStudentId);
+    }
+
+    const photosToDelete = [
+      studentToRemove.studentPhoto,
+      studentToRemove.guardianPhoto1,
+      studentToRemove.guardianPhoto2
+    ].filter(Boolean);
+
     for (const photoUrl of photosToDelete) {
       try {
         await deleteFromS3(photoUrl);
@@ -1782,26 +1998,25 @@ export const deleteStudent = async (req, res, next) => {
       }
     }
 
-    // Delete related records first
-    // Delete complaints
-    await Complaint.deleteMany({ student: student._id });
-    
-    // Delete leave requests
-    await Leave.deleteMany({ student: student._id });
+    await Complaint.deleteMany({ student: studentToRemove._id });
+    await Leave.deleteMany({ student: studentToRemove._id });
+    await RoomOccupancyHistory.deleteMany({ student: studentToRemove._id });
+    await FeeReminder.deleteMany({ student: studentToRemove._id });
 
-    // Delete the student
-    const deleteResult = await User.findByIdAndDelete(req.params.id);
-
+    const deleteResult = await User.findByIdAndDelete(studentToRemove._id);
     if (!deleteResult) {
       throw createError(500, 'Failed to delete student from database');
     }
 
-    // Also delete the corresponding TempStudent record
-    await TempStudent.deleteOne({ mainStudentId: student._id });
+    await TempStudent.deleteOne({ mainStudentId: studentToRemove._id });
 
     res.json({
       success: true,
-      message: 'Student deleted successfully'
+      message: `Student removed completely (no remaining enrollments for ${academicYear}).`,
+      data: {
+        deletedCompletely: true,
+        academicYear
+      }
     });
   } catch (error) {
     next(error);
@@ -1904,18 +2119,17 @@ export const getStudentsCount = async (req, res, next) => {
 // Get course counts for admin dashboard (resolves sql_* and course name strings)
 export const getCourseCounts = async (req, res, next) => {
   try {
-    const { course, branch, gender, category, roomNumber, batch, academicYear, hostelStatus } = req.query;
+    const { course, branch, category, roomNumber, academicYear, hostelStatus, hostel } = req.query;
 
     const query = { role: 'student' };
 
     if (course) query.course = course;
     if (branch) query.branch = branch;
-    if (gender) query.gender = gender;
     if (category) query.category = category;
     if (roomNumber) query.roomNumber = roomNumber;
-    if (batch) query.batch = batch;
     if (academicYear) query.academicYear = academicYear;
     if (hostelStatus) query.hostelStatus = hostelStatus;
+    if (hostel) query.hostel = hostel;
 
     const students = await User.find(query).select('rollNumber admissionNumber').lean();
     const enriched = await enrichStudentsAcademics(students);
@@ -2157,331 +2371,13 @@ export const getElectricityBills = async (req, res, next) => {
   }
 };
 
-// Batch Renewal
+// Batch Renewal — disabled (use academic-year registration + automatic expiry)
 export const renewBatches = async (req, res, next) => {
   try {
-    const { fromAcademicYear, toAcademicYear, studentIds, displayedStudentIds } = req.body;
-    const adminId = req.admin?._id || null;
-
-    if (!fromAcademicYear || !toAcademicYear || !studentIds) {
-      throw createError(400, 'Academic years and a list of student IDs are required.');
-    }
-    if (!Array.isArray(studentIds)) {
-      throw createError(400, 'studentIds must be an array.');
-    }
-
-    if (!validateAcademicYear(fromAcademicYear) || !validateAcademicYear(toAcademicYear)) {
-      throw createError(400, 'Invalid academic year format.');
-    }
-
-    const [fromStart] = fromAcademicYear.split('-').map(Number);
-    const [toStart] = toAcademicYear.split('-').map(Number);
-
-    if (toStart <= fromStart) {
-      throw createError(400, '"To" academic year must be after "From" academic year.');
-    }
-
-    // Import FeeStructure model
-    const FeeStructure = (await import('../models/FeeStructure.js')).default;
-
-    // Determine if we should deactivate unchecked students
-    // Only deactivate if displayedStudentIds is explicitly provided (course filter was applied)
-    let uncheckedStudentIds = [];
-    
-    if (displayedStudentIds && Array.isArray(displayedStudentIds) && displayedStudentIds.length > 0) {
-      // Course filter was applied - deactivate unchecked students from that course only
-      uncheckedStudentIds = displayedStudentIds.filter(id => !studentIds.includes(id));
-      console.log(`🔍 Renewal with course filter: ${displayedStudentIds.length} displayed, ${studentIds.length} selected, ${uncheckedStudentIds.length} to deactivate`);
-    } else {
-      // No course filter - only renew selected students, DON'T deactivate anyone
-      console.log(`🔍 Renewal without course filter: ${studentIds.length} students to renew, NO deactivations`);
-    }
-
-    let renewedCount = 0;
-    let graduatedCount = 0;
-    let deactivatedCount = 0;
-    const errors = [];
-    const graduationDetails = [];
-    const renewalDetails = [];
-
-    // Renew selected students
-    for (const studentId of studentIds) {
-      try {
-        const student = await User.findById(studentId);
-        if (!student) {
-          errors.push({ id: studentId, error: 'Student not found.' });
-          continue;
-        }
-
-        let maxYear = 3; // Default
-        try {
-          const courseDoc = await Course.findById(student.course);
-          if (courseDoc && courseDoc.duration) {
-            maxYear = courseDoc.duration;
-          }
-        } catch (error) {
-          console.error('Error fetching course for batch renewal:', error);
-          // Fallback to old logic
-          const courseKey = Object.keys(COURSES).find(key => COURSES[key] === student.course);
-          maxYear = (courseKey === 'BTECH' || courseKey === 'PHARMACY') ? 4 : 3;
-        }
-
-        // Graduation logic: only if final year AND batch end year matches new academic year end year
-        const batchEndYear = getBatchEndYear(student.batch, maxYear);
-        const toAcademicEndYear = getEndYear(toAcademicYear);
-
-        if (
-          student.year >= maxYear &&
-          batchEndYear &&
-          toAcademicEndYear &&
-          batchEndYear === toAcademicEndYear
-        ) {
-          graduatedCount++;
-          // Mark as graduated but KEEP hostel access active
-          student.graduationStatus = 'Graduated';
-          student.academicYear = toAcademicYear; // Update to new academic year for graduation records
-          // Keep hostelStatus as 'Active' - they're still in hostel until they physically leave
-          await student.save();
-
-          graduationDetails.push({
-            studentId: student._id,
-            name: student.name,
-            rollNumber: student.rollNumber,
-            course: student.course,
-            year: student.year,
-            status: 'Graduated (Hostel Access Active)',
-            note: 'Student has graduated (batch end year matches academic year) but retains hostel access until physical departure'
-          });
-          continue;
-        }
-
-        // Store previous fee information for renewal history
-        const previousFees = {
-          term1Fee: student.calculatedTerm1Fee || 0,
-          term2Fee: student.calculatedTerm2Fee || 0,
-          term3Fee: student.calculatedTerm3Fee || 0,
-          totalFee: student.totalCalculatedFee || 0,
-          term1LateFee: student.term1LateFee || 0,
-          term2LateFee: student.term2LateFee || 0,
-          term3LateFee: student.term3LateFee || 0
-        };
-        const previousYear = student.year;
-        const previousAcademicYear = student.academicYear;
-
-        // Calculate new year
-        const newYear = student.year + 1;
-
-        // Fetch new fee structure for the new academic year
-        let newFees = {
-          term1Fee: 0,
-          term2Fee: 0,
-          term3Fee: 0,
-          totalFee: 0
-        };
-        let feeStructureId = null;
-
-        try {
-          const feeStructure = await FeeStructure.getFeeStructure(
-            toAcademicYear,
-            student.course,
-            student.branch,
-            newYear,
-            student.category
-          );
-
-          if (feeStructure) {
-            feeStructureId = feeStructure._id;
-            
-            // For NEW academic year, calculate fees WITHOUT concession
-            // Concession must be re-requested and re-approved for the new year
-            newFees = {
-              term1Fee: feeStructure.term1Fee,
-              term2Fee: feeStructure.term2Fee,
-              term3Fee: feeStructure.term3Fee,
-              totalFee: feeStructure.totalFee
-            };
-
-            // Update student's calculated fees (without concession for new year)
-            student.calculatedTerm1Fee = feeStructure.term1Fee;
-            student.calculatedTerm2Fee = feeStructure.term2Fee;
-            student.calculatedTerm3Fee = feeStructure.term3Fee;
-            student.totalCalculatedFee = feeStructure.totalFee;
-
-            console.log(`💰 Fee update for ${student.rollNumber}:`, {
-              previous: previousFees,
-              new: newFees,
-              note: 'New year - no concession applied. Concession must be re-requested.'
-            });
-          } else {
-            console.log(`⚠️ No fee structure found for ${student.rollNumber} - ${toAcademicYear}, Year ${newYear}, Category ${student.category}`);
-          }
-        } catch (feeError) {
-          console.error(`Error fetching fee structure for ${student.rollNumber}:`, feeError);
-        }
-
-        // Store previous year's concession in academicYearConcessions (if any)
-        const previousConcession = student.concession || 0;
-        const hadApprovedConcession = previousConcession > 0 && student.concessionApproved;
-        
-        if (previousConcession > 0) {
-          if (!student.academicYearConcessions) {
-            student.academicYearConcessions = [];
-          }
-          
-          // Check if entry already exists for previous year
-          const existingEntry = student.academicYearConcessions.find(
-            c => c.academicYear === previousAcademicYear
-          );
-          
-          if (!existingEntry) {
-            student.academicYearConcessions.push({
-              academicYear: previousAcademicYear,
-              amount: previousConcession,
-              status: student.concessionApproved ? 'approved' : 'pending',
-              requestedBy: student.concessionRequestedBy,
-              requestedAt: student.concessionRequestedAt,
-              approvedBy: student.concessionApprovedBy,
-              approvedAt: student.concessionApprovedAt,
-              notes: `Archived during renewal to ${toAcademicYear}`
-            });
-          }
-          
-          // Add to concession history
-          if (!student.concessionHistory) {
-            student.concessionHistory = [];
-          }
-          student.concessionHistory.push({
-            action: 'renewed',
-            amount: previousConcession, // Keep same amount for new request
-            previousAmount: previousConcession,
-            academicYear: toAcademicYear,
-            performedBy: adminId,
-            performedAt: new Date(),
-            notes: `Auto-requested concession of ₹${previousConcession} for ${toAcademicYear} based on previous year's approved concession.`
-          });
-        }
-
-        // Handle concession for new academic year
-        if (hadApprovedConcession) {
-          // If student had an APPROVED concession, auto-create a new request for the same amount
-          // This request will go to the approval queue for Super Admin to approve
-          student.concession = previousConcession; // Request same amount
-          student.concessionApproved = false; // Needs approval
-          student.concessionApprovedBy = null;
-          student.concessionApprovedAt = null;
-          student.concessionRequestedBy = adminId; // System/admin who did renewal
-          student.concessionRequestedAt = new Date();
-          
-          // Add new year entry to academicYearConcessions as pending
-          student.academicYearConcessions.push({
-            academicYear: toAcademicYear,
-            amount: previousConcession,
-            status: 'pending',
-            requestedBy: adminId,
-            requestedAt: new Date(),
-            notes: `Auto-requested based on ${previousAcademicYear} approved concession of ₹${previousConcession}`
-          });
-          
-          console.log(`📋 Auto-created concession request for ${student.rollNumber}: ₹${previousConcession} (pending approval)`);
-        } else {
-          // No approved concession - reset to 0
-          student.concession = 0;
-          student.concessionApproved = false;
-          student.concessionApprovedBy = null;
-          student.concessionApprovedAt = null;
-          student.concessionRequestedBy = null;
-          student.concessionRequestedAt = null;
-        }
-
-        // Reset late fees for the new academic year
-        student.term1LateFee = 0;
-        student.term2LateFee = 0;
-        student.term3LateFee = 0;
-        student.lateFeeApplied = {
-          term1: false,
-          term2: false,
-          term3: false
-        };
-
-        // Create renewal history entry
-        const renewalEntry = {
-          previousAcademicYear,
-          previousYear,
-          previousFees,
-          newAcademicYear: toAcademicYear,
-          newYear,
-          newFees,
-          feeStructureId,
-          previousConcession: previousConcession,
-          newConcession: 0, // Reset - must be re-requested
-          renewedAt: new Date(),
-          renewedBy: adminId,
-          notes: `Renewed from ${previousAcademicYear} (Year ${previousYear}) to ${toAcademicYear} (Year ${newYear}). Concession reset to ₹0.`
-        };
-
-        // Add to renewal history
-        if (!student.renewalHistory) {
-          student.renewalHistory = [];
-        }
-        student.renewalHistory.push(renewalEntry);
-        student.totalRenewals = (student.totalRenewals || 0) + 1;
-
-        // Update student's year and academic year
-        student.year = newYear;
-        student.academicYear = toAcademicYear;
-        student.hostelStatus = 'Active'; // Ensure they remain active
-        student.graduationStatus = 'Enrolled'; // Ensure they remain enrolled
-
-        await student.save();
-        renewedCount++;
-
-        // Add to renewal details for response
-        renewalDetails.push({
-          studentId: student._id,
-          name: student.name,
-          rollNumber: student.rollNumber,
-          previousYear,
-          newYear,
-          previousFees,
-          newFees,
-          previousConcession: previousConcession,
-          newConcession: hadApprovedConcession ? previousConcession : 0,
-          concessionAutoRequested: hadApprovedConcession, // Auto-created request for approval
-          concessionPendingApproval: hadApprovedConcession, // Needs Super Admin approval
-          totalRenewals: student.totalRenewals
-        });
-
-      } catch (error) {
-        errors.push({ id: studentId, error: error.message });
-      }
-    }
-
-    // Deactivate unselected students
-    for (const studentId of uncheckedStudentIds) {
-      try {
-        const student = await User.findById(studentId);
-        if (student) {
-          student.hostelStatus = 'Inactive';
-          // Don't change graduation status for unselected students
-          await student.save();
-          deactivatedCount++;
-        }
-      } catch (error) {
-        errors.push({ id: studentId, error: `Failed to deactivate: ${error.message}` });
-      }
-    }
-
-    res.json({
-      success: true,
-      message: 'Batch renewal process completed.',
-      data: {
-        renewedCount,
-        graduatedCount,
-        deactivatedCount,
-        errors,
-        graduationDetails,
-        renewalDetails
-      },
+    return res.status(410).json({
+      success: false,
+      message: 'Batch renewal has been removed. Register students for each new academic year via Register from SQL. Applications expire automatically at the configured expiry date.',
+      code: 'RENEWAL_DISABLED'
     });
   } catch (error) {
     next(error);
@@ -3028,12 +2924,13 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
       .skip(skip)
       .limit(parseInt(limit))
       .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
-    
-    // Transform students to include courseId
-    const transformedStudents = students.map(student => ({
-      ...student.toObject(),
-      courseId: student.course._id,
-      course: student.course.name
+
+    const enrichedStudents = await enrichStudentsAcademics(students.map((s) => s.toObject()));
+
+    const transformedStudents = enrichedStudents.map((student) => ({
+      ...student,
+      courseId: student.course?._id || student.courseId,
+      course: student.course?.name || student.course
     }));
     
     const total = await User.countDocuments(query);
@@ -3073,48 +2970,45 @@ export const generateAdmitCard = async (req, res, next) => {
     if (!student || student.role !== 'student') {
       throw createError(404, 'Student not found');
     }
-    
-    // Check if student has photo
-    if (!student.studentPhoto) {
-      throw createError(400, 'Student photo is required for admit card generation');
+
+    const enriched = await enrichStudentAcademics(student.toObject());
+
+    if (!enriched.studentPhoto) {
+      throw createError(400, 'Student photo is required for admit card generation. No photo found in SDMS for this student.');
     }
-    
+
     // Check if concession is pending approval
     if (student.concession > 0 && !student.concessionApproved) {
       throw createError(400, 'Cannot generate admit card. Concession is pending approval. Please approve the concession first.');
     }
-    
-    // Fetch the image and convert to base64
-    let photoBase64 = null;
-    if (student.studentPhoto) {
-      photoBase64 = await fetchImageAsBase64(student.studentPhoto);
-      if (!photoBase64) {
-        throw createError(400, 'Failed to fetch student photo');
-      }
+
+    const photoBase64 = await photoToBase64ForExport(enriched.studentPhoto, fetchImageAsBase64);
+    if (!photoBase64) {
+      throw createError(400, 'Failed to load student photo from SDMS');
     }
-    
+
     res.json({
       success: true,
       data: {
         student: {
           id: student._id,
-          name: student.name,
-          rollNumber: student.rollNumber,
-          course: student.course?.name || student.course,
+          name: enriched.name || student.name,
+          rollNumber: enriched.rollNumber || student.rollNumber,
+          course: enriched.course?.name || enriched.course || student.course?.name || student.course,
           courseId: student.course?._id || student.course,
-          year: student.year,
-          branch: student.branch?.name || student.branch,
+          year: enriched.year ?? student.year,
+          branch: enriched.branch?.name || enriched.branch || student.branch?.name || student.branch,
           gender: student.gender,
           category: student.category,
           roomNumber: student.roomNumber,
-          studentPhone: student.studentPhone,
-          parentPhone: student.parentPhone,
+          studentPhone: enriched.studentPhone || student.studentPhone,
+          parentPhone: enriched.parentPhone || student.parentPhone,
           email: student.email,
-          batch: student.batch,
+          batch: enriched.batch || student.batch,
           academicYear: student.academicYear,
           hostelId: student.hostelId,
           hostelStatus: student.hostelStatus,
-          studentPhoto: photoBase64, // Return base64 image instead of URL
+          studentPhoto: photoBase64,
           address: student.address,
           concession: student.concession || 0,
           calculatedTerm1Fee: student.calculatedTerm1Fee || 0,
@@ -3145,30 +3039,31 @@ export const generateBulkAdmitCards = async (req, res, next) => {
     .populate('course', 'name')
     .populate('branch', 'name')
       .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved');
-    
-    // Check if all students have photos
-    const studentsWithoutPhotos = students.filter(s => !s.studentPhoto);
+
+    const enrichedStudents = await enrichStudentsAcademics(students.map((s) => s.toObject()));
+
+    const studentsWithoutPhotos = enrichedStudents.filter((s) => !s.studentPhoto);
     if (studentsWithoutPhotos.length > 0) {
       const names = studentsWithoutPhotos.map(s => s.name).join(', ');
-      throw createError(400, `Students without photos: ${names}. All students must have photos for admit card generation.`);
+      throw createError(400, `Students without photos in SDMS: ${names}. All students must have photos for admit card generation.`);
     }
-    
-    // Check if any students have pending concession approvals
-    const studentsWithPendingConcession = students.filter(s => s.concession > 0 && !s.concessionApproved);
+
+    const studentsWithPendingConcession = enrichedStudents.filter(
+      (s) => (s.concession > 0 && !s.concessionApproved)
+    );
     if (studentsWithPendingConcession.length > 0) {
       const names = studentsWithPendingConcession.map(s => s.name).join(', ');
       throw createError(400, `Cannot generate admit cards for students with pending concession approvals: ${names}. Please approve their concessions first.`);
     }
-    
-    // Fetch images for all students
+
     const studentsWithPhotos = [];
-    for (const student of students) {
+    for (const student of enrichedStudents) {
       try {
-        const photoBase64 = await fetchImageAsBase64(student.studentPhoto);
+        const photoBase64 = await photoToBase64ForExport(student.studentPhoto, fetchImageAsBase64);
         if (!photoBase64) {
-          throw createError(400, `Failed to fetch photo for student: ${student.name}`);
+          throw createError(400, `Failed to load photo for student: ${student.name}`);
         }
-        
+
         studentsWithPhotos.push({
           id: student._id,
           name: student.name,
@@ -3186,7 +3081,7 @@ export const generateBulkAdmitCards = async (req, res, next) => {
           academicYear: student.academicYear,
           hostelId: student.hostelId,
           hostelStatus: student.hostelStatus,
-          studentPhoto: photoBase64, // Return base64 image instead of URL
+          studentPhoto: photoBase64,
           address: student.address
         });
       } catch (error) {
@@ -3210,34 +3105,43 @@ export const generateBulkAdmitCards = async (req, res, next) => {
 export const getRoomBedLockerAvailability = async (req, res, next) => {
   try {
     const { roomNumber } = req.params;
+    const { academicYear, hostel, category } = req.query;
     
     if (!roomNumber) {
       throw createError(400, 'Room number is required');
     }
 
-    // Find the room
-    const room = await Room.findOne({ roomNumber });
+    const roomQuery = { roomNumber };
+    if (hostel) roomQuery.hostel = hostel;
+    if (category) roomQuery.category = category;
+
+    const room = await Room.findOne(roomQuery);
     if (!room) {
       throw createError(404, 'Room not found');
     }
 
-    // Get all students currently in this room
-    const studentsInRoom = await User.find({ 
-      roomNumber: roomNumber, 
-      role: 'student',
-      hostelStatus: 'Active'
-    }).select('bedNumber lockerNumber');
+    const { occupiedBeds: studentBeds, occupiedLockers: studentLockers } =
+      await getOccupiedBedsAndLockersForAcademicYear(room, academicYear);
 
-    // Get occupied beds and lockers
-    const occupiedBeds = studentsInRoom
-      .filter(student => student.bedNumber)
-      .map(student => student.bedNumber);
-    
-    const occupiedLockers = studentsInRoom
-      .filter(student => student.lockerNumber)
-      .map(student => student.lockerNumber);
+    const occupiedBedsList = [...studentBeds];
+    const occupiedLockersList = [...studentLockers];
 
-    // Generate all possible beds and lockers based on room's bed count
+    const StaffGuest = (await import('../models/StaffGuest.js')).default;
+    const staffInRoom = await StaffGuest.find({
+      type: 'staff',
+      roomNumber: room.roomNumber,
+      isActive: true
+    }).select('bedNumber');
+
+    staffInRoom.forEach((staff) => {
+      if (staff.bedNumber && !occupiedBedsList.includes(staff.bedNumber)) {
+        occupiedBedsList.push(staff.bedNumber);
+      }
+    });
+
+    const occupiedBedSet = new Set(occupiedBedsList);
+    const occupiedLockerSet = new Set(occupiedLockersList);
+
     const allBeds = [];
     const allLockers = [];
     
@@ -3248,17 +3152,16 @@ export const getRoomBedLockerAvailability = async (req, res, next) => {
       allBeds.push({
         value: bedNumber,
         label: bedNumber,
-        occupied: occupiedBeds.includes(bedNumber)
+        occupied: occupiedBedSet.has(bedNumber)
       });
       
       allLockers.push({
         value: lockerNumber,
         label: lockerNumber,
-        occupied: occupiedLockers.includes(lockerNumber)
+        occupied: occupiedLockerSet.has(lockerNumber)
       });
     }
 
-    // Filter out occupied beds and lockers for available options
     const availableBeds = allBeds.filter(bed => !bed.occupied);
     const availableLockers = allLockers.filter(locker => !locker.occupied);
 
@@ -3275,9 +3178,10 @@ export const getRoomBedLockerAvailability = async (req, res, next) => {
         allLockers,
         availableBeds,
         availableLockers,
-        occupiedBeds,
-        occupiedLockers,
-        currentOccupancy: studentsInRoom.length
+        occupiedBeds: [...occupiedBedSet],
+        occupiedLockers: [...occupiedLockerSet],
+        currentOccupancy: occupiedBedSet.size,
+        academicYear: academicYear || null
       }
     });
   } catch (error) {
@@ -3681,7 +3585,9 @@ export const approveConcession = async (req, res, next) => {
     student.concessionApprovedAt = new Date();
     
     await student.save();
-    
+
+    await syncStudentHostelFeeSafely(student);
+
     res.json({
       success: true,
       message: previousAmount !== finalAmount 
@@ -3859,7 +3765,9 @@ export const rejectConcession = async (req, res, next) => {
     }
     
     await student.save();
-    
+
+    await syncStudentHostelFeeSafely(student);
+
     res.json({
       success: true,
       message: newConcessionAmount !== undefined && newConcessionAmount !== null && newConcessionAmount !== 0

@@ -119,7 +119,7 @@ export const studentLogin = async (req, res, next) => {
       data: {
         token,
         student: buildStudentAuthPayload(enriched),
-        requiresPasswordChange: !student.isPasswordChanged
+        requiresPasswordChange: false
       }
     });
   } catch (error) {
@@ -400,7 +400,7 @@ export const verifySSOToken = async (req, res, next) => {
         data: {
           token,
           student: buildStudentAuthPayload(enriched),
-          requiresPasswordChange: !student.isPasswordChanged
+          requiresPasswordChange: false
         }
       });
     }

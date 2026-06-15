@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 dotenv.config();
+import { connectFeesDatabase } from './config/feesDatabase.js';
 
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -40,6 +41,7 @@ import nocChecklistRoutes from './routes/nocChecklistRoutes.js';
 import apiRouter from './routes/index.js';
 import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
 import { scheduleLateFeeProcessing } from './utils/lateFeeProcessor.js';
+import { scheduleApplicationExpiryProcessing } from './utils/applicationExpiryJob.js';
 import Notification from './models/Notification.js';
 import { errorHandler } from './utils/error.js';
 
@@ -125,6 +127,14 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/hostel-management')
   .then(() => console.log('Connected to MongoDB'))
   .catch((err) => console.error('MongoDB connection error:', err));
+
+if (process.env.FEES_MONGODB_URI) {
+  connectFeesDatabase().catch((err) => {
+    console.error('Fees MongoDB initial connection failed:', err.message);
+  });
+} else {
+  console.warn('FEES_MONGODB_URI not set — external studentfees sync is disabled');
+}
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -277,4 +287,7 @@ httpServer.listen(PORT, () => {
   // Start menu image cleanup
   setupMenuImageCleanup();
   console.log('🧹 Menu image cleanup scheduled');
+
+  scheduleApplicationExpiryProcessing();
+  console.log('📅 Application expiry processing scheduled');
 }); 

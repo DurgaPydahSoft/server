@@ -327,6 +327,24 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid academic year format! Use format YYYY-YYYY with a 1-year difference (e.g., 2022-2023)`
     }
   },
+  applicationExpiryDate: {
+    type: Date,
+    required: false
+  },
+  applicationStatus: {
+    type: String,
+    enum: ['Active', 'Expired', 'Extended'],
+    default: 'Active'
+  },
+  applicationExpiryExtendedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    required: false
+  },
+  applicationExpiryExtendedAt: {
+    type: Date,
+    required: false
+  },
   hostelStatus: {
     type: String,
     enum: ['Active', 'Inactive'],

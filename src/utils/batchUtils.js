@@ -28,3 +28,38 @@ export const getBatchEndYear = (batch, courseDuration = 4) => {
   if (startYear) return startYear + courseDuration;
   return null;
 };
+
+/** Academic year for a given admission batch and year of study (e.g. batch 2024, year 3 → 2026-2027). */
+export const resolveAcademicYearFromBatchAndYear = (batch, yearOfStudy) => {
+  const batchStart = getBatchStartYear(batch);
+  const year = Number(yearOfStudy);
+  if (!batchStart || !Number.isFinite(year) || year < 1) return null;
+
+  const startYear = batchStart + year - 1;
+  const endYear = batchStart + year;
+  return `${startYear}-${endYear}`;
+};
+
+export const validateAcademicYearForBatch = (batch, yearOfStudy, academicYear) => {
+  const batchLabel = normalizeBatchToYear(batch);
+  const year = Number(yearOfStudy);
+  const expected = resolveAcademicYearFromBatchAndYear(batch, year);
+
+  if (!expected) {
+    return {
+      valid: false,
+      expected: null,
+      message: 'Could not determine academic year from batch and year of study.'
+    };
+  }
+
+  if (academicYear === expected) {
+    return { valid: true, expected, message: '' };
+  }
+
+  return {
+    valid: false,
+    expected,
+    message: `For batch ${batchLabel}, year ${year}, academic year must be ${expected}.`
+  };
+};

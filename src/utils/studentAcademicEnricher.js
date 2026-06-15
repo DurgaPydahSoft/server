@@ -1,6 +1,7 @@
 import { fetchStudentByIdentifier, fetchStudentsByIdentifiers } from './sqlService.js';
 import { matchCourseAndBranch } from './courseBranchMatcher.js';
 import { normalizeBatchToYear } from './batchUtils.js';
+import { formatSqlStudentPhoto, resolveStudentPhotoDisplay } from './studentPhotoService.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FAIL_CACHE_TTL_MS = 60 * 1000;
@@ -75,7 +76,11 @@ export const parseSqlStudentRow = async (sqlRow) => {
     }
   }
 
+  const studentPhoto = formatSqlStudentPhoto(sqlRow.student_photo);
+
   return {
+    admissionNumber:
+      (sqlRow.admission_number || sqlRow.admission_no || '').toString().trim() || null,
     course,
     branch,
     year: sqlRow.current_year ? parseInt(sqlRow.current_year, 10) : 1,
@@ -87,6 +92,9 @@ export const parseSqlStudentRow = async (sqlRow) => {
     studentPhone: (sqlRow.student_mobile || '').toString().trim(),
     parentPhone: (sqlRow.parent_mobile1 || '').toString().trim(),
     motherPhone: (sqlRow.parent_mobile2 || '').toString().trim(),
+    studType: (sqlRow.stud_type || '').toString().trim() || null,
+    stud_type: (sqlRow.stud_type || '').toString().trim() || null,
+    studentPhoto,
     academicSource: 'sql'
   };
 };
@@ -183,9 +191,12 @@ export const enrichStudentAcademics = async (student) => {
   const sqlAcademics = await loadAcademicsFromSQL(identifier);
 
   if (sqlAcademics) {
+    const studentPhoto = resolveStudentPhotoDisplay(sqlAcademics.studentPhoto, plain.studentPhoto);
     return {
       ...plain,
       ...sqlAcademics,
+      studentPhoto,
+      photoSource: sqlAcademics.studentPhoto ? 'sdms' : (plain.studentPhoto ? 'mongo' : null),
       academicSource: 'sql'
     };
   }

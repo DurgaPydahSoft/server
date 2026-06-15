@@ -7,13 +7,18 @@ import Payment from '../models/Payment.js';
 import StaffGuest from '../models/StaffGuest.js';
 import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
+import {
+  countStudentsInRoomForAcademicYear,
+  getStudentsInRoomForAcademicYear,
+  getOccupiedBedsAndLockersForAcademicYear
+} from '../utils/roomOccupancyUtils.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
 // Get all rooms with optional filtering
 export const getRooms = async (req, res, next) => {
   try {
-    const { hostel, category, includeLastBill } = req.query;
+    const { hostel, category, includeLastBill, academicYear } = req.query;
     const query = {};
 
     if (hostel) {
@@ -36,18 +41,15 @@ export const getRooms = async (req, res, next) => {
     
     // Get student count and staff count for each room and optionally the last bill
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
-      const studentCount = await User.countDocuments({
-        roomNumber: room.roomNumber,
-        role: 'student',
-        hostelStatus: 'Active'
-      });
-      
-      // Count staff in the room
-      const staffCount = await StaffGuest.countDocuments({
-        type: 'staff',
-        roomNumber: room.roomNumber,
-        isActive: true
-      });
+      const studentCount = await countStudentsInRoomForAcademicYear(room, academicYear);
+
+      const staffCount = academicYear
+        ? 0
+        : await StaffGuest.countDocuments({
+            type: 'staff',
+            roomNumber: room.roomNumber,
+            isActive: true
+          });
       
       const roomObject = room.toObject();
 
@@ -60,7 +62,12 @@ export const getRooms = async (req, res, next) => {
         ...roomObject,
         studentCount,
         staffCount,
-        totalOccupancy: studentCount + staffCount
+        totalOccupancy: studentCount + staffCount,
+        availableBeds: Math.max(0, (room.bedCount || 0) - studentCount - staffCount),
+        occupancyRate: room.bedCount
+          ? Math.round(((studentCount + staffCount) / room.bedCount) * 100)
+          : 0,
+        academicYear: academicYear || null
       };
     }));
 
@@ -256,6 +263,7 @@ export const deleteRoom = async (req, res, next) => {
 // Get room statistics
 export const getRoomStats = async (req, res, next) => {
   try {
+    const { academicYear } = req.query;
     const rooms = await Room.find({})
       .populate('hostel', 'name')
       .populate('category', 'name hostel');
@@ -270,16 +278,14 @@ export const getRoomStats = async (req, res, next) => {
       const categoryName = room.category?.name || 'Uncategorized';
 
       // Get occupancy
-      const studentCount = await User.countDocuments({
-        roomNumber: room.roomNumber,
-        role: 'student',
-        hostelStatus: 'Active'
-      });
-      const staffCount = await StaffGuest.countDocuments({
-        type: 'staff',
-        roomNumber: room.roomNumber,
-        isActive: true
-      });
+      const studentCount = await countStudentsInRoomForAcademicYear(room, academicYear);
+      const staffCount = academicYear
+        ? 0
+        : await StaffGuest.countDocuments({
+            type: 'staff',
+            roomNumber: room.roomNumber,
+            isActive: true
+          });
       const filledBeds = studentCount + staffCount;
 
       if (!statsByHostel.has(hostelId)) {
@@ -346,7 +352,8 @@ export const getRoomStats = async (req, res, next) => {
       success: true,
       data: {
         overall: overallStats,
-        byHostel: combinedStats
+        byHostel: combinedStats,
+        academicYear: academicYear || null
       }
     });
   } catch (error) {
@@ -358,8 +365,8 @@ export const getRoomStats = async (req, res, next) => {
 export const getRoomStudents = async (req, res) => {
   try {
     const { roomId } = req.params;
+    const { academicYear } = req.query;
 
-    // Find the room
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({
@@ -368,31 +375,25 @@ export const getRoomStudents = async (req, res) => {
       });
     }
 
-    // Find all students in this room
-    const students = await User.find({
-      roomNumber: room.roomNumber,
-      role: 'student',
-      hostelStatus: 'Active'
-    })
-      .select('name rollNumber studentPhone course branch year')
-      .populate('course', 'name code')
-      .populate('branch', 'name code');
+    const students = await getStudentsInRoomForAcademicYear(room, academicYear);
 
-    // Find all staff members in this room
-    const StaffGuest = (await import('../models/StaffGuest.js')).default;
-    const staff = await StaffGuest.find({
-      type: 'staff',
-      roomNumber: room.roomNumber,
-      isActive: true
-    })
-      .select('name type profession phoneNumber email department roomNumber bedNumber stayType selectedMonth checkinDate checkoutDate')
-      .sort({ createdAt: -1 });
+    const StaffGuestModel = (await import('../models/StaffGuest.js')).default;
+    const staff = academicYear
+      ? []
+      : await StaffGuestModel.find({
+          type: 'staff',
+          roomNumber: room.roomNumber,
+          isActive: true
+        })
+          .select('name type profession phoneNumber email department roomNumber bedNumber stayType selectedMonth checkinDate checkoutDate')
+          .sort({ createdAt: -1 });
 
     res.json({
       success: true,
       data: {
         students,
-        staff
+        staff,
+        academicYear: academicYear || null
       }
     });
   } catch (error) {
@@ -1194,7 +1195,7 @@ export const getCategories = async (req, res, next) => {
 
 export const getRoomsWithBedAvailability = async (req, res, next) => {
   try {
-    const { hostel, category } = req.query;
+    const { hostel, category, academicYear } = req.query;
     const query = {};
 
     if (hostel) {
@@ -1217,37 +1218,36 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
     
     // Get student count and staff count for each room
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
-      const studentCount = await User.countDocuments({
-        roomNumber: room.roomNumber,
-        role: 'student',
-        hostelStatus: 'Active'
-      });
-      
-      // Count staff in the room (staff can be in any category room, but must match gender)
+      const studentCount = await countStudentsInRoomForAcademicYear(room, academicYear);
+
       const staffCount = await StaffGuest.countDocuments({
         type: 'staff',
         roomNumber: room.roomNumber,
         isActive: true
       });
-      
+
       const roomObject = room.toObject();
       const totalOccupancy = studentCount + staffCount;
-      const availableBeds = room.bedCount - totalOccupancy;
-      
+      const availableBeds = (room.bedCount || 0) - totalOccupancy;
+
       return {
         ...roomObject,
         studentCount,
         staffCount,
         totalOccupancy,
         availableBeds: Math.max(0, availableBeds),
-        occupancyRate: Math.round((totalOccupancy / room.bedCount) * 100)
+        occupancyRate: room.bedCount
+          ? Math.round((totalOccupancy / room.bedCount) * 100)
+          : 0,
+        academicYear: academicYear || null
       };
     }));
 
     res.json({
       success: true,
       data: {
-        rooms: roomsWithDetails
+        rooms: roomsWithDetails,
+        academicYear: academicYear || null
       }
     });
   } catch (error) {

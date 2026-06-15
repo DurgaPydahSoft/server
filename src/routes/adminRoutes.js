@@ -31,6 +31,15 @@ import {
   rejectConcession
 } from '../controllers/adminController.js';
 import {
+  calculateExpiryPreview,
+  getStudentApplicationExpiry,
+  extendApplication,
+  getRoomOccupancyHistory,
+  listApplicationExpiryConfig,
+  upsertApplicationExpiryConfig,
+  deleteApplicationExpiryConfig
+} from '../controllers/applicationExpiryController.js';
+import {
   addStaffGuest,
   getStaffGuests,
   getStaffGuestById,
@@ -211,8 +220,17 @@ router.get('/students/count', getStudentsCount);
 // New route to get course counts
 router.get('/students/course-counts', getCourseCounts);
 
-// New route for renewing student batches
+// New route for renewing student batches (disabled — use SQL registration per academic year)
 router.post('/students/renew-batch', renewBatches);
+
+// Application expiry (academic year management)
+router.post('/students/calculate-expiry', calculateExpiryPreview);
+router.get('/students/:id/application-expiry', getStudentApplicationExpiry);
+router.post('/students/:id/extend-application', superAdminAuth, extendApplication);
+router.get('/rooms/:roomId/occupancy-history', getRoomOccupancyHistory);
+router.get('/application-expiry-config', listApplicationExpiryConfig);
+router.post('/application-expiry-config', adminAuth, upsertApplicationExpiryConfig);
+router.delete('/application-expiry-config/:id', adminAuth, deleteApplicationExpiryConfig);
 
 // New route for updating student years based on batch
 router.post('/students/update-years', updateStudentYears);

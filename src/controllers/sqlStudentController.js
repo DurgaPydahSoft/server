@@ -2,6 +2,7 @@ import { fetchStudentByIdentifier, testSQLConnection, fetchCollegesFromSQL } fro
 import { matchCourseAndBranch } from '../utils/courseBranchMatcher.js';
 import { normalizeBatchToYear } from '../utils/batchUtils.js';
 import { createError } from '../utils/error.js';
+import { formatSqlStudentPhoto } from '../utils/studentPhotoService.js';
 
 /**
  * Map SQL gender to MongoDB gender format
@@ -23,22 +24,7 @@ const mapGender = (sqlGender) => {
  * Map SQL student data to MongoDB format
  */
 const mapStudentData = (sqlData) => {
-  // Handle student photo - could be base64 string or URL
-  let studentPhoto = null;
-  if (sqlData.student_photo) {
-    // If it's already a data URL, use it directly
-    if (sqlData.student_photo.startsWith('data:image')) {
-      studentPhoto = sqlData.student_photo;
-    } 
-    // If it's base64 without data URL prefix, add it
-    else if (sqlData.student_photo.length > 100) { // Likely base64 if long string
-      studentPhoto = `data:image/jpeg;base64,${sqlData.student_photo}`;
-    }
-    // Otherwise treat as URL
-    else {
-      studentPhoto = sqlData.student_photo;
-    }
-  }
+  const studentPhoto = formatSqlStudentPhoto(sqlData.student_photo);
 
   return {
     // Basic info

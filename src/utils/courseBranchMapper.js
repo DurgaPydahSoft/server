@@ -9,6 +9,7 @@ let mappedCoursesCache = null; // NEW: Cached MongoDB-format courses
 let mappedBranchesCache = null; // NEW: Cached MongoDB-format branches
 let cacheTimestamp = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const branchesByCourseCache = new Map();
 
 /**
  * Normalize course/branch name for matching
@@ -168,6 +169,12 @@ export const getBranchesFromSQL = async () => {
  * Get branches for a specific course from SQL
  */
 export const getBranchesByCourseFromSQL = async (courseId) => {
+  const cacheKey = courseId?.toString();
+  const cached = branchesByCourseCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_DURATION) {
+    return cached.data;
+  }
+
   try {
     // Extract SQL ID from courseId (could be MongoDB ObjectId or SQL ID with prefix)
     let sqlCourseId = courseId;
@@ -198,19 +205,36 @@ export const getBranchesByCourseFromSQL = async (courseId) => {
     }
     
     // Map SQL branches to MongoDB format
-    return result.data.map(mapSQLBranchToMongoFormat);
+    const mapped = result.data.map(mapSQLBranchToMongoFormat);
+    branchesByCourseCache.set(cacheKey, { ts: Date.now(), data: mapped });
+    return mapped;
   } catch (error) {
     console.error('❌ Error getting branches by course from SQL:', error);
     // Fallback to MongoDB if SQL fails
     try {
-      const mongoBranches = await Branch.find({ 
-        course: courseId, 
-        isActive: true 
+      let mongoCourseId = null;
+      const courseKey = courseId?.toString() || '';
+
+      if (courseKey.startsWith('sql_')) {
+        const sqlId = parseInt(courseKey.replace('sql_', ''), 10);
+        const mongoCourse = await Course.findOne({ sqlId });
+        mongoCourseId = mongoCourse?._id || null;
+      } else if (/^[0-9a-fA-F]{24}$/.test(courseKey)) {
+        mongoCourseId = courseId;
+      }
+
+      if (!mongoCourseId) {
+        throw error;
+      }
+
+      const mongoBranches = await Branch.find({
+        course: mongoCourseId,
+        isActive: true
       }).sort({ name: 1 });
       console.log('⚠️ Falling back to MongoDB branches:', mongoBranches.length);
       return mongoBranches;
     } catch (mongoError) {
-      console.error('❌ MongoDB fallback also failed:', mongoError);
+      console.error('❌ MongoDB fallback also failed:', mongoError.message || mongoError);
       throw error;
     }
   }

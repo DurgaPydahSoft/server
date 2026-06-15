@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { closeActiveOccupancyHistory } from '../utils/applicationExpiryService.js';
 
 const nocSchema = new mongoose.Schema({
   student: {
@@ -385,9 +386,17 @@ nocSchema.methods.deactivateStudent = async function() {
   await User.findByIdAndUpdate(this.student, { 
     hostelStatus: 'Inactive',
     graduationStatus: 'Dropped',
-    roomNumber: null,      // Vacate room
-    bedNumber: null,       // Vacate bed
-    lockerNumber: null     // Vacate locker
+    roomNumber: null,
+    bedNumber: null,
+    lockerNumber: null,
+    applicationStatus: 'Expired'
+  });
+
+  await closeActiveOccupancyHistory({
+    studentId: this.student,
+    academicYear: student?.academicYear,
+    status: 'Withdrawn',
+    expiryReason: 'noc'
   });
 
   return this.save();
