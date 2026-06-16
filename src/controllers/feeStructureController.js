@@ -302,7 +302,7 @@ export const createAdminFeeStructure = async (req, res, next) => {
     }
 
     // Duplicate guard
-    const existing = await FeeStructure.findOne({
+    const queryObj = {
       academicYear,
       course: normalizedCourse,
       branch: normalizedBranch || null,
@@ -310,8 +310,11 @@ export const createAdminFeeStructure = async (req, res, next) => {
       hostelId: hostelId || null,
       categoryId: categoryId || null,
       feeType,
-    });
+    };
+    console.log('🔍 Duplicate check query:', JSON.stringify(queryObj, null, 2));
+    const existing = await FeeStructure.findOne(queryObj);
     if (existing) {
+      console.log('🚨 Duplicate match found in DB:', JSON.stringify(existing, null, 2));
       throw createError(409, 'Fee rule already exists for the same scope');
     }
 
