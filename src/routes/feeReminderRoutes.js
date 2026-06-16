@@ -22,22 +22,51 @@ const router = express.Router();
 // Student route
 router.get('/student/:studentId', authenticateStudent, getStudentFeeReminders);
 
+const feeReminderAuth = [adminAuth, (req, res, next) => {
+  if (
+    req.admin?.role === 'super_admin' ||
+    req.admin?.role === 'sub_admin' ||
+    req.admin?.role === 'warden' ||
+    req.admin?.permissions?.includes('fee_management')
+  ) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied. You need fee_management permission or appropriate role.'
+  });
+}];
+
+const feeReminderWriteAuth = [adminAuth, (req, res, next) => {
+  if (
+    req.admin?.role === 'super_admin' ||
+    req.admin?.role === 'sub_admin' ||
+    req.admin?.permissions?.includes('fee_management')
+  ) {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: 'Access denied. You need fee_management permission or appropriate admin role.'
+  });
+}];
+
 // Admin/Warden routes - Specific routes first
-router.get('/admin/all', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), getAllFeeReminders);
-router.get('/admin/stats', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), getFeeReminderStats);
-router.get('/admin/accurate-stats', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), getAccurateFeeReminderStats);
-router.post('/admin/create', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin'), createFeeReminder);
-router.post('/admin/send-manual', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), sendManualReminder);
-router.post('/admin/send-bulk', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), sendBulkReminders);
-router.post('/admin/create-all', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), createAllFeeReminders);
-router.post('/admin/sync-fee-status', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), syncFeeStatusWithPayments);
-router.post('/admin/cleanup-orphaned', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin'), cleanupOrphanedReminders);
+router.get('/admin/all', feeReminderAuth, getAllFeeReminders);
+router.get('/admin/stats', feeReminderAuth, getFeeReminderStats);
+router.get('/admin/accurate-stats', feeReminderAuth, getAccurateFeeReminderStats);
+router.post('/admin/create', feeReminderWriteAuth, createFeeReminder);
+router.post('/admin/send-manual', feeReminderAuth, sendManualReminder);
+router.post('/admin/send-bulk', feeReminderAuth, sendBulkReminders);
+router.post('/admin/create-all', feeReminderAuth, createAllFeeReminders);
+router.post('/admin/sync-fee-status', feeReminderAuth, syncFeeStatusWithPayments);
+router.post('/admin/cleanup-orphaned', feeReminderWriteAuth, cleanupOrphanedReminders);
 
 // Parameterized routes last
-router.put('/admin/:feeReminderId/status', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin', 'warden'), updateFeePaymentStatus);
+router.put('/admin/:feeReminderId/status', feeReminderAuth, updateFeePaymentStatus);
 
 // Test email functionality
-router.post('/test-email', adminAuth, restrictTo('super_admin', 'admin', 'sub_admin'), async (req, res) => {
+router.post('/test-email', feeReminderWriteAuth, async (req, res) => {
   try {
     const { studentEmail, reminderNumber = 1 } = req.body;
     
