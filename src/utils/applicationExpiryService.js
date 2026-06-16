@@ -13,6 +13,7 @@ import {
   deleteStudentHostelFeesForAcademicYearSafely,
   resolveFeesStudentId
 } from '../services/feesSyncService.js';
+import { fetchSemesterEndDateFromSQL } from './sqlService.js';
 
 export const getAcademicYearEndYear = (academicYear) => {
   if (!academicYear || !/^\d{4}-\d{4}$/.test(academicYear)) return null;
@@ -32,26 +33,44 @@ export const resolveApplicationExpiryDate = async ({
   academicYear,
   courseName,
   yearOfStudy,
-  manualExpiryDate = null
+  manualExpiryDate = null,
+  sqlCourseId = null
 }) => {
+  // ── Priority 1: Per-student manual extension (Extended status) ──────────────
   if (manualExpiryDate) {
     const d = new Date(manualExpiryDate);
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
   const endYear = getAcademicYearEndYear(academicYear);
-  if (!endYear || !courseName || !yearOfStudy || !academicYear) return null;
+  if (!academicYear || !yearOfStudy) return null;
 
-  const config = await ApplicationExpiryConfig.findOne({
-    academicYear,
-    courseName: courseName.trim(),
-    yearOfStudy: Number(yearOfStudy),
-    isActive: true
-  }).lean();
+  // ── Priority 2: ApplicationExpiryConfig (admin manual override) ─────────────
+  if (courseName) {
+    const config = await ApplicationExpiryConfig.findOne({
+      academicYear,
+      courseName: courseName.trim(),
+      yearOfStudy: Number(yearOfStudy),
+      isActive: true
+    }).lean();
 
-  if (!config) return null;
+    if (config && endYear) {
+      return buildDateInYear(endYear, config.expiryMonth, config.expiryDay);
+    }
+  }
 
-  return buildDateInYear(endYear, config.expiryMonth, config.expiryDay);
+  // ── Priority 3: SQL semesters table — Semester 2 end_date ───────────────────
+  if (sqlCourseId) {
+    const sqlDate = await fetchSemesterEndDateFromSQL({
+      sqlCourseId,
+      yearOfStudy: Number(yearOfStudy),
+      academicYear
+    });
+    if (sqlDate) return sqlDate;
+  }
+
+  // ── Priority 4: No config found — skip this student ─────────────────────────
+  return null;
 };
 
 /** @deprecated use resolveApplicationExpiryDate — kept for API preview */
@@ -253,7 +272,8 @@ export const processDueApplicationExpiries = async () => {
       academicYear: student.academicYear,
       courseName: enriched.course,
       yearOfStudy: enriched.year,
-      manualExpiryDate: useManual ? student.applicationExpiryDate : null
+      manualExpiryDate: useManual ? student.applicationExpiryDate : null,
+      sqlCourseId: enriched.sqlCourseId || null
     });
 
     if (!expiryDate) {
@@ -284,7 +304,10 @@ export const overlayStudentWithEnrollmentHistory = (student, history) => {
     };
   }
 
-  const wasActive = history.status === 'Active' && !history.allocatedTo;
+  // NOTE: We do NOT derive hostelStatus from history.status because history records
+  // are never updated when a student expires — they remain 'Active' forever.
+  // The student document's hostelStatus is the ground truth for current state.
+  const wasActiveInHistory = history.status === 'Active' && !history.allocatedTo;
   const hostelCategory =
     history.hostelCategory && typeof history.hostelCategory === 'object'
       ? history.hostelCategory
@@ -307,8 +330,11 @@ export const overlayStudentWithEnrollmentHistory = (student, history) => {
     course: history.course || student.course,
     branch: history.branch || student.branch,
     year: history.yearOfStudy ?? student.year,
-    hostelStatus: wasActive ? 'Active' : 'Inactive',
-    applicationStatus: wasActive ? student.applicationStatus || 'Active' : 'Expired',
+    // Preserve the live hostelStatus from the User document (ground truth).
+    // Only fall back to history-derived status if the user doc has no hostelStatus.
+    hostelStatus: student.hostelStatus || (wasActiveInHistory ? 'Active' : 'Inactive'),
+    // Preserve live applicationStatus; only derive from history when not set on user doc.
+    applicationStatus: student.applicationStatus || (wasActiveInHistory ? 'Active' : 'Expired'),
     enrollmentHistoryStatus: history.status,
     isHistoricalView: student.academicYear !== history.academicYear,
     allocatedFrom: history.allocatedFrom,
@@ -451,6 +477,10 @@ export const fetchStudentsForAcademicYear = async ({
     };
   });
 
+  if (hostelStatus) {
+    students = students.filter((s) => s.hostelStatus === hostelStatus);
+  }
+
   if (hasAcademicFilter) {
     students = students.filter((s) => matchesAcademicFilters(s, academicFilters));
   }
@@ -475,7 +505,8 @@ export const attachResolvedExpiryDates = async (students) => {
         academicYear: student.academicYear,
         courseName: student.course,
         yearOfStudy: student.year,
-        manualExpiryDate: useManual ? student.applicationExpiryDate : null
+        manualExpiryDate: useManual ? student.applicationExpiryDate : null,
+        sqlCourseId: student.sqlCourseId || null
       });
       return { ...student, resolvedExpiryDate };
     })

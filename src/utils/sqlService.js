@@ -488,6 +488,55 @@ export const fetchStudentCredentialsSQL = async (identifier) => {
 };
 
 /**
+ * Fetch Semester 2 end_date from SQL semesters table.
+ * Used to dynamically resolve application expiry dates from the academic calendar.
+ *
+ * @param {number} sqlCourseId  - The numeric course_id in SQL (e.g., resolved via sqlCourseId from enriched student)
+ * @param {number} yearOfStudy  - The student's year of study (e.g., 1, 2, 3)
+ * @param {string} academicYear - Academic year label, e.g., "2025-2026" (matched against academic_years.year_label)
+ * @returns {Date|null}         - Semester 2 end_date set to 23:59:59 UTC, or null if not found / on error
+ */
+export const fetchSemesterEndDateFromSQL = async ({ sqlCourseId, yearOfStudy, academicYear }) => {
+  if (!sqlCourseId || !yearOfStudy || !academicYear) return null;
+
+  try {
+    const pool = getSQLPool();
+    const query = `
+      SELECT s.end_date
+      FROM semesters s
+      JOIN academic_years ay ON s.academic_year_id = ay.id
+      WHERE s.course_id = ?
+        AND s.year_of_study = ?
+        AND s.semester_number = 2
+        AND ay.year_label = ?
+      LIMIT 1
+    `;
+    const [rows] = await pool.execute(query, [
+      Number(sqlCourseId),
+      Number(yearOfStudy),
+      academicYear
+    ]);
+
+    if (!rows || rows.length === 0) return null;
+
+    const rawDate = rows[0].end_date;
+    if (!rawDate) return null;
+
+    // MySQL dateStrings=false returns JS Date objects; guard for both cases
+    const d = rawDate instanceof Date ? new Date(rawDate) : new Date(rawDate);
+    if (Number.isNaN(d.getTime())) return null;
+
+    // Normalise to end-of-day UTC so comparison with today works consistently
+    d.setUTCHours(23, 59, 59, 999);
+    return d;
+  } catch (error) {
+    // Non-fatal — fall through to other expiry sources
+    console.error('❌ fetchSemesterEndDateFromSQL error:', error?.message || error);
+    return null;
+  }
+};
+
+/**
  * Close SQL connection pool
  */
 export const closeSQLPool = async () => {

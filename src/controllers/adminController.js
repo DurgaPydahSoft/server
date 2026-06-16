@@ -2124,18 +2124,31 @@ export const getCourseCounts = async (req, res, next) => {
   try {
     const { course, branch, category, roomNumber, academicYear, hostelStatus, hostel } = req.query;
 
-    const query = { role: 'student' };
+    let enriched = [];
 
-    if (course) query.course = course;
-    if (branch) query.branch = branch;
-    if (category) query.category = category;
-    if (roomNumber) query.roomNumber = roomNumber;
-    if (academicYear) query.academicYear = academicYear;
-    if (hostelStatus) query.hostelStatus = hostelStatus;
-    if (hostel) query.hostel = hostel;
+    if (academicYear) {
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        filters: { category, roomNumber, hostelStatus, hostel },
+        page: 1,
+        limit: 100000,
+        academicFilters: { course, branch }
+      });
+      enriched = result.students;
+    } else {
+      const query = { role: 'student' };
 
-    const students = await User.find(query).select('rollNumber admissionNumber').lean();
-    const enriched = await enrichStudentsAcademics(students);
+      if (course) query.course = course;
+      if (branch) query.branch = branch;
+      if (category) query.category = category;
+      if (roomNumber) query.roomNumber = roomNumber;
+      if (hostelStatus) query.hostelStatus = hostelStatus;
+      if (hostel) query.hostel = hostel;
+
+      const students = await User.find(query).select('rollNumber admissionNumber').lean();
+      enriched = await enrichStudentsAcademics(students);
+    }
+
     const countsObject = {};
 
     for (const student of enriched) {

@@ -12,7 +12,7 @@ import { enrichStudentAcademics, enrichStudentsAcademics } from '../utils/studen
 
 export const calculateExpiryPreview = async (req, res, next) => {
   try {
-    const { academicYear, courseName, yearOfStudy } = req.body;
+    const { academicYear, courseName, yearOfStudy, sqlCourseId } = req.body;
     if (!academicYear || !courseName || !yearOfStudy) {
       return next(createError(400, 'academicYear, courseName, and yearOfStudy are required'));
     }
@@ -20,7 +20,8 @@ export const calculateExpiryPreview = async (req, res, next) => {
     const applicationExpiryDate = await resolveApplicationExpiryDate({
       academicYear,
       courseName,
-      yearOfStudy: Number(yearOfStudy)
+      yearOfStudy: Number(yearOfStudy),
+      sqlCourseId: sqlCourseId || null
     });
 
     res.json({
@@ -38,7 +39,7 @@ export const calculateExpiryPreview = async (req, res, next) => {
 export const getStudentApplicationExpiry = async (req, res, next) => {
   try {
     const student = await User.findOne({ _id: req.params.id, role: 'student' })
-      .select('applicationExpiryDate applicationStatus applicationExpiryExtendedAt academicYear hostelStatus')
+      .select('applicationExpiryDate applicationStatus applicationExpiryExtendedAt academicYear hostelStatus rollNumber admissionNumber')
       .lean();
 
     if (!student) {
@@ -51,7 +52,8 @@ export const getStudentApplicationExpiry = async (req, res, next) => {
       academicYear: student.academicYear,
       courseName: enriched.course,
       yearOfStudy: enriched.year,
-      manualExpiryDate: useManual ? student.applicationExpiryDate : null
+      manualExpiryDate: useManual ? student.applicationExpiryDate : null,
+      sqlCourseId: enriched.sqlCourseId || null
     });
 
     res.json({
@@ -64,7 +66,8 @@ export const getStudentApplicationExpiry = async (req, res, next) => {
         academicYear: student.academicYear,
         course: enriched.course,
         yearOfStudy: enriched.year,
-        hostelStatus: student.hostelStatus
+        hostelStatus: student.hostelStatus,
+        expirySource: enriched.sqlCourseId ? 'sql_calendar' : 'manual_config'
       }
     });
   } catch (error) {

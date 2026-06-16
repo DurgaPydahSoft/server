@@ -62,7 +62,8 @@ const previewDueExpiries = async () => {
       academicYear: student.academicYear,
       courseName: enriched.course,
       yearOfStudy: enriched.year,
-      manualExpiryDate: useManual ? student.applicationExpiryDate : null
+      manualExpiryDate: useManual ? student.applicationExpiryDate : null,
+      sqlCourseId: enriched.sqlCourseId || null
     });
 
     const row = {
