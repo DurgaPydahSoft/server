@@ -68,7 +68,7 @@ const feeStructureSchema = new mongoose.Schema({
 // New uniqueness: academicYear + course + branch + year + hostel/category + feeType
 feeStructureSchema.index(
   { academicYear: 1, course: 1, branch: 1, year: 1, hostelId: 1, categoryId: 1, feeType: 1 },
-  { unique: true, partialFilterExpression: { isActive: true } },
+  { unique: true, partialFilterExpression: { isActive: true, feeType: { $exists: true } } },
 );
 
 // Legacy uniqueness (kept for old records)
