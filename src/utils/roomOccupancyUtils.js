@@ -8,19 +8,17 @@ export const buildRoomMatchQuery = (room) => ({
   ]
 });
 
-export const countStudentsInRoomForAcademicYear = async (room, academicYear) => {
-  if (!academicYear) {
-    return User.countDocuments({
-      roomNumber: room.roomNumber,
-      role: 'student',
-      hostelStatus: 'Active'
-    });
-  }
+export const getDefaultAcademicYear = () => {
+  const year = new Date().getFullYear();
+  return `${year}-${year + 1}`;
+};
 
+export const countStudentsInRoomForAcademicYear = async (room, academicYear) => {
+  const ay = academicYear || getDefaultAcademicYear();
   const roomMatch = buildRoomMatchQuery(room);
   const historyCount = await RoomOccupancyHistory.countDocuments({
     ...roomMatch,
-    academicYear,
+    academicYear: ay,
     status: { $nin: ['Withdrawn'] }
   });
 
@@ -29,26 +27,17 @@ export const countStudentsInRoomForAcademicYear = async (room, academicYear) => 
   return User.countDocuments({
     ...roomMatch,
     role: 'student',
-    academicYear,
+    academicYear: ay,
     hostelStatus: 'Active'
   });
 };
 
 export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
-  if (!academicYear) {
-    return User.find({
-      roomNumber: room.roomNumber,
-      role: 'student',
-      hostelStatus: 'Active'
-    })
-      .select('name rollNumber studentPhone course branch year bedNumber lockerNumber academicYear')
-      .lean();
-  }
-
+  const ay = academicYear || getDefaultAcademicYear();
   const roomMatch = buildRoomMatchQuery(room);
   const historyRows = await RoomOccupancyHistory.find({
     ...roomMatch,
-    academicYear,
+    academicYear: ay,
     status: { $nin: ['Withdrawn'] }
   })
     .sort({ status: 1, studentName: 1 })
@@ -72,7 +61,7 @@ export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
   return User.find({
     ...roomMatch,
     role: 'student',
-    academicYear,
+    academicYear: ay,
     hostelStatus: 'Active'
   })
     .select('name rollNumber studentPhone course branch year bedNumber lockerNumber academicYear')
@@ -89,25 +78,11 @@ export const getOccupiedBedsAndLockersForAcademicYear = async (room, academicYea
     if (locker) occupiedLockers.add(locker);
   };
 
-  if (!academicYear) {
-    const users = await User.find({
-      roomNumber: room.roomNumber,
-      role: 'student',
-      hostelStatus: 'Active'
-    })
-      .select('bedNumber lockerNumber')
-      .lean();
-    users.forEach((u) => record(u.bedNumber, u.lockerNumber));
-    return {
-      occupiedBeds: [...occupiedBeds],
-      occupiedLockers: [...occupiedLockers]
-    };
-  }
-
+  const ay = academicYear || getDefaultAcademicYear();
   const roomMatch = buildRoomMatchQuery(room);
   const activeHistory = await RoomOccupancyHistory.find({
     ...roomMatch,
-    academicYear,
+    academicYear: ay,
     status: { $in: ['Active', 'Extended'] },
     allocatedTo: null
   })
@@ -123,7 +98,7 @@ export const getOccupiedBedsAndLockersForAcademicYear = async (room, academicYea
   const activeUsers = await User.find({
     ...roomMatch,
     role: 'student',
-    academicYear,
+    academicYear: ay,
     hostelStatus: 'Active'
   })
     .select('_id bedNumber lockerNumber')
