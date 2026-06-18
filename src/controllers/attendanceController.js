@@ -13,6 +13,7 @@ import {
 
 import { normalizeToISTStartOfDay, getISTStartOfDay, getISTEndOfDay } from '../utils/dateUtils.js';
 import notificationService from '../utils/notificationService.js';
+import { fetchStudentsForAcademicYear } from '../utils/applicationExpiryService.js';
 
 // Shared helpers: same student pool as Take Attendance (getStudentsForAttendance)
 const buildActiveStudentsQuery = ({ gender, category, roomNumber }) => {
@@ -104,23 +105,35 @@ const computeAttendanceStatistics = (records) => {
 // Get students for attendance taking
 export const getStudentsForAttendance = async (req, res, next) => {
   try {
-    const { date, course, branch, gender, category, roomNumber } = req.query;
+    const { date, course, branch, gender, category, roomNumber, academicYear } = req.query;
     const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
-    console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber });
+    console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber, academicYear });
     console.log('🔍 getStudentsForAttendance - Normalized date:', normalizedDate);
 
-    const query = buildActiveStudentsQuery({ gender, category, roomNumber });
+    let students;
+    if (academicYear) {
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        filters: { gender, category, roomNumber, hostelStatus: 'Active' },
+        page: 1,
+        limit: 1000000,
+        academicFilters: { course, branch }
+      });
+      students = result.students;
+    } else {
+      const query = buildActiveStudentsQuery({ gender, category, roomNumber });
 
-    console.log('🔍 getStudentsForAttendance - Query:', query);
+      console.log('🔍 getStudentsForAttendance - Query:', query);
 
-    let students = await User.find(query)
-      .select('name rollNumber admissionNumber course branch year gender roomNumber')
-      .sort({ name: 1 })
-      .lean();
+      students = await User.find(query)
+        .select('name rollNumber admissionNumber course branch year gender roomNumber')
+        .sort({ name: 1 })
+        .lean();
 
-    students = await enrichStudentsAcademics(students);
-    students = await filterStudentsByCourseBranch(students, course, branch);
+      students = await enrichStudentsAcademics(students);
+      students = await filterStudentsByCourseBranch(students, course, branch);
+    }
 
     console.log('🔍 getStudentsForAttendance - Found students:', students.length);
 
@@ -170,11 +183,17 @@ export const getStudentsForAttendance = async (req, res, next) => {
     // Create a set of student IDs who are on approved leave
     const studentsOnLeave = new Set(approvedLeaves.map(leave => leave.student._id.toString()));
 
+    // Create a lookup map for existing attendance by student ID
+    const attendanceMap = new Map();
+    for (const att of validAttendance) {
+      if (att.student && att.student._id) {
+        attendanceMap.set(att.student._id.toString(), att);
+      }
+    }
+
     // Combine student data with attendance status
     const studentsWithAttendance = students.map(student => {
-      const attendance = validAttendance.find(att => 
-        att.student && att.student._id && att.student._id.toString() === student._id.toString()
-      );
+      const attendance = attendanceMap.get(student._id.toString());
       
       // Check if student is on approved leave
       const isOnLeave = studentsOnLeave.has(student._id.toString());
@@ -360,22 +379,39 @@ export const takeAttendance = async (req, res, next) => {
 // Get attendance for a specific date
 export const getAttendanceForDate = async (req, res, next) => {
   try {
-    const { date, course, branch, gender, studentId, status } = req.query;
+    const { date, course, branch, gender, studentId, status, academicYear } = req.query;
     const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
-    const studentQuery = buildActiveStudentsQuery({
-      gender,
-      category: req.query.category,
-      roomNumber: req.query.roomNumber
-    });
+    let students;
+    if (academicYear) {
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        filters: {
+          gender,
+          category: req.query.category,
+          roomNumber: req.query.roomNumber,
+          hostelStatus: 'Active'
+        },
+        page: 1,
+        limit: 1000000,
+        academicFilters: { course, branch }
+      });
+      students = result.students;
+    } else {
+      const studentQuery = buildActiveStudentsQuery({
+        gender,
+        category: req.query.category,
+        roomNumber: req.query.roomNumber
+      });
 
-    let students = await User.find(studentQuery)
-      .select('name rollNumber admissionNumber course branch year gender roomNumber category')
-      .sort({ name: 1 })
-      .lean();
+      students = await User.find(studentQuery)
+        .select('name rollNumber admissionNumber course branch year gender roomNumber category')
+        .sort({ name: 1 })
+        .lean();
 
-    students = await enrichStudentsAcademics(students);
-    students = await filterStudentsByCourseBranch(students, course, branch);
+      students = await enrichStudentsAcademics(students);
+      students = await filterStudentsByCourseBranch(students, course, branch);
+    }
 
     const studentIds = students.map(s => s._id);
 
@@ -445,7 +481,7 @@ export const getAttendanceForDate = async (req, res, next) => {
 // Get attendance for a date range
 export const getAttendanceForDateRange = async (req, res, next) => {
   try {
-    const { startDate, endDate, course, branch, gender, studentId, status } = req.query;
+    const { startDate, endDate, course, branch, gender, studentId, status, academicYear } = req.query;
     
     if (!startDate || !endDate) {
       throw createError(400, 'Start date and end date are required');
@@ -558,6 +594,18 @@ export const getAttendanceForDateRange = async (req, res, next) => {
 
 
     // Apply additional filters to the populated attendance records
+    if (academicYear) {
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        page: 1,
+        limit: 1000000
+      });
+      const studentIdsFilter = new Set(result.students.map(s => s._id.toString()));
+      attendance = attendance.filter(att => 
+        att.student && studentIdsFilter.has(att.student._id?.toString() || att.student?.toString())
+      );
+    }
+
     if (course) {
       attendance = attendance.filter(att => 
         att.student?.course?._id?.toString() === course || 

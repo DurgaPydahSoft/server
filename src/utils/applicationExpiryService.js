@@ -249,13 +249,54 @@ export const expireStudentApplication = async (student, reason = 'academic_year_
   return { changed: true };
 };
 
+export const reactivateStudentApplication = async (student, reason = 'academic_year_end_extended') => {
+  if (!student || student.hostelStatus !== 'Inactive') return { changed: false };
+
+  // Find their last closed RoomOccupancyHistory record for this academic year to restore their bed and locker
+  const lastHistory = await RoomOccupancyHistory.findOne({
+    student: student._id,
+    academicYear: student.academicYear,
+    status: 'Expired'
+  }).sort({ allocatedTo: -1 });
+
+  student.hostelStatus = 'Active';
+  student.applicationStatus = 'Active';
+  
+  if (lastHistory) {
+    student.bedNumber = lastHistory.bedNumber;
+    student.lockerNumber = lastHistory.lockerNumber;
+  }
+  
+  await repairMissingRollNumber(student);
+  await student.save({ validateModifiedOnly: true });
+
+  if (lastHistory) {
+    lastHistory.status = 'Active';
+    lastHistory.allocatedTo = null;
+    await lastHistory.save();
+  }
+
+  try {
+    await FeeReminder.updateMany(
+      { student: student._id, academicYear: student.academicYear },
+      { $set: { isActive: true } }
+    );
+  } catch (err) {
+    console.error('Failed to reactivate fee reminders on reactivation:', err);
+  }
+
+  return { changed: true };
+};
+
 /**
  * Daily job: expire active students when settings-based (or extended) expiry date has passed.
+ * Also reactivates expired students if the academic settings/semester dates are extended.
  */
 export const processDueApplicationExpiries = async () => {
   const today = new Date();
   today.setHours(23, 59, 59, 999);
 
+  // 1. Process Active -> Expired
   const activeStudents = await User.find({
     role: 'student',
     hostelStatus: 'Active',
@@ -288,21 +329,79 @@ export const processDueApplicationExpiries = async () => {
     }
   }
 
+  // 2. Process Expired -> Active (Reactivation check due to date extension)
+  const expiredStudents = await User.find({
+    role: 'student',
+    hostelStatus: 'Inactive',
+    applicationStatus: 'Expired'
+  });
+
+  let reactivated = 0;
+
+  for (const student of expiredStudents) {
+    const enriched = await enrichStudentAcademics(student.toObject());
+
+    const expiryDate = await resolveApplicationExpiryDate({
+      academicYear: student.academicYear,
+      courseName: enriched.course,
+      yearOfStudy: enriched.year,
+      manualExpiryDate: null,
+      sqlCourseId: enriched.sqlCourseId || null
+    });
+
+    // If new expiry date has been extended into the future
+    if (expiryDate && expiryDate > today) {
+      const result = await reactivateStudentApplication(student, 'academic_year_end_extended');
+      if (result.changed) reactivated += 1;
+    }
+  }
+
   return {
     processed: activeStudents.length,
     expired,
-    skippedNoConfig
+    skippedNoConfig,
+    reactivated
   };
 };
 
 /** Overlay a student's profile with room/category from a specific academic year enrollment. */
 export const overlayStudentWithEnrollmentHistory = (student, history, requestedYear) => {
+  const isHistorical = requestedYear ? (student.academicYear !== requestedYear) : false;
+
+  let resolvedStatus = student.hostelStatus || 'Active';
+  let resolvedAppStatus = student.applicationStatus || 'Active';
+
+  if (history) {
+    if (history.status === 'Withdrawn') {
+      resolvedStatus = 'Inactive';
+      resolvedAppStatus = 'Withdrawn';
+    } else if (history.status === 'Expired') {
+      resolvedStatus = 'Active';
+      resolvedAppStatus = 'Expired';
+    } else if (
+      history.status === 'Active' ||
+      history.status === 'Extended' ||
+      history.status === 'Transferred'
+    ) {
+      resolvedStatus = 'Active';
+      resolvedAppStatus = 'Active';
+    }
+  } else {
+    // If they completed their stay successfully (Expired) but didn't renew yet, they were active in that year.
+    if (student.hostelStatus === 'Inactive' && student.applicationStatus === 'Expired') {
+      resolvedStatus = 'Active';
+      resolvedAppStatus = 'Expired';
+    }
+  }
+
   if (!history) {
     return {
       ...student,
       currentAcademicYear: student.academicYear,
       academicYear: requestedYear || student.academicYear,
-      isHistoricalView: requestedYear ? (student.academicYear !== requestedYear) : false
+      isHistoricalView: isHistorical,
+      hostelStatus: isHistorical ? 'Active' : resolvedStatus,
+      applicationStatus: resolvedAppStatus
     };
   }
 
@@ -310,6 +409,8 @@ export const overlayStudentWithEnrollmentHistory = (student, history, requestedY
     history.hostelCategory && typeof history.hostelCategory === 'object'
       ? history.hostelCategory
       : student.hostelCategory;
+
+  const isHistView = student.academicYear !== history.academicYear;
 
   return {
     ...student,
@@ -328,11 +429,10 @@ export const overlayStudentWithEnrollmentHistory = (student, history, requestedY
     course: history.course || student.course,
     branch: history.branch || student.branch,
     year: history.yearOfStudy ?? student.year,
-    // Preserve current live student status (Active/Inactive), unless they withdrew in that year.
-    hostelStatus: history.status === 'Withdrawn' ? 'Inactive' : (student.hostelStatus || 'Active'),
-    applicationStatus: history.status === 'Withdrawn' ? 'Expired' : (student.applicationStatus || 'Active'),
+    hostelStatus: resolvedStatus,
+    applicationStatus: resolvedAppStatus,
     enrollmentHistoryStatus: history.status,
-    isHistoricalView: student.academicYear !== history.academicYear,
+    isHistoricalView: isHistView,
     allocatedFrom: history.allocatedFrom,
     allocatedTo: history.allocatedTo
   };
@@ -409,8 +509,7 @@ export const fetchStudentsForAcademicYear = async ({
   if (roomNumber) liveQuery.roomNumber = roomNumber;
   if (hostel) liveQuery.hostel = hostel;
   if (category) liveQuery.category = category;
-  if (hostelStatus === 'Active') liveQuery.hostelStatus = 'Active';
-  if (hostelStatus === 'Inactive') liveQuery.hostelStatus = 'Inactive';
+  // Note: hostelStatus is not restricted in MongoDB queries here to allow mapping currently inactive students who were active back then.
   if (search) {
     const searchRegex = new RegExp(search, 'i');
     liveQuery.$or = [{ name: searchRegex }, { rollNumber: searchRegex }];
@@ -431,7 +530,7 @@ export const fetchStudentsForAcademicYear = async ({
   };
   if (gender) userQuery.gender = gender;
   if (batch) userQuery.batch = batch;
-  if (hostelStatus) userQuery.hostelStatus = hostelStatus;
+  // Note: hostelStatus filter is applied in-memory after overlaying history to correctly support historically active students
   if (search) {
     const searchRegex = new RegExp(search, 'i');
     userQuery.$or = [{ name: searchRegex }, { rollNumber: searchRegex }];
@@ -453,7 +552,40 @@ export const fetchStudentsForAcademicYear = async ({
     return overlayStudentWithEnrollmentHistory(user, history, academicYear);
   });
 
-  students = await enrichStudentsAcademics(students);
+  if (hostelStatus) {
+    if (hostelStatus === 'Active') {
+      students = students.filter(
+        (s) =>
+          s.hostelStatus === 'Active' &&
+          s.applicationStatus !== 'Expired' &&
+          s.applicationStatus !== 'Withdrawn'
+      );
+    } else if (hostelStatus === 'Inactive') {
+      students = students.filter(
+        (s) =>
+          s.hostelStatus === 'Inactive' ||
+          s.applicationStatus === 'Expired' ||
+          s.applicationStatus === 'Withdrawn'
+      );
+    } else {
+      students = students.filter((s) => s.hostelStatus === hostelStatus);
+    }
+  }
+
+  if (hasAcademicFilter) {
+    students = await enrichStudentsAcademics(students);
+    students = students.filter((s) => matchesAcademicFilters(s, academicFilters));
+  }
+
+  const count = students.length;
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  
+  let paginatedStudents = students.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+
+  if (!hasAcademicFilter) {
+    paginatedStudents = await enrichStudentsAcademics(paginatedStudents);
+  }
 
   const getYearDifference = (ay1, ay2) => {
     if (!ay1 || !ay2) return 0;
@@ -462,7 +594,7 @@ export const fetchStudentsForAcademicYear = async ({
     return y1 - y2;
   };
 
-  students = students.map((student) => {
+  paginatedStudents = paginatedStudents.map((student) => {
     const history = historyByStudent.get(student._id.toString());
     if (!history) {
       if (student.isHistoricalView) {
@@ -492,20 +624,7 @@ export const fetchStudentsForAcademicYear = async ({
     };
   });
 
-  if (hostelStatus) {
-    students = students.filter((s) => s.hostelStatus === hostelStatus);
-  }
-
-  if (hasAcademicFilter) {
-    students = students.filter((s) => matchesAcademicFilters(s, academicFilters));
-  }
-
-  const count = students.length;
-  const pageNum = parseInt(page, 10);
-  const limitNum = parseInt(limit, 10);
-  students = students.slice((pageNum - 1) * limitNum, pageNum * limitNum);
-
-  return { students, count };
+  return { students: paginatedStudents, count };
 };
 
 /** Attach resolved application expiry date for list/detail display. */

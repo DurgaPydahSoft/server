@@ -6,7 +6,8 @@ import { createError } from '../utils/error.js';
 import {
   resolveApplicationExpiryDate,
   extendStudentApplicationExpiry,
-  getAcademicYearEndYear
+  getAcademicYearEndYear,
+  processDueApplicationExpiries
 } from '../utils/applicationExpiryService.js';
 import { enrichStudentAcademics, enrichStudentsAcademics } from '../utils/studentAcademicEnricher.js';
 
@@ -286,6 +287,9 @@ export const upsertApplicationExpiryConfig = async (req, res, next) => {
       { upsert: true, new: true, runValidators: true }
     );
 
+    // Sync state changes immediately (expiries or reactivations)
+    await processDueApplicationExpiries();
+
     res.json({
       success: true,
       message: 'Application expiry config saved',
@@ -302,6 +306,10 @@ export const deleteApplicationExpiryConfig = async (req, res, next) => {
     if (!config) {
       return next(createError(404, 'Config not found'));
     }
+
+    // Sync state changes immediately (expiries or reactivations)
+    await processDueApplicationExpiries();
+
     res.json({ success: true, message: 'Application expiry config deleted' });
   } catch (error) {
     next(error);

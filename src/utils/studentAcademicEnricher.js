@@ -3,10 +3,10 @@ import { matchCourseAndBranch } from './courseBranchMatcher.js';
 import { normalizeBatchToYear } from './batchUtils.js';
 import { formatSqlStudentPhoto, resolveStudentPhotoDisplay } from './studentPhotoService.js';
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache TTL
 const FAIL_CACHE_TTL_MS = 60 * 1000;
-const BATCH_CHUNK_SIZE = 40;
-const MAX_CONCURRENT_BATCHES = 2;
+const BATCH_CHUNK_SIZE = 100; // Fetch 100 students per query
+const MAX_CONCURRENT_BATCHES = 8; // Run up to 8 parallel central DB requests
 
 const academicsCache = new Map();
 const inFlight = new Map();

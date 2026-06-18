@@ -2120,15 +2120,35 @@ export const getTempStudentsSummary = async (req, res, next) => {
 // Get total student count for admin dashboard
 export const getStudentsCount = async (req, res, next) => {
   try {
-    const { course, branch, gender } = req.query;
+    const { course, branch, gender, academicYear, hostelStatus } = req.query;
     
-    // Build query for active students
+    if (academicYear) {
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        filters: { gender, hostelStatus },
+        page: 1,
+        limit: 1000000,
+        academicFilters: { course, branch }
+      });
+      
+      return res.status(200).json({
+        success: true,
+        data: {
+          total: result.count,
+          count: result.count
+        }
+      });
+    }
+    
     const query = { 
-      role: 'student', 
-      hostelStatus: 'Active' 
+      role: 'student'
     };
+    if (hostelStatus) {
+      query.hostelStatus = hostelStatus;
+    } else {
+      query.hostelStatus = 'Active';
+    }
 
-    // Add filters if provided
     if (course) query.course = course;
     if (branch) query.branch = branch;
     if (gender) query.gender = gender;
@@ -2139,7 +2159,7 @@ export const getStudentsCount = async (req, res, next) => {
       success: true,
       data: {
         total: totalStudents,
-        count: totalStudents, // Keep for backward compatibility
+        count: totalStudents,
       },
     });
   } catch (error) {
