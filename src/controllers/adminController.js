@@ -387,6 +387,35 @@ export const addStudent = async (req, res, next) => {
 
       await closeActiveOccupancyHistory({ studentId: student._id });
 
+      if (previousAcademicYear && previousAcademicYear !== academicYear) {
+        const hasPreviousHistory = await RoomOccupancyHistory.exists({
+          student: student._id,
+          academicYear: previousAcademicYear
+        });
+        if (!hasPreviousHistory) {
+          await RoomOccupancyHistory.create({
+            student: student._id,
+            studentName: student.name,
+            rollNumber: student.rollNumber,
+            course: sqlAcademics?.course || student.course,
+            branch: sqlAcademics?.branch || student.branch,
+            yearOfStudy: sqlAcademics ? Math.max(1, sqlAcademics.year - 1) : (student.year || 1),
+            academicYear: previousAcademicYear,
+            hostel: student.hostel,
+            hostelCategory: student.hostelCategory,
+            room: student.room,
+            roomNumber: student.roomNumber,
+            bedNumber: student.bedNumber,
+            lockerNumber: student.lockerNumber,
+            allocatedFrom: student.createdAt || new Date(),
+            allocatedTo: new Date(),
+            status: 'Expired',
+            expiryReason: 'academic_year_end',
+            createdBy: req.admin?._id || null
+          });
+        }
+      }
+
       student.name = name || student.name;
       if (resolvedAdmissionNumber) {
         student.admissionNumber = resolvedAdmissionNumber;

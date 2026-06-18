@@ -130,30 +130,42 @@ export const getRoomOccupancyHistory = async (req, res, next) => {
     }
 
     const roomMatch = buildRoomStudentMatch(roomId, room);
-    const historyQuery = { ...roomMatch };
-    if (academicYear) historyQuery.academicYear = academicYear;
 
-    const historyRows = await RoomOccupancyHistory.find(historyQuery)
+    // Get ALL history rows and live students for this room to determine the full list of academic years
+    const historyRowsAll = await RoomOccupancyHistory.find(roomMatch)
       .sort({ academicYear: -1, allocatedFrom: -1 })
       .lean();
 
-    const historyKeys = new Set(
-      historyRows.map((r) => `${r.student}-${r.academicYear}`)
-    );
-
-    const studentQuery = {
+    const studentQueryAll = {
       role: 'student',
       ...roomMatch
     };
-    if (academicYear) studentQuery.academicYear = academicYear;
-
-    const students = await User.find(studentQuery)
+    const studentsAll = await User.find(studentQueryAll)
       .select(
         'name rollNumber academicYear hostel hostelCategory room roomNumber bedNumber lockerNumber hostelStatus createdAt updatedAt applicationStatus'
       )
       .lean();
 
-    const enrichedStudents = await enrichStudentsAcademics(students);
+    const enrichedStudentsAll = await enrichStudentsAcademics(studentsAll);
+
+    // Generate complete list of unique academic years
+    const allYearsSet = new Set();
+    historyRowsAll.forEach((r) => { if (r.academicYear) allYearsSet.add(r.academicYear); });
+    enrichedStudentsAll.forEach((s) => { if (s.academicYear) allYearsSet.add(s.academicYear); });
+    const academicYears = Array.from(allYearsSet).sort((a, b) => b.localeCompare(a));
+
+    // Filter by academicYear query parameter if provided
+    const historyRows = academicYear
+      ? historyRowsAll.filter((r) => r.academicYear === academicYear)
+      : historyRowsAll;
+
+    const enrichedStudents = academicYear
+      ? enrichedStudentsAll.filter((s) => s.academicYear === academicYear)
+      : enrichedStudentsAll;
+
+    const historyKeys = new Set(
+      historyRows.map((r) => `${r.student}-${r.academicYear}`)
+    );
 
     const syntheticRows = [];
     for (const student of enrichedStudents) {
@@ -188,9 +200,6 @@ export const getRoomOccupancyHistory = async (req, res, next) => {
       if (ayCmp !== 0) return ayCmp;
       return new Date(b.allocatedFrom || 0) - new Date(a.allocatedFrom || 0);
     });
-
-    const academicYears = [...new Set(combined.map((r) => r.academicYear).filter(Boolean))]
-      .sort((a, b) => b.localeCompare(a));
 
     const byAcademicYear = {};
     for (const row of combined) {

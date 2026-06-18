@@ -14,6 +14,7 @@ import {
   resolveFeesStudentId
 } from '../services/feesSyncService.js';
 import { fetchSemesterEndDateFromSQL } from './sqlService.js';
+import { getDefaultAcademicYear } from './roomOccupancyUtils.js';
 
 export const getAcademicYearEndYear = (academicYear) => {
   if (!academicYear || !/^\d{4}-\d{4}$/.test(academicYear)) return null;
@@ -295,19 +296,16 @@ export const processDueApplicationExpiries = async () => {
 };
 
 /** Overlay a student's profile with room/category from a specific academic year enrollment. */
-export const overlayStudentWithEnrollmentHistory = (student, history) => {
+export const overlayStudentWithEnrollmentHistory = (student, history, requestedYear) => {
   if (!history) {
     return {
       ...student,
       currentAcademicYear: student.academicYear,
-      isHistoricalView: false
+      academicYear: requestedYear || student.academicYear,
+      isHistoricalView: requestedYear ? (student.academicYear !== requestedYear) : false
     };
   }
 
-  // NOTE: We do NOT derive hostelStatus from history.status because history records
-  // are never updated when a student expires — they remain 'Active' forever.
-  // The student document's hostelStatus is the ground truth for current state.
-  const wasActiveInHistory = history.status === 'Active' && !history.allocatedTo;
   const hostelCategory =
     history.hostelCategory && typeof history.hostelCategory === 'object'
       ? history.hostelCategory
@@ -330,11 +328,9 @@ export const overlayStudentWithEnrollmentHistory = (student, history) => {
     course: history.course || student.course,
     branch: history.branch || student.branch,
     year: history.yearOfStudy ?? student.year,
-    // Preserve the live hostelStatus from the User document (ground truth).
-    // Only fall back to history-derived status if the user doc has no hostelStatus.
-    hostelStatus: student.hostelStatus || (wasActiveInHistory ? 'Active' : 'Inactive'),
-    // Preserve live applicationStatus; only derive from history when not set on user doc.
-    applicationStatus: student.applicationStatus || (wasActiveInHistory ? 'Active' : 'Expired'),
+    // Preserve current live student status (Active/Inactive), unless they withdrew in that year.
+    hostelStatus: history.status === 'Withdrawn' ? 'Inactive' : (student.hostelStatus || 'Active'),
+    applicationStatus: history.status === 'Withdrawn' ? 'Expired' : (student.applicationStatus || 'Active'),
     enrollmentHistoryStatus: history.status,
     isHistoricalView: student.academicYear !== history.academicYear,
     allocatedFrom: history.allocatedFrom,
@@ -398,15 +394,16 @@ export const fetchStudentsForAcademicYear = async ({
   const historyByStudent = dedupeHistoryByStudent(histories);
   histories = Array.from(historyByStudent.values());
 
-  if (hostelStatus === 'Active') {
-    histories = histories.filter((h) => h.status === 'Active' && !h.allocatedTo);
-  } else if (hostelStatus === 'Inactive') {
-    histories = histories.filter((h) => h.status !== 'Active' || h.allocatedTo);
-  }
-
   const studentIdSet = new Set(histories.map((h) => h.student.toString()));
 
-  const liveQuery = { role: 'student', academicYear };
+  const endYear = getAcademicYearEndYear(academicYear);
+  const cutoffDate = endYear ? new Date(`${endYear}-07-31T23:59:59.999Z`) : new Date();
+
+  const liveQuery = {
+    role: 'student',
+    createdAt: { $lte: cutoffDate },
+    academicYear: { $gte: academicYear }
+  };
   if (gender) liveQuery.gender = gender;
   if (batch) liveQuery.batch = batch;
   if (roomNumber) liveQuery.roomNumber = roomNumber;
@@ -434,6 +431,7 @@ export const fetchStudentsForAcademicYear = async ({
   };
   if (gender) userQuery.gender = gender;
   if (batch) userQuery.batch = batch;
+  if (hostelStatus) userQuery.hostelStatus = hostelStatus;
   if (search) {
     const searchRegex = new RegExp(search, 'i');
     userQuery.$or = [{ name: searchRegex }, { rollNumber: searchRegex }];
@@ -452,14 +450,31 @@ export const fetchStudentsForAcademicYear = async ({
 
   let students = users.map((user) => {
     const history = historyByStudent.get(user._id.toString());
-    return overlayStudentWithEnrollmentHistory(user, history);
+    return overlayStudentWithEnrollmentHistory(user, history, academicYear);
   });
 
   students = await enrichStudentsAcademics(students);
 
+  const getYearDifference = (ay1, ay2) => {
+    if (!ay1 || !ay2) return 0;
+    const y1 = parseInt(ay1.split('-')[0], 10);
+    const y2 = parseInt(ay2.split('-')[0], 10);
+    return y1 - y2;
+  };
+
   students = students.map((student) => {
     const history = historyByStudent.get(student._id.toString());
-    if (!history) return student;
+    if (!history) {
+      if (student.isHistoricalView) {
+        const diff = getYearDifference(student.currentAcademicYear, student.academicYear);
+        const historicalYear = diff > 0 ? Math.max(1, (student.year || 1) - diff) : (student.year || 1);
+        return {
+          ...student,
+          year: historicalYear
+        };
+      }
+      return student;
+    }
     return {
       ...student,
       course: history.course || student.course,
