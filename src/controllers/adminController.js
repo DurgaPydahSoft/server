@@ -1933,6 +1933,27 @@ export const updateStudent = async (req, res, next) => {
     await repairMissingRollNumber(student, academicSnapshot);
     await student.save({ validateModifiedOnly: true });
 
+    // Sync active/extended RoomOccupancyHistory if the student is active and room/bed details changed
+    if (student.hostelStatus === 'Active') {
+      await RoomOccupancyHistory.updateMany(
+        {
+          student: student._id,
+          academicYear: targetAcademicYear,
+          status: { $in: ['Active', 'Extended'] }
+        },
+        {
+          $set: {
+            hostel: student.hostel,
+            hostelCategory: student.hostelCategory,
+            room: student.room,
+            roomNumber: student.roomNumber,
+            bedNumber: student.bedNumber,
+            lockerNumber: student.lockerNumber
+          }
+        }
+      );
+    }
+
     await syncStudentHostelFeeSafely(student);
 
     const enrichedStudent = await enrichStudentAcademics(student.toObject());
