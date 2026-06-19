@@ -121,6 +121,17 @@ export const getStudentsForAttendance = async (req, res, next) => {
         academicFilters: { course, branch }
       });
       students = result.students;
+
+      // Filter out students who have renewed to a newer academic year
+      const getStartYear = (ay) => {
+        if (!ay) return 0;
+        return parseInt(ay.split('-')[0], 10) || 0;
+      };
+      const requestedYearStart = getStartYear(academicYear);
+      students = students.filter(student => {
+        const studentCurrentYearStart = getStartYear(student.currentAcademicYear);
+        return studentCurrentYearStart <= requestedYearStart;
+      });
     } else {
       const query = buildActiveStudentsQuery({ gender, category, roomNumber });
 
