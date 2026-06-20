@@ -1150,19 +1150,69 @@ export const setAdditionalFees = async (req, res) => {
   }
 };
 
-// Get fee structure for admit card generation (updated for new schema)
+// Get fee structure for admit card generation
 export const getFeeStructureForAdmitCard = async (req, res) => {
   try {
     console.log('🔍 Backend: getFeeStructureForAdmitCard called');
     console.log('🔍 Backend: Params:', req.params);
+    console.log('🔍 Backend: Query:', req.query);
     
     const { academicYear, course, branch, year, category } = req.params;
+    const { identifier } = req.query;
     
     if (!academicYear || !course || !branch || !year || !category) {
       return res.status(400).json({
         success: false,
         message: 'Academic year, course, branch, year, and category are required'
       });
+    }
+
+    // 1. Check if overall concessions table has a revised fee for this student and year of study
+    if (identifier) {
+      try {
+        const { fetchConcessionsForStudent } = await import('../utils/sqlService.js');
+        const concessionsResult = await fetchConcessionsForStudent(identifier);
+        
+        if (concessionsResult.success && concessionsResult.data) {
+          const concessions = concessionsResult.data;
+          let revisedFees = concessions.revised_fees;
+          if (typeof revisedFees === 'string') {
+            try {
+              revisedFees = JSON.parse(revisedFees);
+            } catch (err) {
+              console.error('Failed to parse revised_fees JSON:', err);
+            }
+          }
+          if (Array.isArray(revisedFees)) {
+            // Find revised fee for Hostel (HST01) matching studentYear
+            const hostelRevisedFee = revisedFees.find(
+              f => f.feeHeadCode === 'HST01' && Number(f.studentYear) === Number(year)
+            );
+            if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
+              const revisedAmount = Number(hostelRevisedFee.revisedAmount);
+              console.log(`💰 Found SQL overall concession/revised fee for student ${identifier}, year ${year}: ₹${revisedAmount}`);
+              return res.json({
+                success: true,
+                data: {
+                  academicYear,
+                  course,
+                  branch,
+                  year: parseInt(year),
+                  category,
+                  term1Fee: Math.round(revisedAmount * 0.4),
+                  term2Fee: Math.round(revisedAmount * 0.3),
+                  term3Fee: Math.round(revisedAmount * 0.3),
+                  totalFee: revisedAmount,
+                  found: true,
+                  isRevisedFee: true
+                }
+              });
+            }
+          }
+        }
+      } catch (concessionError) {
+        console.error('❌ Error checking overall concessions:', concessionError);
+      }
     }
 
     console.log('🔍 Backend: Searching for fee structure:', { academicYear, course, branch, year, category });
@@ -1195,7 +1245,7 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
         data: {
           academicYear,
           course,
-        branch,
+          branch,
           year: parseInt(year),
           category,
           term1Fee: 0,

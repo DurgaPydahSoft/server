@@ -1,4 +1,4 @@
-import { fetchStudentByIdentifier, fetchStudentsByIdentifiers } from './sqlService.js';
+import { fetchStudentByIdentifier, fetchStudentsByIdentifiers, fetchConcessionsForStudent, fetchConcessionsForStudents } from './sqlService.js';
 import { matchCourseAndBranch } from './courseBranchMatcher.js';
 import { normalizeBatchToYear } from './batchUtils.js';
 import { formatSqlStudentPhoto, resolveStudentPhotoDisplay } from './studentPhotoService.js';
@@ -209,28 +209,102 @@ export const repairMissingRollNumber = async (student, academicSnapshot = null) 
   return false;
 };
 
-export const enrichStudentAcademics = async (student) => {
+export const enrichStudentAcademics = async (student, preFetchedConcession = undefined) => {
   const plain = toPlainStudent(student);
   if (!plain) return plain;
 
   const identifier = plain.rollNumber || plain.admissionNumber;
   const sqlAcademics = await loadAcademicsFromSQL(identifier);
 
+  let enriched = {
+    ...plain,
+    ...(sqlAcademics || {}),
+    academicSource: sqlAcademics ? 'sql' : (plain.course ? 'mongo' : 'unknown')
+  };
+
   if (sqlAcademics) {
     const studentPhoto = resolveStudentPhotoDisplay(sqlAcademics.studentPhoto, plain.studentPhoto);
-    return {
-      ...plain,
-      ...sqlAcademics,
-      studentPhoto,
-      photoSource: sqlAcademics.studentPhoto ? 'sdms' : (plain.studentPhoto ? 'mongo' : null),
-      academicSource: 'sql'
-    };
+    enriched.studentPhoto = studentPhoto;
+    enriched.photoSource = sqlAcademics.studentPhoto ? 'sdms' : (plain.studentPhoto ? 'mongo' : null);
   }
 
-  return {
-    ...plain,
-    academicSource: plain.course ? 'mongo' : 'unknown'
-  };
+  // Live Concessions Sync
+  if (identifier) {
+    let concessionRow = preFetchedConcession;
+
+    if (concessionRow === undefined) {
+      try {
+        const concessionsResult = await fetchConcessionsForStudent(identifier);
+        if (concessionsResult.success) {
+          concessionRow = concessionsResult.data;
+        }
+      } catch (err) {
+        console.error('❌ Error fetching single concessions during enrichment:', err);
+      }
+    }
+
+    if (concessionRow) {
+      let revisedFees = concessionRow.revised_fees;
+      if (typeof revisedFees === 'string') {
+        try {
+          revisedFees = JSON.parse(revisedFees);
+        } catch (err) {
+          console.error('Failed to parse revised_fees JSON:', err);
+        }
+      }
+
+      if (Array.isArray(revisedFees)) {
+        const yearOfStudy = Number(enriched.year ?? plain.year ?? 1);
+        const hostelRevisedFee = revisedFees.find(
+          f => f.feeHeadCode === 'HST01' && Number(f.studentYear) === Number(yearOfStudy)
+        );
+
+        if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
+          const revisedAmount = Number(hostelRevisedFee.revisedAmount);
+          const currentSavedFee = Number(plain.totalCalculatedFee ?? 0);
+
+          // Check if different from MongoDB
+          if (revisedAmount !== currentSavedFee) {
+            const term1 = Math.round(revisedAmount * 0.4);
+            const term2 = Math.round(revisedAmount * 0.3);
+            const term3 = Math.round(revisedAmount * 0.3);
+
+            try {
+              const User = (await import('../models/User.js')).default;
+              await User.updateOne(
+                { _id: plain._id },
+                {
+                  $set: {
+                    totalCalculatedFee: revisedAmount,
+                    calculatedTerm1Fee: term1,
+                    calculatedTerm2Fee: term2,
+                    calculatedTerm3Fee: term3
+                  }
+                }
+              );
+              console.log(`🔄 [enrichStudentAcademics] Live updated MongoDB User ${plain.rollNumber} with revised fee from SQL: ₹${revisedAmount}`);
+
+              // Update in-memory returned object
+              enriched.totalCalculatedFee = revisedAmount;
+              enriched.calculatedTerm1Fee = term1;
+              enriched.calculatedTerm2Fee = term2;
+              enriched.calculatedTerm3Fee = term3;
+
+              // Trigger sync to central fee database in the background
+              const { syncStudentHostelFeeSafely } = await import('../services/feesSyncService.js');
+              syncStudentHostelFeeSafely(enriched, { academicYear: enriched.academicYear }).catch(err => {
+                console.error('❌ Error syncing revised fee in background:', err);
+              });
+            } catch (dbErr) {
+              console.error('❌ Error updating revised fee in MongoDB during enrichment:', dbErr);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return enriched;
 };
 
 /**
@@ -245,7 +319,29 @@ export const enrichStudentsAcademics = async (students) => {
 
   await loadIdentifiersBatch(identifiers);
 
-  return Promise.all(students.map((s) => enrichStudentAcademics(s)));
+  // Batch fetch concessions in a single SQL query
+  const concessionsMap = new Map();
+  try {
+    const concessionsResult = await fetchConcessionsForStudents(identifiers);
+    if (concessionsResult.success && concessionsResult.data) {
+      concessionsResult.data.forEach(c => {
+        const keyPin = normalizeKey(c.pin_no);
+        const keyAdm = normalizeKey(c.admission_number);
+        if (keyPin) concessionsMap.set(keyPin, c);
+        if (keyAdm) concessionsMap.set(keyAdm, c);
+      });
+    }
+  } catch (err) {
+    console.error('❌ Error batch fetching concessions during enrichment:', err);
+  }
+
+  return Promise.all(
+    students.map((s) => {
+      const identifier = normalizeKey(s.rollNumber || s.admissionNumber);
+      const preFetched = concessionsMap.get(identifier) || null;
+      return enrichStudentAcademics(s, preFetched);
+    })
+  );
 };
 
 export const matchesAcademicFilters = (student, filters = {}) => {

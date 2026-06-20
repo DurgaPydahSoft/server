@@ -266,55 +266,93 @@ export const addStudent = async (req, res, next) => {
     let calculatedTerm2Fee = 0;
     let calculatedTerm3Fee = 0;
     let totalCalculatedFee = 0;
+    let hasRevisedFee = false;
 
+    // 1. Check overall concessions SQL table for a custom revised fee
     try {
-      const FeeStructure = (await import('../models/FeeStructure.js')).default;
-      const feeCourse = sqlAcademics?.course || course;
-      const feeBranch = sqlAcademics?.branch || branch;
-      const feeYear = sqlAcademics?.year || year;
-      const feeStructure = await FeeStructure.getFeeStructure(
-        academicYear,
-        feeCourse,
-        feeBranch,
-        feeYear,
-        finalCategoryName
-      );
+      const { fetchConcessionsForStudent } = await import('../utils/sqlService.js');
+      const concessionsResult = await fetchConcessionsForStudent(rollUpper);
       
-      if (feeStructure) {
-        console.log('📊 Fee structure found:', feeStructure);
-        
-        // Calculate fees with concession (applied to Term 1 only, excess to Term 2)
-        const concessionAmount = Number(concession) || 0;
-        const totalOriginalFee = feeStructure.totalFee;
-        
-        // Apply concession to Term 1 first
-        calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
-        
-        // If concession exceeds Term 1 fee, apply excess to Term 2
-        let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
-        calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
-        
-        // If concession still exceeds Term 1 + Term 2, apply to Term 3
-        remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
-        calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
-        
-        totalCalculatedFee = calculatedTerm1Fee + calculatedTerm2Fee + calculatedTerm3Fee;
-        
-        console.log('💰 Fee calculation:', {
-          original: totalOriginalFee,
-          concession: concessionAmount,
-          term1: calculatedTerm1Fee,
-          term2: calculatedTerm2Fee,
-          term3: calculatedTerm3Fee,
-          total: totalCalculatedFee,
-          remainingConcession: remainingConcession
-        });
-      } else {
-        console.log('⚠️ No fee structure found for category:', category, 'academic year:', academicYear);
+      if (concessionsResult.success && concessionsResult.data) {
+        const concessions = concessionsResult.data;
+        let revisedFees = concessions.revised_fees;
+        if (typeof revisedFees === 'string') {
+          try {
+            revisedFees = JSON.parse(revisedFees);
+          } catch (err) {
+            console.error('Failed to parse revised_fees JSON:', err);
+          }
+        }
+        if (Array.isArray(revisedFees)) {
+          const feeYear = sqlAcademics?.year || year;
+          const hostelRevisedFee = revisedFees.find(
+            f => f.feeHeadCode === 'HST01' && Number(f.studentYear) === Number(feeYear)
+          );
+          if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
+            const revisedAmount = Number(hostelRevisedFee.revisedAmount);
+            calculatedTerm1Fee = Math.round(revisedAmount * 0.4);
+            calculatedTerm2Fee = Math.round(revisedAmount * 0.3);
+            calculatedTerm3Fee = Math.round(revisedAmount * 0.3);
+            totalCalculatedFee = revisedAmount;
+            hasRevisedFee = true;
+            console.log(`💰 [addStudent] Applying SQL overall concession/revised fee: ₹${revisedAmount}`);
+          }
+        }
       }
-    } catch (feeError) {
-      console.error('❌ Error calculating fees:', feeError);
-      // Don't fail the registration if fee calculation fails
+    } catch (concessionError) {
+      console.error('❌ Error checking overall concessions during registration:', concessionError);
+    }
+
+    if (!hasRevisedFee) {
+      try {
+        const FeeStructure = (await import('../models/FeeStructure.js')).default;
+        const feeCourse = sqlAcademics?.course || course;
+        const feeBranch = sqlAcademics?.branch || branch;
+        const feeYear = sqlAcademics?.year || year;
+        const feeStructure = await FeeStructure.getFeeStructure(
+          academicYear,
+          feeCourse,
+          feeBranch,
+          feeYear,
+          finalCategoryName
+        );
+        
+        if (feeStructure) {
+          console.log('📊 Fee structure found:', feeStructure);
+          
+          // Calculate fees with concession (applied to Term 1 only, excess to Term 2)
+          const concessionAmount = Number(concession) || 0;
+          const totalOriginalFee = feeStructure.totalFee;
+          
+          // Apply concession to Term 1 first
+          calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
+          
+          // If concession exceeds Term 1 fee, apply excess to Term 2
+          let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
+          calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
+          
+          // If concession still exceeds Term 1 + Term 2, apply to Term 3
+          remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
+          calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
+          
+          totalCalculatedFee = calculatedTerm1Fee + calculatedTerm2Fee + calculatedTerm3Fee;
+          
+          console.log('💰 Fee calculation:', {
+            original: totalOriginalFee,
+            concession: concessionAmount,
+            term1: calculatedTerm1Fee,
+            term2: calculatedTerm2Fee,
+            term3: calculatedTerm3Fee,
+            total: totalCalculatedFee,
+            remainingConcession: remainingConcession
+          });
+        } else {
+          console.log('⚠️ No fee structure found for category:', category, 'academic year:', academicYear);
+        }
+      } catch (feeError) {
+        console.error('❌ Error calculating fees:', feeError);
+        // Don't fail the registration if fee calculation fails
+      }
     }
 
     // Handle guardian photo uploads (student photo comes from SDMS at display time)
@@ -2152,11 +2190,16 @@ export const getStudentsCount = async (req, res, next) => {
         academicFilters: { course, branch }
       });
       
+      const oneWeekAgo = new Date();
+      oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+      const newThisWeek = result.students.filter(s => new Date(s.createdAt) >= oneWeekAgo).length;
+      
       return res.status(200).json({
         success: true,
         data: {
           total: result.count,
-          count: result.count
+          count: result.count,
+          newThisWeek
         }
       });
     }
@@ -2176,11 +2219,64 @@ export const getStudentsCount = async (req, res, next) => {
 
     const totalStudents = await User.countDocuments(query);
     
+    // Calculate new students in the last 7 days (efficiently from MongoDB)
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    
+    const newStudentsQuery = {
+      role: 'student',
+      createdAt: { $gte: oneWeekAgo }
+    };
+    if (hostelStatus) {
+      newStudentsQuery.hostelStatus = hostelStatus;
+    } else {
+      newStudentsQuery.hostelStatus = 'Active';
+    }
+    if (gender) newStudentsQuery.gender = gender;
+    
+    const newStudentsDocs = await User.find(newStudentsQuery).select('rollNumber admissionNumber createdAt').lean();
+    let newThisWeek = 0;
+    
+    if (newStudentsDocs.length > 0) {
+      const enrichedNewStudents = await enrichStudentsAcademics(newStudentsDocs);
+      
+      // Determine course filters if principal/custom role has them
+      const adminUser = req.admin || req.user;
+      let allowedCourses = [];
+      if (adminUser?.role === 'principal') {
+        if (adminUser.assignedCourses && adminUser.assignedCourses.length > 0) {
+          allowedCourses = adminUser.assignedCourses.map(c => c.trim().toUpperCase());
+        } else if (adminUser.course) {
+          const courseName = typeof adminUser.course === 'string' ? adminUser.course : adminUser.course.name;
+          if (courseName) {
+            allowedCourses = [courseName.trim().toUpperCase()];
+          }
+        }
+      } else if (adminUser?.role === 'custom' && adminUser.customRoleId) {
+        const customRole = adminUser.customRoleId;
+        if (customRole.assignedCourses && customRole.assignedCourses.length > 0) {
+          allowedCourses = customRole.assignedCourses.map(c => c.trim().toUpperCase());
+        }
+      }
+      
+      if (allowedCourses.length > 0) {
+        const allowedSet = new Set(allowedCourses);
+        const filteredNewStudents = enrichedNewStudents.filter(s => {
+          const courseName = typeof s.course === 'string' ? s.course : s.course?.name;
+          return courseName && allowedSet.has(courseName.trim().toUpperCase());
+        });
+        newThisWeek = filteredNewStudents.length;
+      } else {
+        newThisWeek = enrichedNewStudents.length;
+      }
+    }
+    
     res.status(200).json({
       success: true,
       data: {
         total: totalStudents,
         count: totalStudents,
+        newThisWeek
       },
     });
   } catch (error) {
@@ -2188,6 +2284,7 @@ export const getStudentsCount = async (req, res, next) => {
     next(createError(500, 'Failed to fetch total student count.'));
   }
 };
+
 
 // Get course counts for admin dashboard (resolves sql_* and course name strings)
 export const getCourseCounts = async (req, res, next) => {

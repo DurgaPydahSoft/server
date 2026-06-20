@@ -537,6 +537,60 @@ export const fetchSemesterEndDateFromSQL = async ({ sqlCourseId, yearOfStudy, ac
 };
 
 /**
+ * Fetch overall concessions for a student by PIN number or Admission number
+ */
+export const fetchConcessionsForStudent = async (identifier) => {
+  try {
+    const pool = getSQLPool();
+    const query = `
+      SELECT id, admission_number, pin_no, student_name, revised_fees
+      FROM overall_concessions
+      WHERE pin_no = ? OR admission_number = ?
+      LIMIT 1
+    `;
+    const [rows] = await pool.execute(query, [identifier, identifier]);
+    if (rows.length === 0) {
+      return { success: false, data: null };
+    }
+    return { success: true, data: rows[0] };
+  } catch (error) {
+    console.error('❌ Error fetching overall concessions from SQL:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Fetch overall concessions for multiple students by PIN number or Admission number
+ */
+export const fetchConcessionsForStudents = async (identifiers = []) => {
+  const unique = [...new Set(
+    identifiers
+      .map((id) => (id || '').toString().trim().toUpperCase())
+      .filter(Boolean)
+  )];
+
+  if (unique.length === 0) {
+    return { success: true, data: [] };
+  }
+
+  try {
+    const pool = getSQLPool();
+    const placeholders = unique.map(() => '?').join(', ');
+    const query = `
+      SELECT id, admission_number, pin_no, student_name, revised_fees
+      FROM overall_concessions
+      WHERE pin_no IN (${placeholders}) OR admission_number IN (${placeholders})
+    `;
+    const params = [...unique, ...unique];
+    const [rows] = await pool.execute(query, params);
+    return { success: true, data: rows };
+  } catch (error) {
+    console.error('❌ Error fetching overall concessions from SQL (batch):', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
  * Close SQL connection pool
  */
 export const closeSQLPool = async () => {

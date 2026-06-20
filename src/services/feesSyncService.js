@@ -76,10 +76,11 @@ export const resolveFeesStudentId = (student, enriched = {}) => {
   return String(admission || '').trim();
 };
 
-const buildStudentFeePayload = (student, enriched, feeHeadId, academicYear) => {
+const buildStudentFeePayload = (student, enriched, feeHeadId, academicYear, customAmount) => {
   const feesAcademicYear = toFeesAcademicYear(academicYear);
   const studentId = resolveFeesStudentId(student, enriched);
   const concession = Number(enriched.concession ?? student.concession ?? 0);
+  const finalAmount = customAmount !== undefined ? customAmount : Number(enriched.totalCalculatedFee ?? student.totalCalculatedFee ?? 0);
 
   return {
     academicYear: feesAcademicYear,
@@ -87,7 +88,7 @@ const buildStudentFeePayload = (student, enriched, feeHeadId, academicYear) => {
     semester: null,
     studentId,
     studentYear: Number(enriched.year ?? student.year ?? 1),
-    amount: Number(enriched.totalCalculatedFee ?? student.totalCalculatedFee ?? 0),
+    amount: finalAmount,
     branch: String(enriched.branch || student.branch || '').trim(),
     college: resolveCollegeName(enriched) || resolveCollegeName(student),
     course: String(enriched.course || student.course || '').trim(),
@@ -113,8 +114,71 @@ export const syncStudentHostelFee = async (studentDoc, options = {}) => {
   }
 
   const enriched = await enrichStudentAcademics(plain);
+
+  // 1. Check if student has a revised fee in overall_concessions in SQL
+  let finalTotalFee = Number(plain.totalCalculatedFee ?? 0);
+  let finalTerm1Fee = Number(plain.calculatedTerm1Fee ?? 0);
+  let finalTerm2Fee = Number(plain.calculatedTerm2Fee ?? 0);
+  let finalTerm3Fee = Number(plain.calculatedTerm3Fee ?? 0);
+  let wasRevised = false;
+
+  try {
+    const { fetchConcessionsForStudent } = await import('../utils/sqlService.js');
+    const roll = plain.rollNumber;
+    const concessionsResult = await fetchConcessionsForStudent(roll);
+    if (concessionsResult.success && concessionsResult.data) {
+      const concessions = concessionsResult.data;
+      let revisedFees = concessions.revised_fees;
+      if (typeof revisedFees === 'string') {
+        try {
+          revisedFees = JSON.parse(revisedFees);
+        } catch (err) {
+          console.error('Failed to parse revised_fees JSON:', err);
+        }
+      }
+      if (Array.isArray(revisedFees)) {
+        const studentYear = Number(enriched.year ?? plain.year ?? 1);
+        const hostelRevisedFee = revisedFees.find(
+          f => f.feeHeadCode === 'HST01' && Number(f.studentYear) === Number(studentYear)
+        );
+        if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
+          const revisedAmount = Number(hostelRevisedFee.revisedAmount);
+          finalTotalFee = revisedAmount;
+          finalTerm1Fee = Math.round(revisedAmount * 0.4);
+          finalTerm2Fee = Math.round(revisedAmount * 0.3);
+          finalTerm3Fee = Math.round(revisedAmount * 0.3);
+          wasRevised = true;
+          console.log(`💰 [syncStudentHostelFee] Found revised fee for student ${roll}: ₹${revisedAmount}`);
+        }
+      }
+    }
+  } catch (concessionError) {
+    console.error('❌ Error checking overall concessions during sync:', concessionError);
+  }
+
+  // If a revised fee was found and it differs from the saved one, update MongoDB User record
+  if (wasRevised && finalTotalFee !== Number(plain.totalCalculatedFee ?? 0)) {
+    try {
+      const User = (await import('../models/User.js')).default;
+      await User.updateOne(
+        { _id: plain._id },
+        {
+          $set: {
+            totalCalculatedFee: finalTotalFee,
+            calculatedTerm1Fee: finalTerm1Fee,
+            calculatedTerm2Fee: finalTerm2Fee,
+            calculatedTerm3Fee: finalTerm3Fee
+          }
+        }
+      );
+      console.log(`🔄 [syncStudentHostelFee] Updated MongoDB User ${plain.rollNumber} with revised fee: ₹${finalTotalFee}`);
+    } catch (saveError) {
+      console.error('❌ Failed to update revised fee in MongoDB User:', saveError);
+    }
+  }
+
   const feeHeadId = await resolveHostelFeeHeadId();
-  const payload = buildStudentFeePayload(plain, enriched, feeHeadId, academicYear);
+  const payload = buildStudentFeePayload(plain, enriched, feeHeadId, academicYear, finalTotalFee);
 
   if (!payload.studentId || !payload.academicYear) {
     return {
