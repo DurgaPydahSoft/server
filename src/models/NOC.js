@@ -20,13 +20,11 @@ const nocSchema = new mongoose.Schema({
     trim: true
   },
   course: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Course',
+    type: String,
     required: true
   },
   branch: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Branch',
+    type: String,
     required: true
   },
   year: {
@@ -57,7 +55,7 @@ const nocSchema = new mongoose.Schema({
   // Track who raised the NOC
   raisedBy: {
     type: String,
-    enum: ['student', 'warden'],
+    enum: ['student', 'warden', 'admin'],
     default: 'student'
   },
   raisedByWarden: {
@@ -65,10 +63,10 @@ const nocSchema = new mongoose.Schema({
     ref: 'Admin',
     default: null
   },
-  // Status flow: Pending → Warden Verified → Admin Approved - Pending Meter Reading → Ready for Deactivation → Approved
+  // Status flow: Pending → Approved
   status: {
     type: String,
-    enum: ['Pending', 'Warden Verified', 'Sent for Correction', 'Admin Approved - Pending Meter Reading', 'Ready for Deactivation', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Approved', 'Rejected'],
     default: 'Pending',
     index: true
   },
@@ -121,153 +119,11 @@ const nocSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
-  // Checklist responses from warden
-  checklistResponses: [{
-    checklistItemId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'NOCChecklistConfig',
-      required: true
-    },
-    amount: {
-      type: String,
-      trim: true,
-      maxLength: [100, 'Amount value cannot exceed 100 characters']
-    },
-    remarks: {
-      type: String,
-      trim: true,
-      maxLength: [500, 'Remarks cannot exceed 500 characters']
-    },
-    signature: {
-      type: String,
-      trim: true
-    }
-  }],
   // Admin remarks for corrections
   adminRemarks: {
     type: String,
     trim: true,
     maxLength: [1000, 'Admin remarks cannot exceed 1000 characters']
-  },
-  // Track if sent for correction
-  sentForCorrectionBy: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Admin',
-    default: null
-  },
-  sentForCorrectionAt: {
-    type: Date,
-    default: null
-  },
-  // Track correction resubmission
-  resubmittedAt: {
-    type: Date,
-    default: null
-  },
-  // Electricity meter readings (entered by warden after admin approval)
-  meterReadings: {
-    meterType: {
-      type: String,
-      enum: ['single', 'dual'],
-      default: null
-    },
-    // Single meter readings
-    startUnits: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    endUnits: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    // Dual meter readings
-    meter1StartUnits: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    meter1EndUnits: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    meter2StartUnits: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    meter2EndUnits: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    // Reading date
-    readingDate: {
-      type: Date,
-      default: null
-    },
-    enteredBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Admin',
-      default: null
-    },
-    enteredAt: {
-      type: Date,
-      default: null
-    }
-  },
-  // Calculated electricity bill until vacating date
-  calculatedElectricityBill: {
-    consumption: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    rate: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    totalRoomBill: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    studentShare: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    numberOfStudents: {
-      type: Number,
-      min: 1,
-      default: null
-    },
-    total: {
-      type: Number,
-      min: 0,
-      default: null
-    },
-    calculatedAt: {
-      type: Date,
-      default: null
-    },
-    // Bill period (from last bill to vacating date)
-    billPeriodStart: {
-      type: Date,
-      default: null
-    },
-    billPeriodEnd: {
-      type: Date,
-      default: null
-    },
-    daysInPeriod: {
-      type: Number,
-      min: 0,
-      default: null
-    }
   }
 }, {
   timestamps: true,
@@ -316,13 +172,9 @@ nocSchema.statics.findByStudent = function(studentId) {
 // Instance method to update status with validation
 nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = '') {
   const validTransitions = {
-    'Pending': ['Warden Verified', 'Rejected'],
-    'Warden Verified': ['Sent for Correction', 'Admin Approved - Pending Meter Reading', 'Rejected'],
-    'Sent for Correction': ['Warden Verified', 'Rejected'], // Can be resubmitted or rejected
-    'Admin Approved - Pending Meter Reading': ['Ready for Deactivation', 'Rejected'],
-    'Ready for Deactivation': ['Approved'], // After meter readings entered
-    'Approved': [], // Final state
-    'Rejected': [] // Final state
+    'Pending': ['Approved', 'Rejected'],
+    'Approved': [],
+    'Rejected': []
   };
 
   const oldStatus = this.status;
@@ -333,28 +185,12 @@ nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = 
 
   this.status = newStatus;
   
-  if (newStatus === 'Warden Verified') {
-    this.verifiedBy = updatedBy;
-    this.verifiedAt = new Date();
-    this.wardenRemarks = remarks;
-    // If resubmitted after correction, update resubmittedAt
-    if (oldStatus === 'Sent for Correction') {
-      this.resubmittedAt = new Date();
-    }
-  } else if (newStatus === 'Sent for Correction') {
-    this.sentForCorrectionBy = updatedBy;
-    this.sentForCorrectionAt = new Date();
-    this.adminRemarks = remarks;
-  } else if (newStatus === 'Admin Approved - Pending Meter Reading') {
+  if (newStatus === 'Approved') {
     this.approvedBy = updatedBy;
     this.approvedAt = new Date();
     if (remarks) {
       this.adminRemarks = remarks;
     }
-  } else if (newStatus === 'Ready for Deactivation') {
-    // Status set when meter readings are entered
-  } else if (newStatus === 'Approved') {
-    // Final approval after meter readings and bill calculation
   } else if (newStatus === 'Rejected') {
     this.rejectedBy = updatedBy;
     this.rejectedAt = new Date();
@@ -366,8 +202,8 @@ nocSchema.methods.updateStatus = async function(newStatus, updatedBy, remarks = 
 
 // Instance method to deactivate student
 nocSchema.methods.deactivateStudent = async function() {
-  if (this.status !== 'Ready for Deactivation' && this.status !== 'Approved') {
-    throw new Error('Student can only be deactivated when NOC is ready for deactivation or approved');
+  if (this.status !== 'Approved') {
+    throw new Error('Student can only be deactivated when NOC is approved');
   }
 
   this.studentDeactivated = true;
@@ -375,32 +211,143 @@ nocSchema.methods.deactivateStudent = async function() {
   
   // Update student status in User model and vacate room allocation
   const User = mongoose.model('User');
+  const RoomOccupancyHistory = mongoose.model('RoomOccupancyHistory');
   const student = await User.findById(this.student);
+  
   if (student) {
     console.log(`🏠 Vacating room allocation for student ${student.name} (${student.rollNumber}):`);
     console.log(`   - Room: ${student.roomNumber || 'None'}`);
     console.log(`   - Bed: ${student.bedNumber || 'None'}`);
     console.log(`   - Locker: ${student.lockerNumber || 'None'}`);
+
+    const activeHistory = await RoomOccupancyHistory.findOne({
+      student: this.student,
+      academicYear: student.academicYear,
+      status: 'Active'
+    });
+
+    if (!activeHistory && student.roomNumber) {
+      await RoomOccupancyHistory.create({
+        student: student._id,
+        studentName: student.name,
+        rollNumber: student.rollNumber,
+        course: student.course,
+        branch: student.branch,
+        yearOfStudy: student.year,
+        academicYear: student.academicYear,
+        hostel: student.hostel,
+        hostelCategory: student.hostelCategory,
+        room: student.room,
+        roomNumber: student.roomNumber,
+        bedNumber: student.bedNumber,
+        lockerNumber: student.lockerNumber,
+        allocatedFrom: student.createdAt || new Date(),
+        allocatedTo: new Date(),
+        status: 'Withdrawn',
+        expiryReason: 'noc'
+      });
+    } else {
+      await closeActiveOccupancyHistory({
+        studentId: this.student,
+        academicYear: student.academicYear,
+        status: 'Withdrawn',
+        expiryReason: 'noc'
+      });
+    }
   }
   
   await User.findByIdAndUpdate(this.student, { 
     hostelStatus: 'Inactive',
-    graduationStatus: 'Dropped',
     roomNumber: null,
     bedNumber: null,
     lockerNumber: null,
-    applicationStatus: 'Expired'
-  });
-
-  await closeActiveOccupancyHistory({
-    studentId: this.student,
-    academicYear: student?.academicYear,
-    status: 'Withdrawn',
-    expiryReason: 'noc'
+    applicationStatus: 'Expired',
+    nocDate: this.approvedAt || new Date()
   });
 
   return this.save();
 };
+
+const revertStudentDeactivation = async (nocDoc) => {
+  const User = mongoose.model('User');
+  const RoomOccupancyHistory = mongoose.model('RoomOccupancyHistory');
+
+  console.log(`🔄 Reverting student deactivation for NOC ${nocDoc._id} (student: ${nocDoc.studentName})`);
+
+  // 1. Find the occupancy history record that was closed due to NOC
+  const history = await RoomOccupancyHistory.findOne({
+    student: nocDoc.student,
+    academicYear: nocDoc.academicYear,
+    status: 'Withdrawn',
+    expiryReason: 'noc'
+  }).sort({ allocatedFrom: -1 });
+
+  let room = null;
+  let roomNumber = null;
+  let bedNumber = null;
+  let lockerNumber = null;
+
+  if (history) {
+    room = history.room;
+    roomNumber = history.roomNumber;
+    bedNumber = history.bedNumber;
+    lockerNumber = history.lockerNumber;
+
+    // 2. Re-open/restore the occupancy history record
+    history.status = 'Active';
+    history.expiryReason = undefined;
+    history.allocatedTo = undefined;
+    await history.save();
+    console.log(`🏠 Restored RoomOccupancyHistory record ${history._id} to Active`);
+  }
+
+  // 3. Restore User fields
+  await User.findByIdAndUpdate(nocDoc.student, {
+    hostelStatus: 'Active',
+    applicationStatus: 'Active',
+    room,
+    roomNumber,
+    bedNumber,
+    lockerNumber,
+    nocDate: null
+  });
+  console.log(`👤 Reactivated student ${nocDoc.studentName} and restored room: ${roomNumber}`);
+};
+
+// Middleware to detect document deletion and revert deactivation if approved
+nocSchema.pre('findOneAndDelete', async function(next) {
+  try {
+    const doc = await this.model.findOne(this.getQuery());
+    if (doc && doc.status === 'Approved') {
+      await revertStudentDeactivation(doc);
+    }
+  } catch (error) {
+    console.error('❌ Error in pre-findOneAndDelete hook:', error);
+  }
+  next();
+});
+
+nocSchema.pre('deleteOne', { document: true, query: false }, async function(next) {
+  try {
+    if (this.status === 'Approved') {
+      await revertStudentDeactivation(this);
+    }
+  } catch (error) {
+    console.error('❌ Error in pre-deleteOne hook:', error);
+  }
+  next();
+});
+
+nocSchema.pre('remove', async function(next) {
+  try {
+    if (this.status === 'Approved') {
+      await revertStudentDeactivation(this);
+    }
+  } catch (error) {
+    console.error('❌ Error in pre-remove hook:', error);
+  }
+  next();
+});
 
 const NOC = mongoose.model('NOC', nocSchema);
 

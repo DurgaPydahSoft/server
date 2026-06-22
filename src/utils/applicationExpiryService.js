@@ -631,6 +631,9 @@ export const fetchStudentsForAcademicYear = async ({
 export const attachResolvedExpiryDates = async (students) => {
   if (!students?.length) return students;
 
+  // Dynamically import to avoid circular dependency
+  const RoomOccupancyHistory = (await import('../models/RoomOccupancyHistory.js')).default;
+
   return Promise.all(
     students.map(async (student) => {
       const useManual =
@@ -642,7 +645,38 @@ export const attachResolvedExpiryDates = async (students) => {
         manualExpiryDate: useManual ? student.applicationExpiryDate : null,
         sqlCourseId: student.sqlCourseId || null
       });
-      return { ...student, resolvedExpiryDate };
+
+      let roomNumber = student.roomNumber;
+      let bedNumber = student.bedNumber;
+      let lockerNumber = student.lockerNumber;
+
+      // Re-fetch historical room allocation if current live room is null and student is deactivated
+      if (!roomNumber && (student.hostelStatus === 'Inactive' || student.applicationStatus === 'Expired')) {
+        const history = await RoomOccupancyHistory.findOne({
+          student: student._id || student.id,
+          academicYear: student.academicYear
+        }).sort({ allocatedFrom: -1 });
+
+        if (history) {
+          roomNumber = history.roomNumber;
+          bedNumber = history.bedNumber;
+          lockerNumber = history.lockerNumber;
+        } else if (student.room) {
+          const Room = (await import('../models/Room.js')).default;
+          const roomDoc = await Room.findById(student.room).lean();
+          if (roomDoc) {
+            roomNumber = roomDoc.roomNumber;
+          }
+        }
+      }
+
+      return { 
+        ...student, 
+        resolvedExpiryDate,
+        roomNumber,
+        bedNumber,
+        lockerNumber
+      };
     })
   );
 };

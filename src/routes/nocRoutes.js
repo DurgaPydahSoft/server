@@ -5,17 +5,16 @@ import {
   getNOCRequestById,
   deleteNOCRequest,
   createNOCForStudent,
+  createNOCByAdmin,
   getStudentsForNOC,
   getWardenNOCRequests,
   getWardenChecklistItems,
   wardenVerifyNOC,
   wardenRejectNOC,
-  enterMeterReadings,
   getAllNOCRequests,
   approveNOCRequest,
-  finalApproveNOC,
-  sendForCorrection,
   rejectNOCRequest,
+  deleteNOCByAdmin,
   getNOCStats
 } from '../controllers/nocController.js';
 import { authenticateStudent, wardenAuth, adminAuth } from '../middleware/authMiddleware.js';
@@ -56,17 +55,16 @@ router.delete('/student/:id', authenticateStudent, deleteNOCRequest);
 router.get('/warden/students', wardenAuth, getStudentsForNOC);  // Get students for creating NOC
 router.post('/warden/create', wardenAuth, createNOCForStudent);  // Create NOC on behalf of student
 router.get('/warden/all', wardenAuth, getWardenNOCRequests);
-router.get('/warden/checklist', wardenAuth, getWardenChecklistItems);  // Get active checklist items
-router.post('/warden/:id/verify', wardenAuth, wardenVerifyNOC);
+router.post('/warden/:id/verify', wardenAuth, wardenVerifyNOC); // Directly approves
 router.post('/warden/:id/reject', wardenAuth, wardenRejectNOC);
-router.post('/warden/:id/meter-readings', wardenAuth, enterMeterReadings);  // Enter meter readings after admin approval
 
 // Admin routes (requires noc_management permission)
+router.get('/admin/students', nocManagementAuth, getStudentsForNOC); // Get students for creating NOC
+router.post('/admin/create', nocManagementAuth, createNOCByAdmin); // Create NOC on behalf of student
 router.get('/admin/all', nocManagementAuth, getAllNOCRequests);
-router.post('/admin/:id/approve', nocManagementAuth, approveNOCRequest);  // First approval - sets status to "Admin Approved - Pending Meter Reading"
-router.post('/admin/:id/final-approve', nocManagementAuth, finalApproveNOC);  // Final approval after meter readings - deactivates student
-router.post('/admin/:id/send-for-correction', nocManagementAuth, sendForCorrection);
+router.post('/admin/:id/approve', nocManagementAuth, approveNOCRequest);  // Directly approves and deactivates student
 router.post('/admin/:id/reject', nocManagementAuth, rejectNOCRequest);
+router.delete('/admin/:id', nocManagementAuth, deleteNOCByAdmin);
 router.get('/admin/stats', nocManagementAuth, getNOCStats);
 
 export default router;

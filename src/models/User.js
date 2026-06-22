@@ -336,6 +336,10 @@ const userSchema = new mongoose.Schema({
     enum: ['Active', 'Expired', 'Extended'],
     default: 'Active'
   },
+  nocDate: {
+    type: Date,
+    default: null
+  },
   applicationExpiryExtendedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Admin',
