@@ -262,7 +262,7 @@ nocSchema.methods.deactivateStudent = async function() {
     bedNumber: null,
     lockerNumber: null,
     applicationStatus: 'Expired',
-    nocDate: this.approvedAt || new Date()
+    nocDate: this.vacatingDate || this.approvedAt || new Date()
   });
 
   return this.save();

@@ -73,12 +73,7 @@ export const createNOCRequest = async (req, res, next) => {
       return next(createError(400, 'Invalid vacating date format'));
     }
 
-    // Ensure vacating date is not in the past
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (vacatingDateObj < today) {
-      return next(createError(400, 'Vacating date cannot be in the past'));
-    }
+    // Allow any date (past or future) for vacating date
 
     // Get student details
     const student = await User.findById(studentId);
@@ -252,12 +247,7 @@ export const createNOCForStudent = async (req, res, next) => {
       return next(createError(400, 'Invalid vacating date format'));
     }
 
-    // Ensure vacating date is not in the past
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (vacatingDateObj < today) {
-      return next(createError(400, 'Vacating date cannot be in the past'));
-    }
+    // Allow any date (past or future) for vacating date
 
     // Validate reason length
     if (reason.trim().length < 10) {
@@ -364,11 +354,7 @@ export const createNOCByAdmin = async (req, res, next) => {
       return next(createError(400, 'Invalid vacating date format'));
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (vacatingDateObj < today) {
-      return next(createError(400, 'Vacating date cannot be in the past'));
-    }
+    // Allow any date (past or future) for vacating date
 
     if (reason.trim().length < 10) {
       return next(createError(400, 'Reason must be at least 10 characters long'));
@@ -577,14 +563,21 @@ export const wardenVerifyNOC = async (req, res, next) => {
 
     // Update status to Approved directly
     await nocRequest.updateStatus('Approved', wardenId, remarks || '');
-    await nocRequest.deactivateStudent();
+    // Check if vacatingDate is today or in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const isPastOrToday = new Date(nocRequest.vacatingDate) <= today;
+
+    if (isPastOrToday) {
+      await nocRequest.deactivateStudent();
+    }
 
     // Create notification for student
     await Notification.create({
       recipient: nocRequest.student,
       recipientModel: 'User',
       title: 'NOC Request Approved',
-      message: 'Your NOC request has been approved by the warden and your hostel profile has been deactivated for this academic year.',
+      message: `Your NOC request has been approved by the warden. Your hostel profile will be deactivated on your vacating date (${new Date(nocRequest.vacatingDate).toLocaleDateString('en-IN')}) for this academic year.`,
       type: 'system',
       priority: 'high'
     });
@@ -597,7 +590,9 @@ export const wardenVerifyNOC = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'NOC request approved and student deactivated successfully',
+      message: isPastOrToday
+        ? 'NOC request approved and student deactivated successfully'
+        : 'NOC request approved successfully (deactivation scheduled on vacating date)',
       data: populatedNOC
     });
   } catch (error) {
@@ -693,14 +688,21 @@ export const approveNOCRequest = async (req, res, next) => {
 
     // Update status to Approved directly
     await nocRequest.updateStatus('Approved', superAdminId, adminRemarks || '');
-    await nocRequest.deactivateStudent();
+    // Check if vacatingDate is today or in the past
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const isPastOrToday = new Date(nocRequest.vacatingDate) <= today;
+
+    if (isPastOrToday) {
+      await nocRequest.deactivateStudent();
+    }
 
     // Create notification for student
     await Notification.create({
       recipient: nocRequest.student,
       recipientModel: 'User',
       title: 'NOC Request Approved',
-      message: 'Your NOC request has been approved by admin and your hostel profile has been deactivated for this academic year.',
+      message: `Your NOC request has been approved by admin. Your hostel profile will be deactivated on your vacating date (${new Date(nocRequest.vacatingDate).toLocaleDateString('en-IN')}) for this academic year.`,
       type: 'system',
       priority: 'high'
     });
@@ -713,7 +715,9 @@ export const approveNOCRequest = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: 'NOC request approved directly and student deactivated successfully',
+      message: isPastOrToday
+        ? 'NOC request approved directly and student deactivated successfully'
+        : 'NOC request approved directly (deactivation scheduled on vacating date)',
       data: populatedNOC
     });
   } catch (error) {

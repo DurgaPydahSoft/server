@@ -3,6 +3,7 @@ import RoomOccupancyHistory from '../models/RoomOccupancyHistory.js';
 import HostelCategory from '../models/HostelCategory.js';
 import User from '../models/User.js';
 import FeeReminder from '../models/FeeReminder.js';
+import NOC from '../models/NOC.js';
 import {
   enrichStudentAcademics,
   enrichStudentsAcademics,
@@ -292,6 +293,31 @@ export const reactivateStudentApplication = async (student, reason = 'academic_y
  * Daily job: expire active students when settings-based (or extended) expiry date has passed.
  * Also reactivates expired students if the academic settings/semester dates are extended.
  */
+export const processDueNOCDeactivations = async () => {
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+
+  // Find approved NOC requests that have not deactivated the student profile, whose vacatingDate is today or in the past
+  const dueNOCs = await NOC.find({
+    status: 'Approved',
+    studentDeactivated: false,
+    vacatingDate: { $lte: today }
+  });
+
+  let deactivatedCount = 0;
+  for (const noc of dueNOCs) {
+    try {
+      await noc.deactivateStudent();
+      deactivatedCount++;
+      console.log(`📅 Deactivated student ${noc.studentName} (${noc.rollNumber}) via approved NOC (vacatingDate: ${noc.vacatingDate})`);
+    } catch (err) {
+      console.error(`📅 Failed to deactivate student for NOC ${noc._id}:`, err);
+    }
+  }
+
+  return deactivatedCount;
+};
+
 export const processDueApplicationExpiries = async () => {
   const today = new Date();
   today.setHours(23, 59, 59, 999);
@@ -356,11 +382,15 @@ export const processDueApplicationExpiries = async () => {
     }
   }
 
+  // 3. Process NOC deactivations whose vacating date has arrived
+  const nocDeactivated = await processDueNOCDeactivations();
+
   return {
     processed: activeStudents.length,
     expired,
     skippedNoConfig,
-    reactivated
+    reactivated,
+    nocDeactivated
   };
 };
 
