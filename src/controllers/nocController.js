@@ -439,7 +439,7 @@ export const createNOCByAdmin = async (req, res, next) => {
 // Warden & Admin: Get students for NOC request creation
 export const getStudentsForNOC = async (req, res, next) => {
   try {
-    const { search, course, year } = req.query;
+    const { search, course, year, academicYear } = req.query;
     const wardenHostelType = req.warden ? req.warden.hostelType : null;
 
     // Build query - only active students
@@ -451,6 +451,11 @@ export const getStudentsForNOC = async (req, res, next) => {
     // Filter by hostel type (boys/girls) if warden is logged in
     if (wardenHostelType) {
       query.gender = wardenHostelType === 'boys' ? 'Male' : 'Female';
+    }
+
+    // Add academic year filter
+    if (academicYear) {
+      query.academicYear = academicYear;
     }
 
     // Add search filter
