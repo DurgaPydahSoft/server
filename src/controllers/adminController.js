@@ -290,12 +290,34 @@ export const addStudent = async (req, res, next) => {
           );
           if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
             const revisedAmount = Number(hostelRevisedFee.revisedAmount);
-            calculatedTerm1Fee = Math.round(revisedAmount * 0.4);
-            calculatedTerm2Fee = Math.round(revisedAmount * 0.3);
-            calculatedTerm3Fee = Math.round(revisedAmount * 0.3);
-            totalCalculatedFee = revisedAmount;
+            let finalRevisedAmount = revisedAmount;
+
+            if (hostelRevisedFee.concessionType === 'CONCESSION') {
+              const FeeStructure = (await import('../models/FeeStructure.js')).default;
+              const feeCourse = sqlAcademics?.course || course;
+              const feeBranch = sqlAcademics?.branch || branch;
+              const feeStructure = await FeeStructure.getFeeStructure(
+                academicYear,
+                feeCourse,
+                feeBranch,
+                feeYear,
+                finalCategoryName
+              );
+              if (feeStructure) {
+                const originalFee = feeStructure.totalFee || 0;
+                finalRevisedAmount = Math.max(0, originalFee - revisedAmount);
+                console.log(`💰 [addStudent] Applying CONCESSION: Original: ₹${originalFee}, Concession: ₹${revisedAmount}, Final revised: ₹${finalRevisedAmount}`);
+              } else {
+                console.warn(`⚠️ [addStudent] CONCESSION requested but no fee structure found for ${feeCourse}/${feeBranch}/year ${feeYear}`);
+              }
+            }
+
+            calculatedTerm1Fee = Math.round(finalRevisedAmount * 0.4);
+            calculatedTerm2Fee = Math.round(finalRevisedAmount * 0.3);
+            calculatedTerm3Fee = Math.round(finalRevisedAmount * 0.3);
+            totalCalculatedFee = finalRevisedAmount;
             hasRevisedFee = true;
-            console.log(`💰 [addStudent] Applying SQL overall concession/revised fee: ₹${revisedAmount}`);
+            console.log(`💰 [addStudent] Applying SQL overall concession/revised fee: ₹${finalRevisedAmount}`);
           }
         }
       }

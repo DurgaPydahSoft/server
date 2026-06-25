@@ -143,12 +143,42 @@ export const syncStudentHostelFee = async (studentDoc, options = {}) => {
         );
         if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
           const revisedAmount = Number(hostelRevisedFee.revisedAmount);
-          finalTotalFee = revisedAmount;
-          finalTerm1Fee = Math.round(revisedAmount * 0.4);
-          finalTerm2Fee = Math.round(revisedAmount * 0.3);
-          finalTerm3Fee = Math.round(revisedAmount * 0.3);
+          let finalRevisedAmount = revisedAmount;
+
+          if (hostelRevisedFee.concessionType === 'CONCESSION') {
+            try {
+              const FeeStructure = (await import('../models/FeeStructure.js')).default;
+              const feeCourse = enriched.course || plain.course;
+              const feeBranch = enriched.branch || plain.branch;
+              const feeYear = studentYear;
+              const feeCategory = plain.category;
+              if (academicYear && feeCourse && feeCategory) {
+                const feeStructure = await FeeStructure.getFeeStructure(
+                  academicYear,
+                  feeCourse,
+                  feeBranch,
+                  feeYear,
+                  feeCategory
+                );
+                if (feeStructure) {
+                  const originalFee = feeStructure.totalFee || 0;
+                  finalRevisedAmount = Math.max(0, originalFee - revisedAmount);
+                  console.log(`💰 [syncStudentHostelFee] Applying CONCESSION: Original: ₹${originalFee}, Concession: ₹${revisedAmount}, Final revised: ₹${finalRevisedAmount}`);
+                } else {
+                  console.warn(`⚠️ [syncStudentHostelFee] CONCESSION requested but no fee structure found for ${feeCourse}/${feeBranch}/year ${feeYear}/category ${feeCategory}`);
+                }
+              }
+            } catch (feeError) {
+              console.error('❌ Error retrieving fee structure for concession during sync:', feeError);
+            }
+          }
+
+          finalTotalFee = finalRevisedAmount;
+          finalTerm1Fee = Math.round(finalRevisedAmount * 0.4);
+          finalTerm2Fee = Math.round(finalRevisedAmount * 0.3);
+          finalTerm3Fee = Math.round(finalRevisedAmount * 0.3);
           wasRevised = true;
-          console.log(`💰 [syncStudentHostelFee] Found revised fee for student ${roll}: ₹${revisedAmount}`);
+          console.log(`💰 [syncStudentHostelFee] Found revised/concession fee for student ${roll}: ₹${finalRevisedAmount}`);
         }
       }
     }

@@ -1190,7 +1190,31 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
             );
             if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
               const revisedAmount = Number(hostelRevisedFee.revisedAmount);
-              console.log(`💰 Found SQL overall concession/revised fee for student ${identifier}, year ${year}: ₹${revisedAmount}`);
+              let finalRevisedAmount = revisedAmount;
+
+              if (hostelRevisedFee.concessionType === 'CONCESSION') {
+                const baseQueryForConcession = {
+                  academicYear,
+                  course,
+                  year: parseInt(year),
+                  category,
+                  isActive: true,
+                };
+                const concessionFeeStructure =
+                  await FeeStructure.findOne({ ...baseQueryForConcession, branch }) ||
+                  await FeeStructure.findOne({ ...baseQueryForConcession, branch: null }) ||
+                  await FeeStructure.findOne({ ...baseQueryForConcession, branch: undefined });
+                
+                if (concessionFeeStructure) {
+                  const originalFee = concessionFeeStructure.totalFee || 0;
+                  finalRevisedAmount = Math.max(0, originalFee - revisedAmount);
+                  console.log(`💰 [getFeeStructureForAdmitCard] Applying CONCESSION: Original: ₹${originalFee}, Concession: ₹${revisedAmount}, Final revised: ₹${finalRevisedAmount}`);
+                } else {
+                  console.warn(`⚠️ [getFeeStructureForAdmitCard] CONCESSION requested but no fee structure found for ${course}/${branch}/year ${year}/category ${category}`);
+                }
+              }
+
+              console.log(`💰 Found SQL overall concession/revised fee for student ${identifier}, year ${year}: ₹${finalRevisedAmount}`);
               return res.json({
                 success: true,
                 data: {
@@ -1199,10 +1223,10 @@ export const getFeeStructureForAdmitCard = async (req, res) => {
                   branch,
                   year: parseInt(year),
                   category,
-                  term1Fee: Math.round(revisedAmount * 0.4),
-                  term2Fee: Math.round(revisedAmount * 0.3),
-                  term3Fee: Math.round(revisedAmount * 0.3),
-                  totalFee: revisedAmount,
+                  term1Fee: Math.round(finalRevisedAmount * 0.4),
+                  term2Fee: Math.round(finalRevisedAmount * 0.3),
+                  term3Fee: Math.round(finalRevisedAmount * 0.3),
+                  totalFee: finalRevisedAmount,
                   found: true,
                   isRevisedFee: true
                 }

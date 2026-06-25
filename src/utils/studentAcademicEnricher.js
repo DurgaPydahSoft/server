@@ -261,13 +261,44 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
 
         if (hostelRevisedFee && hostelRevisedFee.revisedAmount !== undefined && hostelRevisedFee.revisedAmount !== null) {
           const revisedAmount = Number(hostelRevisedFee.revisedAmount);
+          let finalRevisedAmount = revisedAmount;
+
+          if (hostelRevisedFee.concessionType === 'CONCESSION') {
+            try {
+              const FeeStructure = (await import('../models/FeeStructure.js')).default;
+              const feeCourse = enriched.course || plain.course;
+              const feeBranch = enriched.branch || plain.branch;
+              const feeYear = yearOfStudy;
+              const feeCategory = plain.category;
+              const academicYear = enriched.academicYear || plain.academicYear;
+              if (academicYear && feeCourse && feeCategory) {
+                const feeStructure = await FeeStructure.getFeeStructure(
+                  academicYear,
+                  feeCourse,
+                  feeBranch,
+                  feeYear,
+                  feeCategory
+                );
+                if (feeStructure) {
+                  const originalFee = feeStructure.totalFee || 0;
+                  finalRevisedAmount = Math.max(0, originalFee - revisedAmount);
+                  console.log(`💰 [enrichStudentAcademics] Applying CONCESSION: Original: ₹${originalFee}, Concession: ₹${revisedAmount}, Final revised: ₹${finalRevisedAmount}`);
+                } else {
+                  console.warn(`⚠️ [enrichStudentAcademics] CONCESSION requested but no fee structure found for ${feeCourse}/${feeBranch}/year ${feeYear}/category ${feeCategory}`);
+                }
+              }
+            } catch (feeError) {
+              console.error('❌ Error retrieving fee structure for concession during enrichment:', feeError);
+            }
+          }
+
           const currentSavedFee = Number(plain.totalCalculatedFee ?? 0);
 
           // Check if different from MongoDB
-          if (revisedAmount !== currentSavedFee) {
-            const term1 = Math.round(revisedAmount * 0.4);
-            const term2 = Math.round(revisedAmount * 0.3);
-            const term3 = Math.round(revisedAmount * 0.3);
+          if (finalRevisedAmount !== currentSavedFee) {
+            const term1 = Math.round(finalRevisedAmount * 0.4);
+            const term2 = Math.round(finalRevisedAmount * 0.3);
+            const term3 = Math.round(finalRevisedAmount * 0.3);
 
             try {
               const User = (await import('../models/User.js')).default;
@@ -275,17 +306,17 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
                 { _id: plain._id },
                 {
                   $set: {
-                    totalCalculatedFee: revisedAmount,
+                    totalCalculatedFee: finalRevisedAmount,
                     calculatedTerm1Fee: term1,
                     calculatedTerm2Fee: term2,
                     calculatedTerm3Fee: term3
                   }
                 }
               );
-              console.log(`🔄 [enrichStudentAcademics] Live updated MongoDB User ${plain.rollNumber} with revised fee from SQL: ₹${revisedAmount}`);
+              console.log(`🔄 [enrichStudentAcademics] Live updated MongoDB User ${plain.rollNumber} with revised fee from SQL: ₹${finalRevisedAmount}`);
 
               // Update in-memory returned object
-              enriched.totalCalculatedFee = revisedAmount;
+              enriched.totalCalculatedFee = finalRevisedAmount;
               enriched.calculatedTerm1Fee = term1;
               enriched.calculatedTerm2Fee = term2;
               enriched.calculatedTerm3Fee = term3;
