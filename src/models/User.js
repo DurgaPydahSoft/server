@@ -183,7 +183,7 @@ const userSchema = new mongoose.Schema({
   gender: {
     type: String,
     enum: ['Male', 'Female'],
-    required: function() { return this.role === 'student'; }
+    required: false
   },
   category: {
     type: String,
@@ -191,7 +191,9 @@ const userSchema = new mongoose.Schema({
     validate: {
       validator: function(v) {
         if (this.role !== 'student') return true;
-        const validCategories = this.gender === 'Male' 
+        const allCategories = ['A+', 'A', 'B+', 'B', 'C'];
+        if (!this.gender) return allCategories.includes(v);
+        const validCategories = this.gender === 'Male'
           ? ['A+', 'A', 'B+', 'B']
           : ['A+', 'A', 'B', 'C'];
         return validCategories.includes(v);

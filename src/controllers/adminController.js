@@ -99,6 +99,16 @@ const generateHostelId = async (gender) => {
   return hostelId;
 };
 
+const inferGenderFromHostel = async (hostelId) => {
+  if (!hostelId) return null;
+  const hostelDoc = await Hostel.findById(hostelId).select('name').lean();
+  if (!hostelDoc?.name) return null;
+  const name = hostelDoc.name.toUpperCase();
+  if (name.includes('BOY') || name.includes('MALE') || name.includes('MEN')) return 'Male';
+  if (name.includes('GIRL') || name.includes('FEMALE') || name.includes('WOMEN')) return 'Female';
+  return null;
+};
+
 // Add a new student
 export const addStudent = async (req, res, next) => {
   try {
@@ -131,6 +141,8 @@ export const addStudent = async (req, res, next) => {
       concession = 0,
       college
     } = req.body;
+
+    const normalizedGender = normalizeGender(gender);
 
     const rollUpper = String(rollNumber || '').trim().toUpperCase();
     if (!rollUpper) {
@@ -480,7 +492,7 @@ export const addStudent = async (req, res, next) => {
       if (resolvedAdmissionNumber) {
         student.admissionNumber = resolvedAdmissionNumber;
       }
-      if (gender) student.gender = gender;
+      if (normalizedGender) student.gender = normalizedGender;
       if (sqlCourseId) student.sqlCourseId = sqlCourseId;
       if (sqlBranchId) student.sqlBranchId = sqlBranchId;
       if (college) {
@@ -581,8 +593,10 @@ export const addStudent = async (req, res, next) => {
       });
     }
 
+    const genderForHostelId =
+      normalizedGender || (await inferGenderFromHostel(hostel)) || 'Male';
     const generatedPassword = User.generateRandomPassword();
-    const hostelId = await generateHostelId(gender || 'Male');
+    const hostelId = await generateHostelId(genderForHostelId);
     console.log('Generated hostel ID:', hostelId);
 
     // Create new student (no expiry date at registration — configured in Application Expiry Settings)
@@ -592,7 +606,7 @@ export const addStudent = async (req, res, next) => {
       admissionNumber: resolvedAdmissionNumber,
       password: generatedPassword,
       role: 'student',
-      gender,
+      ...(normalizedGender && { gender: normalizedGender }),
       ...(sqlCourseId && { sqlCourseId }),
       ...(sqlBranchId && { sqlBranchId }),
       college: typeof college === 'string' ? JSON.parse(college) : college,

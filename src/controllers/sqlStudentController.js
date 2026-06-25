@@ -9,15 +9,11 @@ import { formatSqlStudentPhoto } from '../utils/studentPhotoService.js';
  */
 const mapGender = (sqlGender) => {
   if (!sqlGender) return null;
-  
-  const genderMap = {
-    'M': 'Male',
-    'F': 'Female',
-    'Male': 'Male',
-    'Female': 'Female'
-  };
-  
-  return genderMap[sqlGender.toUpperCase()] || null;
+
+  const normalized = sqlGender.toString().trim().toUpperCase();
+  if (['M', 'MALE', 'BOY'].includes(normalized)) return 'Male';
+  if (['F', 'FEMALE', 'GIRL'].includes(normalized)) return 'Female';
+  return null;
 };
 
 /**
