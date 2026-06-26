@@ -7,7 +7,8 @@ import {
   resolveApplicationExpiryDate,
   extendStudentApplicationExpiry,
   getAcademicYearEndYear,
-  processDueApplicationExpiries
+  processDueApplicationExpiries,
+  expireStudentApplication
 } from '../utils/applicationExpiryService.js';
 import { enrichStudentAcademics, enrichStudentsAcademics } from '../utils/studentAcademicEnricher.js';
 
@@ -69,6 +70,48 @@ export const getStudentApplicationExpiry = async (req, res, next) => {
         yearOfStudy: enriched.year,
         hostelStatus: student.hostelStatus,
         expirySource: enriched.sqlCourseId ? 'sql_calendar' : 'manual_config'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deactivateStudentApplication = async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    if (!reason?.trim()) {
+      return next(createError(400, 'Reason is required'));
+    }
+
+    const student = await User.findOne({ _id: req.params.id, role: 'student' });
+    if (!student) {
+      return next(createError(404, 'Student not found'));
+    }
+
+    if (student.hostelStatus !== 'Active') {
+      return next(createError(400, 'Student is already inactive'));
+    }
+
+    if (student.applicationStatus === 'Expired') {
+      return next(createError(400, 'Student application is already expired'));
+    }
+
+    const result = await expireStudentApplication(student, 'admin_inactive', reason.trim());
+    if (!result.changed) {
+      return next(createError(400, 'Student could not be deactivated'));
+    }
+
+    res.json({
+      success: true,
+      message: 'Student marked as inactive and application expired',
+      data: {
+        id: student._id,
+        hostelStatus: student.hostelStatus,
+        applicationStatus: student.applicationStatus,
+        rollNumber: student.rollNumber,
+        name: student.name,
+        actualExpiredAt: new Date()
       }
     });
   } catch (error) {

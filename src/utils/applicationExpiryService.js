@@ -221,7 +221,7 @@ export const removeStudentEnrollmentForAcademicYear = async ({
   };
 };
 
-export const expireStudentApplication = async (student, reason = 'academic_year_end') => {
+export const expireStudentApplication = async (student, reason = 'academic_year_end', notes = null) => {
   if (!student || student.hostelStatus !== 'Active') return { changed: false };
 
   student.hostelStatus = 'Inactive';
@@ -237,6 +237,18 @@ export const expireStudentApplication = async (student, reason = 'academic_year_
     status: 'Expired',
     expiryReason: reason
   });
+
+  if (notes?.trim()) {
+    await RoomOccupancyHistory.updateMany(
+      {
+        student: student._id,
+        academicYear: student.academicYear,
+        status: 'Expired',
+        expiryReason: reason
+      },
+      { $set: { notes: notes.trim() } }
+    );
+  }
 
   try {
     await FeeReminder.updateMany(
@@ -679,19 +691,28 @@ export const attachResolvedExpiryDates = async (students) => {
       let roomNumber = student.roomNumber;
       let bedNumber = student.bedNumber;
       let lockerNumber = student.lockerNumber;
+      let actualExpiredAt = student.allocatedTo || null;
 
-      // Re-fetch historical room allocation if current live room is null and student is deactivated
-      if (!roomNumber && (student.hostelStatus === 'Inactive' || student.applicationStatus === 'Expired')) {
+      const isExpiredProfile =
+        student.hostelStatus === 'Inactive' || student.applicationStatus === 'Expired';
+
+      if (isExpiredProfile || !roomNumber) {
         const history = await RoomOccupancyHistory.findOne({
           student: student._id || student.id,
-          academicYear: student.academicYear
-        }).sort({ allocatedFrom: -1 });
+          academicYear: student.academicYear,
+          ...(isExpiredProfile ? { status: 'Expired' } : {})
+        }).sort({ allocatedFrom: -1, allocatedTo: -1 });
 
         if (history) {
-          roomNumber = history.roomNumber;
-          bedNumber = history.bedNumber;
-          lockerNumber = history.lockerNumber;
-        } else if (student.room) {
+          if (!roomNumber) {
+            roomNumber = history.roomNumber;
+            bedNumber = history.bedNumber;
+            lockerNumber = history.lockerNumber;
+          }
+          if (isExpiredProfile && history.allocatedTo) {
+            actualExpiredAt = history.allocatedTo;
+          }
+        } else if (!roomNumber && student.room) {
           const Room = (await import('../models/Room.js')).default;
           const roomDoc = await Room.findById(student.room).lean();
           if (roomDoc) {
@@ -700,9 +721,10 @@ export const attachResolvedExpiryDates = async (students) => {
         }
       }
 
-      return { 
-        ...student, 
+      return {
+        ...student,
         resolvedExpiryDate,
+        actualExpiredAt,
         roomNumber,
         bedNumber,
         lockerNumber

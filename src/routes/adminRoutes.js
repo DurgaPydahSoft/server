@@ -34,6 +34,7 @@ import {
   calculateExpiryPreview,
   getStudentApplicationExpiry,
   extendApplication,
+  deactivateStudentApplication,
   getRoomOccupancyHistory,
   listApplicationExpiryConfig,
   upsertApplicationExpiryConfig,
@@ -227,6 +228,7 @@ router.post('/students/renew-batch', renewBatches);
 router.post('/students/calculate-expiry', calculateExpiryPreview);
 router.get('/students/:id/application-expiry', getStudentApplicationExpiry);
 router.post('/students/:id/extend-application', superAdminAuth, extendApplication);
+router.post('/students/:id/deactivate-application', adminAuth, deactivateStudentApplication);
 router.get('/rooms/:roomId/occupancy-history', getRoomOccupancyHistory);
 router.get('/application-expiry-config', listApplicationExpiryConfig);
 router.post('/application-expiry-config', adminAuth, upsertApplicationExpiryConfig);
