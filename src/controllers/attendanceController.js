@@ -88,7 +88,7 @@ const computeAttendanceStatistics = (records) => {
     (att.morning || att.evening || att.night) && !(att.morning && att.evening && att.night)
   ).length;
   const absent = records.filter(att =>
-    !att.student?.isOnLeave && !att.morning && !att.evening && !att.night
+    !att.morning && !att.evening && !att.night
   ).length;
 
   return {
@@ -408,6 +408,17 @@ export const getAttendanceForDate = async (req, res, next) => {
         academicFilters: { course, branch }
       });
       students = result.students;
+
+      // Filter out students who have renewed to a newer academic year
+      const getStartYear = (ay) => {
+        if (!ay) return 0;
+        return parseInt(ay.split('-')[0], 10) || 0;
+      };
+      const requestedYearStart = getStartYear(academicYear);
+      students = students.filter(student => {
+        const studentCurrentYearStart = getStartYear(student.currentAcademicYear);
+        return studentCurrentYearStart <= requestedYearStart;
+      });
     } else {
       const studentQuery = buildActiveStudentsQuery({
         gender,
@@ -611,7 +622,18 @@ export const getAttendanceForDateRange = async (req, res, next) => {
         page: 1,
         limit: 1000000
       });
-      const studentIdsFilter = new Set(result.students.map(s => s._id.toString()));
+      // Filter out students who have renewed to a newer academic year
+      const getStartYear = (ay) => {
+        if (!ay) return 0;
+        return parseInt(ay.split('-')[0], 10) || 0;
+      };
+      const requestedYearStart = getStartYear(academicYear);
+      const filteredStudents = result.students.filter(student => {
+        const studentCurrentYearStart = getStartYear(student.currentAcademicYear);
+        return studentCurrentYearStart <= requestedYearStart;
+      });
+
+      const studentIdsFilter = new Set(filteredStudents.map(s => s._id.toString()));
       attendance = attendance.filter(att => 
         att.student && studentIdsFilter.has(att.student._id?.toString() || att.student?.toString())
       );
