@@ -367,14 +367,14 @@ export const processDueApplicationExpiries = async () => {
     }
   }
 
-  // 2. Process Expired -> Active (Reactivation check due to date extension)
+  // 2. Process Expired -> Active (Reactivation check due to date extension - disabled)
+  let reactivated = 0;
+  /*
   const expiredStudents = await User.find({
     role: 'student',
     hostelStatus: 'Inactive',
     applicationStatus: 'Expired'
   });
-
-  let reactivated = 0;
 
   for (const student of expiredStudents) {
     const enriched = await enrichStudentAcademics(student.toObject());
@@ -393,6 +393,7 @@ export const processDueApplicationExpiries = async () => {
       if (result.changed) reactivated += 1;
     }
   }
+  */
 
   // 3. Process NOC deactivations whose vacating date has arrived
   const nocDeactivated = await processDueNOCDeactivations();

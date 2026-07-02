@@ -230,42 +230,42 @@ export const addStudent = async (req, res, next) => {
       throw createError(400, 'Invalid room number for the selected hostel/category.');
     }
 
-    // Check bed count limit for the selected academic year
-    const studentCount = await countStudentsInRoomForAcademicYear(roomDoc, academicYear);
-    if (studentCount >= roomDoc.bedCount) {
-      throw createError(400, 'Room is full for the selected academic year. Cannot register more students.');
-    }
-
-    const excludeStudentId = isRenewal ? existingStudent._id : null;
-
-    // Validate bed and locker assignment if provided (scoped to academic year)
-    if (bedNumber) {
-      const bedOccupied = await isBedOccupiedForAcademicYear(
-        roomDoc,
-        bedNumber,
-        academicYear,
-        excludeStudentId
-      );
-      if (bedOccupied) {
-        throw createError(400, 'Selected bed is already occupied for this academic year');
-      }
-
-      const expectedBedFormat = `${roomNumber} Bed `;
-      if (!bedNumber.startsWith(expectedBedFormat)) {
-        throw createError(400, 'Invalid bed number format for this room');
-      }
-    }
-
-    if (lockerNumber) {
-      const lockerOccupied = await isLockerOccupiedForAcademicYear(
-        roomDoc,
-        lockerNumber,
-        academicYear,
-        excludeStudentId
-      );
-      if (lockerOccupied) {
-        throw createError(400, 'Selected locker is already occupied for this academic year');
-      }
+     // Check bed count limit
+     const studentCount = await countStudentsInRoomForAcademicYear(roomDoc, academicYear);
+     if (studentCount >= roomDoc.bedCount) {
+       throw createError(400, 'Room is full. Cannot register more students.');
+     }
+ 
+     const excludeStudentId = isRenewal ? existingStudent._id : null;
+ 
+     // Validate bed and locker assignment if provided
+     if (bedNumber) {
+       const bedOccupied = await isBedOccupiedForAcademicYear(
+         roomDoc,
+         bedNumber,
+         academicYear,
+         excludeStudentId
+       );
+       if (bedOccupied) {
+         throw createError(400, 'Selected bed is already occupied');
+       }
+ 
+       const expectedBedFormat = `${roomNumber} Bed `;
+       if (!bedNumber.startsWith(expectedBedFormat)) {
+         throw createError(400, 'Invalid bed number format for this room');
+       }
+     }
+ 
+     if (lockerNumber) {
+       const lockerOccupied = await isLockerOccupiedForAcademicYear(
+         roomDoc,
+         lockerNumber,
+         academicYear,
+         excludeStudentId
+       );
+       if (lockerOccupied) {
+         throw createError(400, 'Selected locker is already occupied');
+       }
 
       const expectedLockerFormat = `${roomNumber} Locker `;
       if (!lockerNumber.startsWith(expectedLockerFormat)) {
@@ -1778,7 +1778,7 @@ export const updateStudent = async (req, res, next) => {
       throw createError(400, 'Invalid hostel status');
     }
 
-    // Validate bed and locker assignment if provided (scoped to academic year)
+    // Validate bed and locker assignment if provided
     const targetAcademicYear = academicYear || student.academicYear;
     let occupancyRoomDoc = roomDoc;
     if (!occupancyRoomDoc && (bedNumber || lockerNumber)) {
@@ -1793,7 +1793,7 @@ export const updateStudent = async (req, res, next) => {
         student._id
       );
       if (bedOccupied) {
-        throw createError(400, 'Selected bed is already occupied for this academic year');
+        throw createError(400, 'Selected bed is already occupied');
       }
 
       const roomToCheck = roomNumber || student.roomNumber;
@@ -1811,7 +1811,7 @@ export const updateStudent = async (req, res, next) => {
         student._id
       );
       if (lockerOccupied) {
-        throw createError(400, 'Selected locker is already occupied for this academic year');
+        throw createError(400, 'Selected locker is already occupied');
       }
 
       const roomToCheck = roomNumber || student.roomNumber;

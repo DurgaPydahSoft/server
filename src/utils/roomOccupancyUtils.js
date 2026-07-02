@@ -14,61 +14,102 @@ export const getDefaultAcademicYear = () => {
 };
 
 export const countStudentsInRoomForAcademicYear = async (room, academicYear) => {
-  const ay = academicYear || getDefaultAcademicYear();
   const roomMatch = buildRoomMatchQuery(room);
-  const historyCount = await RoomOccupancyHistory.countDocuments({
+  
+  // Find all active history stays (irrespective of academicYear)
+  const activeHistory = await RoomOccupancyHistory.find({
     ...roomMatch,
-    academicYear: ay,
-    status: { $nin: ['Withdrawn'] }
-  });
+    status: { $in: ['Active', 'Extended'] },
+    allocatedTo: null
+  })
+    .select('student')
+    .lean();
 
-  if (historyCount > 0) return historyCount;
+  const historyStudentIds = new Set(activeHistory.map(row => String(row.student)));
 
-  return User.countDocuments({
+  // Find all active users (irrespective of academicYear)
+  const activeUsers = await User.find({
     ...roomMatch,
     role: 'student',
-    academicYear: ay,
     hostelStatus: 'Active'
-  });
+  })
+    .select('_id')
+    .lean();
+
+  const allActiveStudentIds = new Set(historyStudentIds);
+  activeUsers.forEach(u => allActiveStudentIds.add(String(u._id)));
+
+  return allActiveStudentIds.size;
 };
 
 export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
-  const ay = academicYear || getDefaultAcademicYear();
   const roomMatch = buildRoomMatchQuery(room);
-  const historyRows = await RoomOccupancyHistory.find({
+  
+  // Find all active history stays (irrespective of academicYear)
+  const activeHistory = await RoomOccupancyHistory.find({
     ...roomMatch,
-    academicYear: ay,
-    status: { $nin: ['Withdrawn'] }
+    status: { $in: ['Active', 'Extended'] },
+    allocatedTo: null
   })
     .sort({ status: 1, studentName: 1 })
     .lean();
 
-  if (historyRows.length > 0) {
-    return historyRows.map((row) => ({
-      _id: row.student,
-      name: row.studentName,
-      rollNumber: row.rollNumber,
-      course: row.course,
-      branch: row.branch,
-      year: row.yearOfStudy,
-      bedNumber: row.bedNumber,
-      lockerNumber: row.lockerNumber,
-      enrollmentStatus: row.status,
-      academicYear: row.academicYear
-    }));
-  }
+  const historyStudentIds = new Set();
+  const historyMap = new Map();
+  activeHistory.forEach((row) => {
+    historyStudentIds.add(String(row.student));
+    historyMap.set(String(row.student), row);
+  });
 
-  return User.find({
+  // Find all active users (irrespective of academicYear)
+  const activeUsers = await User.find({
     ...roomMatch,
     role: 'student',
-    academicYear: ay,
     hostelStatus: 'Active'
   })
     .select('name rollNumber studentPhone course branch year bedNumber lockerNumber academicYear')
     .lean();
+
+  const resultStudents = [];
+
+  activeUsers.forEach((u) => {
+    const hist = historyMap.get(String(u._id));
+    resultStudents.push({
+      _id: u._id,
+      name: u.name,
+      rollNumber: u.rollNumber,
+      course: hist?.course || u.course,
+      branch: hist?.branch || u.branch,
+      year: hist?.yearOfStudy || u.year,
+      bedNumber: hist?.bedNumber || u.bedNumber,
+      lockerNumber: hist?.lockerNumber || u.lockerNumber,
+      enrollmentStatus: hist?.status || 'Active',
+      academicYear: hist?.academicYear || u.academicYear
+    });
+  });
+
+  // Include any student who has an active stay in history but is not active in User
+  activeHistory.forEach((row) => {
+    if (!activeUsers.some(u => String(u._id) === String(row.student))) {
+      resultStudents.push({
+        _id: row.student,
+        name: row.studentName,
+        rollNumber: row.rollNumber,
+        course: row.course,
+        branch: row.branch,
+        year: row.yearOfStudy,
+        bedNumber: row.bedNumber,
+        lockerNumber: row.lockerNumber,
+        enrollmentStatus: row.status,
+        academicYear: row.academicYear
+      });
+    }
+  });
+
+  return resultStudents;
 };
 
-/** Beds/lockers taken by active enrollments in a room for an academic year. */
+/** Beds/lockers taken by active enrollments in a room. */
 export const getOccupiedBedsAndLockersForAcademicYear = async (room, academicYear) => {
   const occupiedBeds = new Set();
   const occupiedLockers = new Set();
@@ -78,11 +119,11 @@ export const getOccupiedBedsAndLockersForAcademicYear = async (room, academicYea
     if (locker) occupiedLockers.add(locker);
   };
 
-  const ay = academicYear || getDefaultAcademicYear();
   const roomMatch = buildRoomMatchQuery(room);
+  
+  // Find all active history stays (irrespective of academicYear)
   const activeHistory = await RoomOccupancyHistory.find({
     ...roomMatch,
-    academicYear: ay,
     status: { $in: ['Active', 'Extended'] },
     allocatedTo: null
   })
@@ -95,10 +136,10 @@ export const getOccupiedBedsAndLockersForAcademicYear = async (room, academicYea
     if (row.student) historyStudentIds.add(String(row.student));
   });
 
+  // Find all active users (irrespective of academicYear)
   const activeUsers = await User.find({
     ...roomMatch,
     role: 'student',
-    academicYear: ay,
     hostelStatus: 'Active'
   })
     .select('_id bedNumber lockerNumber')
@@ -123,11 +164,12 @@ const findOtherBedHolderForAcademicYear = async (
   excludeStudentId
 ) => {
   const roomMatch = buildRoomMatchQuery(room);
+  
+  // Find active student in User (irrespective of academicYear)
   const otherUser = await User.findOne({
     ...roomMatch,
     role: 'student',
     hostelStatus: 'Active',
-    academicYear,
     bedNumber,
     _id: { $ne: excludeStudentId }
   })
@@ -135,11 +177,12 @@ const findOtherBedHolderForAcademicYear = async (
     .lean();
   if (otherUser) return otherUser;
 
+  // Find active stay in history (irrespective of academicYear)
   return RoomOccupancyHistory.findOne({
     ...roomMatch,
-    academicYear,
     bedNumber,
     status: { $in: ['Active', 'Extended'] },
+    allocatedTo: null,
     student: { $ne: excludeStudentId }
   })
     .select('_id')
@@ -153,11 +196,12 @@ const findOtherLockerHolderForAcademicYear = async (
   excludeStudentId
 ) => {
   const roomMatch = buildRoomMatchQuery(room);
+  
+  // Find active student in User (irrespective of academicYear)
   const otherUser = await User.findOne({
     ...roomMatch,
     role: 'student',
     hostelStatus: 'Active',
-    academicYear,
     lockerNumber,
     _id: { $ne: excludeStudentId }
   })
@@ -165,11 +209,12 @@ const findOtherLockerHolderForAcademicYear = async (
     .lean();
   if (otherUser) return otherUser;
 
+  // Find active stay in history (irrespective of academicYear)
   return RoomOccupancyHistory.findOne({
     ...roomMatch,
-    academicYear,
     lockerNumber,
     status: { $in: ['Active', 'Extended'] },
+    allocatedTo: null,
     student: { $ne: excludeStudentId }
   })
     .select('_id')
