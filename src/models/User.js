@@ -318,6 +318,7 @@ const userSchema = new mongoose.Schema({
   academicYear: {
     type: String,
     required: function() { return this.role === 'student'; },
+    index: true,  // Add index for faster academic year queries
     validate: {
       validator: function(v) {
         if (this.role !== 'student') return true;
@@ -650,11 +651,17 @@ userSchema.statics.generateRandomPassword = function() {
   return password;
 };
 
-// Create indexes
+// Create indexes for optimized queries
 userSchema.index({ rollNumber: 1 });
-userSchema.index({ hostelId: 1 }); // Add index for hostelId
+userSchema.index({ hostelId: 1 });
 userSchema.index({ role: 1 });
 userSchema.index({ course: 1, branch: 1 });
+userSchema.index({ role: 1, academicYear: 1 }); // For filtering students by academic year
+userSchema.index({ role: 1, hostelStatus: 1 }); // For filtering students by status
+userSchema.index({ role: 1, academicYear: 1, hostelStatus: 1 }); // Compound index for common queries
+userSchema.index({ role: 1, gender: 1 }); // For filtering by gender
+userSchema.index({ role: 1, batch: 1 }); // For filtering by batch
+userSchema.index({ createdAt: 1 }); // For sorting by creation date
 
 const User = mongoose.model('User', userSchema);
 

@@ -15,6 +15,7 @@ const roomOccupancyHistorySchema = new mongoose.Schema({
   academicYear: {
     type: String,
     required: true,
+    index: true,  // Add index for faster academic year queries
     validate: {
       validator(v) {
         if (!/^\d{4}-\d{4}$/.test(v)) return false;
@@ -49,8 +50,13 @@ const roomOccupancyHistorySchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Compound indexes for optimized queries
 roomOccupancyHistorySchema.index({ room: 1, academicYear: 1 });
 roomOccupancyHistorySchema.index({ student: 1, academicYear: 1 });
+roomOccupancyHistorySchema.index({ academicYear: 1, status: 1 }); // For filtering by year and status
+roomOccupancyHistorySchema.index({ academicYear: 1, hostel: 1 }); // For filtering by year and hostel
+roomOccupancyHistorySchema.index({ academicYear: 1, roomNumber: 1 }); // For filtering by year and room
+roomOccupancyHistorySchema.index({ student: 1, academicYear: 1, status: 1 }); // For student history queries
 
 const RoomOccupancyHistory = mongoose.model(
   'RoomOccupancyHistory',

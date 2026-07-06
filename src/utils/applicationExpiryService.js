@@ -419,8 +419,9 @@ export const overlayStudentWithEnrollmentHistory = (student, history, requestedY
       resolvedStatus = 'Inactive';
       resolvedAppStatus = 'Withdrawn';
     } else if (history.status === 'Expired') {
+      // Student completed this year successfully and was renewed
       resolvedStatus = 'Active';
-      resolvedAppStatus = 'Expired';
+      resolvedAppStatus = 'Expired';  // Show as Expired for historical years
     } else if (
       history.status === 'Active' ||
       history.status === 'Extended' ||
@@ -542,10 +543,12 @@ export const fetchStudentsForAcademicYear = async ({
   const endYear = getAcademicYearEndYear(academicYear);
   const cutoffDate = endYear ? new Date(`${endYear}-07-31T23:59:59.999Z`) : new Date();
 
+  // Also include students whose current academicYear matches the requested year
+  // (these are students who haven't been renewed yet and are still in this year)
   const liveQuery = {
     role: 'student',
     createdAt: { $lte: cutoffDate },
-    academicYear: { $gte: academicYear }
+    academicYear: academicYear  // Only include students currently in this academic year
   };
   if (gender) liveQuery.gender = gender;
   if (batch) liveQuery.batch = batch;
@@ -593,16 +596,39 @@ export const fetchStudentsForAcademicYear = async ({
   let students = users.map((user) => {
     const history = historyByStudent.get(user._id.toString());
     return overlayStudentWithEnrollmentHistory(user, history, academicYear);
+  }).filter((student) => {
+    // CRITICAL FIX: Exclude students who have no history for this year AND joined AFTER this year
+    // This prevents future year students from appearing in past year filters
+    const history = historyByStudent.get(student._id.toString());
+    if (!history) {
+      // If no history record exists, only include if their current academicYear matches requested year
+      // or if their current academicYear is BEFORE the requested year (they were enrolled but history wasn't created)
+      const currentYear = parseInt(student.currentAcademicYear?.split('-')[0] || '0', 10);
+      const requestedYearNum = parseInt(academicYear.split('-')[0], 10);
+      
+      // Only include if current year <= requested year (not future students)
+      return currentYear <= requestedYearNum;
+    }
+    return true;
   });
 
   if (hostelStatus) {
     if (hostelStatus === 'Active') {
+      console.log(`🔍 Filtering for Active status. Total students before filter: ${students.length}`);
       students = students.filter(
-        (s) =>
-          s.hostelStatus === 'Active' &&
-          s.applicationStatus !== 'Expired' &&
-          s.applicationStatus !== 'Withdrawn'
+        (s) => {
+          const isActive = s.applicationStatus === 'Active' &&
+            s.applicationStatus !== 'Withdrawn' &&
+            s.enrollmentHistoryStatus !== 'Withdrawn';
+          
+          if (s.name && s.name.includes('GANNAVARAPU')) {
+            console.log(`🔍 GANNAVARAPU GEETHA - applicationStatus: ${s.applicationStatus}, hostelStatus: ${s.hostelStatus}, enrollmentHistoryStatus: ${s.enrollmentHistoryStatus}, isActive: ${isActive}`);
+          }
+          
+          return isActive;
+        }
       );
+      console.log(`🔍 Students after Active filter: ${students.length}`);
     } else if (hostelStatus === 'Inactive') {
       students = students.filter(
         (s) =>
