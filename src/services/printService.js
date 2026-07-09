@@ -1,0 +1,1408 @@
+import pkg from 'jspdf';
+const { jsPDF } = pkg;
+import autoTable from 'jspdf-autotable';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import axios from 'axios';
+
+import User from '../models/User.js';
+import Payment from '../models/Payment.js';
+import FeeStructure from '../models/FeeStructure.js';
+import TempStudent from '../models/TempStudent.js';
+import GlobalSettings from '../models/GlobalSettings.js';
+import StaffGuest from '../models/StaffGuest.js';
+import Course from '../models/Course.js';
+
+import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
+import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
+
+// Helper function to fetch image and convert to base64
+const fetchImageAsBase64 = async (imageUrl) => {
+  if (!imageUrl) return null;
+  try {
+    const response = await axios.get(imageUrl, {
+      responseType: 'arraybuffer',
+      timeout: 10000
+    });
+    
+    const buffer = Buffer.from(response.data, 'binary');
+    const base64 = buffer.toString('base64');
+    const mimeType = response.headers['content-type'] || 'image/jpeg';
+    
+    return `data:${mimeType};base64,${base64}`;
+  } catch (error) {
+    console.error('Error fetching image from URL:', imageUrl, error.message);
+    return null;
+  }
+};
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Helper to load static assets from the client/public folder as base64 for jsPDF
+const getAssetAsBase64 = (relativePath) => {
+  try {
+    const filePath = path.resolve(__dirname, relativePath);
+    if (fs.existsSync(filePath)) {
+      const bitmap = fs.readFileSync(filePath);
+      const ext = path.extname(filePath).toLowerCase();
+      const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+      return `data:${mime};base64,${bitmap.toString('base64')}`;
+    }
+  } catch (error) {
+    console.error(`Error loading asset ${relativePath}:`, error);
+  }
+  return null;
+};
+
+// Helper to parse base64 data URLs for jsPDF addImage in Node.js
+const getBase64ImageUint8Array = (dataUrl) => {
+  if (!dataUrl || !dataUrl.startsWith('data:image')) return null;
+  try {
+    const matches = dataUrl.match(/^data:image\/([a-zA-Z0-9+]+);base64,([\s\S]+)$/);
+    if (matches && matches.length === 3) {
+      const format = matches[1].toUpperCase() === 'PNG' ? 'PNG' : 'JPEG';
+      const base64Data = matches[2].replace(/\s/g, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      return {
+        data: new Uint8Array(buffer),
+        format
+      };
+    }
+  } catch (error) {
+    console.error('Error decoding base64 data URL:', error);
+  }
+  return null;
+};
+
+// Helper for course name
+const getCourseName = (course) => {
+  if (!course) return 'Unknown';
+  if (typeof course === 'string') return course;
+  return course.name || course;
+};
+
+/**
+ * FEE RECEIPT GENERATOR
+ */
+export const generateFeeReceipt = async (receiptId) => {
+  // Query payment
+  const payment = await Payment.findById(receiptId)
+    .populate('studentId')
+    .populate('roomId');
+  
+  if (!payment) {
+    throw new Error('Payment record not found');
+  }
+
+  const user = payment.studentId;
+  const settings = await GlobalSettings.findOne();
+
+  const doc = new jsPDF();
+  
+  const defaultSettings = {
+    institution: {
+      name: "Pydah Hostel Management System",
+      fullName: "Pydah Educational Institutions"
+    }
+  };
+  
+  const institutionSettings = settings || defaultSettings;
+  const pageWidth = doc.internal.pageSize.width;
+  const pageHeight = doc.internal.pageSize.height;
+  const margin = 20;
+  
+  // Add header
+  doc.setFontSize(24);
+  doc.setTextColor(30, 64, 175); // Blue-900
+  doc.setFont(undefined, 'bold');
+  doc.text('PAYMENT RECEIPT', pageWidth / 2, 35, { align: 'center' });
+  
+  doc.setFontSize(12);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont(undefined, 'normal');
+  doc.text(institutionSettings.institution.name.toUpperCase(), pageWidth / 2, 45, { align: 'center' });
+  
+  // Add decorative line
+  doc.setDrawColor(30, 64, 175);
+  doc.setLineWidth(0.5);
+  doc.line(margin, 55, pageWidth - margin, 55);
+  
+  let currentY = 70;
+  
+  // Receipt details
+  doc.setFontSize(14);
+  doc.setFont(undefined, 'bold');
+  doc.text('Receipt Details', margin, currentY);
+  currentY += 15;
+  
+  doc.setFontSize(10);
+  doc.setFont(undefined, 'normal');
+  
+  const receiptNumber = payment.receiptNumber || payment._id?.toString().slice(-8) || 'N/A';
+  doc.text(`Receipt No: ${receiptNumber}`, margin, currentY);
+  currentY += 10;
+  
+  const transactionId = payment.transactionId || payment.cashfreeOrderId || payment._id?.toString().slice(-8) || 'N/A';
+  doc.text(`Transaction ID: ${transactionId}`, margin, currentY);
+  currentY += 10;
+  
+  const paymentDate = payment.paymentDate || payment.createdAt;
+  const formattedDate = paymentDate ? new Date(paymentDate).toLocaleDateString('en-IN', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }) : 'N/A';
+  doc.text(`Date: ${formattedDate}`, margin, currentY);
+  currentY += 10;
+  
+  const paymentTypeText = payment.paymentType === 'electricity' ? 'Electricity Bill' : 'Hostel Fee';
+  doc.text(`Payment Type: ${paymentTypeText}`, margin, currentY);
+  currentY += 15;
+  
+  // Student details
+  doc.setFontSize(14);
+  doc.setFont(undefined, 'bold');
+  doc.text('Student Details', margin, currentY);
+  currentY += 15;
+  
+  doc.setFontSize(10);
+  doc.setFont(undefined, 'normal');
+  
+  const studentName = payment.studentName || user?.name || user?.fullName || 'N/A';
+  doc.text(`Name: ${studentName}`, margin, currentY);
+  currentY += 10;
+  
+  const rollNumber = payment.studentRollNumber || user?.rollNumber || user?.rollNo || user?.studentId || 'N/A';
+  doc.text(`Roll Number: ${rollNumber}`, margin, currentY);
+  currentY += 10;
+  
+  const roomNumber = user?.roomNumber || payment.roomId?.roomNumber || 'N/A';
+  doc.text(`Room Number: ${roomNumber}`, margin, currentY);
+  currentY += 10;
+  
+  const academicYear = payment.academicYear || user?.academicYear || 'N/A';
+  doc.text(`Academic Year: ${academicYear}`, margin, currentY);
+  currentY += 10;
+  
+  const category = payment.category || user?.category || 'N/A';
+  doc.text(`Category: ${category}`, margin, currentY);
+  currentY += 15;
+  
+  // Payment details
+  doc.setFontSize(14);
+  doc.setFont(undefined, 'bold');
+  doc.text('Payment Details', margin, currentY);
+  currentY += 15;
+  
+  doc.setFontSize(10);
+  doc.setFont(undefined, 'normal');
+  
+  const amount = payment.amount || 0;
+  doc.text(`Amount: ₹${amount.toLocaleString('en-IN')}`, margin, currentY);
+  currentY += 10;
+  
+  if (payment.paymentType === 'electricity') {
+    const billMonth = payment.billMonth || 'N/A';
+    doc.text(`Bill Month: ${billMonth}`, margin, currentY);
+  } else {
+    const term = payment.term || 'N/A';
+    doc.text(`Term: ${term}`, margin, currentY);
+  }
+  currentY += 10;
+  
+  const paymentMethod = payment.paymentMethod || 'Cash';
+  doc.text(`Payment Method: ${paymentMethod}`, margin, currentY);
+  currentY += 10;
+  
+  if (paymentMethod === 'Online' && payment.utrNumber) {
+    doc.text(`UTR Number: ${payment.utrNumber}`, margin, currentY);
+    currentY += 10;
+  }
+  
+  const status = payment.status?.toUpperCase() || 'SUCCESS';
+  doc.text(`Status: ${status}`, margin, currentY);
+  currentY += 10;
+  
+  const collectedBy = payment.collectedByName || 'Admin';
+  doc.text(`Collected By: ${collectedBy}`, margin, currentY);
+  currentY += 15;
+  
+  if (payment.paymentType === 'electricity') {
+    doc.setFontSize(14);
+    doc.setFont(undefined, 'bold');
+    doc.text('Bill Details', margin, currentY);
+    currentY += 15;
+    
+    doc.setFontSize(10);
+    doc.setFont(undefined, 'normal');
+    
+    const consumption = payment.consumption || payment.billDetails?.consumption;
+    if (consumption !== undefined && consumption !== null) {
+      doc.text(`Consumption: ${consumption} units`, margin, currentY);
+      currentY += 10;
+    }
+    
+    const rate = payment.billDetails?.rate;
+    if (rate !== undefined && rate !== null) {
+      doc.text(`Rate: ₹${rate} per unit`, margin, currentY);
+      currentY += 10;
+    }
+    
+    const totalBill = payment.billDetails?.total;
+    if (totalBill !== undefined && totalBill !== null) {
+      doc.text(`Total Room Bill: ₹${totalBill.toLocaleString('en-IN')}`, margin, currentY);
+      currentY += 10;
+    }
+    
+    doc.text(`Your Share: ₹${amount.toLocaleString('en-IN')}`, margin, currentY);
+    currentY += 15;
+  }
+  
+  if (payment.notes) {
+    doc.text(`Notes: ${payment.notes}`, margin, currentY);
+    currentY += 15;
+  }
+  
+  // Add border
+  doc.setDrawColor(209, 213, 219);
+  doc.setLineWidth(0.5);
+  doc.rect(margin - 5, margin - 5, pageWidth - (2 * margin) + 10, pageHeight - (2 * margin) + 10);
+  
+  // Footer
+  doc.setFontSize(8);
+  doc.setTextColor(107, 114, 128);
+  doc.text('This is a computer generated receipt and does not require a signature.', pageWidth / 2, pageHeight - 20, { align: 'center' });
+  doc.text(`Generated on: ${new Date().toLocaleString()}`, pageWidth / 2, pageHeight - 15, { align: 'center' });
+  
+  doc.autoPrint();
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+/**
+ * HOSTEL ADMIT CARD GENERATOR
+ */
+export const generateHostelAdmit = async (studentId) => {
+  const studentDoc = await User.findById(studentId)
+    .populate('hostel')
+    .populate('hostelCategory')
+    .populate('room');
+
+  if (!studentDoc) {
+    throw new Error('Student record not found');
+  }
+
+  const studentObj = studentDoc.toObject();
+  const student = await enrichStudentAcademics(studentObj);
+
+  if (student.studentPhoto) {
+    if (!student.studentPhoto.startsWith('data:image')) {
+      const photoBase64 = await photoToBase64ForExport(student.studentPhoto, fetchImageAsBase64);
+      if (photoBase64) {
+        student.studentPhoto = photoBase64;
+      }
+    }
+  }
+
+  // Get academic year
+  const studentAcademicYear = student.academicYear || '2024-2025';
+
+  // Get course name from enriched student details
+  const courseName = student.course?.name || student.course;
+
+  // Fetch fee structure using string course name (e.g. 'B.Tech') as per schema definition
+  const baseQueryForFee = {
+    academicYear: studentAcademicYear,
+    course: courseName,
+    year: student.year ? parseInt(student.year, 10) : 1,
+    category: student.category || 'A',
+    isActive: true,
+  };
+  const feeStructure =
+    await FeeStructure.findOne({ ...baseQueryForFee, branch: student.branch }) ||
+    await FeeStructure.findOne({ ...baseQueryForFee, branch: null }) ||
+    await FeeStructure.findOne({ ...baseQueryForFee, branch: undefined });
+
+  // Fetch temp password
+  const tempStudent = await TempStudent.findOne({ mainStudentId: student._id });
+  const finalPassword = tempStudent?.generatedPassword || null;
+
+  // Base64 images
+  const logoBase64 = getAssetAsBase64('../../../client/public/PYDAH_LOGO_PHOTO.jpg');
+  const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
+
+  const doc = new jsPDF('p', 'mm', 'a4');
+  const pageWidth = doc.internal.pageSize.width; // 210mm
+  const pageHeight = doc.internal.pageSize.height; // 297mm
+  const halfPageHeight = pageHeight / 2; // 148.5mm
+  const margin = 10;
+  const contentWidth = pageWidth - (margin * 2);
+
+  const generateOneCopy = (startY, copyLabel, password) => {
+    const studentGender = student.gender?.toLowerCase();
+    const studentCourse = getCourseName(student.course)?.toLowerCase();
+    const hostelName = studentGender === 'female' ? 'Girls Hostel' : 'Boys Hostel';
+
+    const emergencyContacts = {
+      'b.tech': '+91-9490484418',
+      'diploma': '+91-8688553555',
+      'pharmacy': '+91-8886728886',
+      'degree': '+91-9490484418',
+      default: '+91-9490484418'
+    };
+
+    const wardenNumbers = {
+      male: '+91-9493994233',
+      female: '+91-8333068321',
+      default: '+91-9493994233'
+    };
+
+    const securityNumber = '+91-8317612655';
+    const aoPhone = emergencyContacts[studentCourse] || emergencyContacts.default;
+    const wardenPhone = wardenNumbers[studentGender] || wardenNumbers.default;
+
+    // Draw border
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.5);
+    doc.rect(margin, startY, contentWidth, halfPageHeight - (margin * 2));
+
+    // Copy label
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text(copyLabel, margin + 5, startY + 5);
+
+    let yPos = startY + 8;
+
+    // Logo image
+    if (logoBase64) {
+      try {
+        doc.addImage(logoBase64, 'JPEG', margin + 4, yPos, 22, 12);
+      } catch (error) {
+        doc.setFillColor(240, 240, 240);
+        doc.rect(margin + 4, yPos, 22, 12);
+        doc.setFontSize(6);
+        doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
+      }
+    } else {
+      doc.setFillColor(240, 240, 240);
+      doc.rect(margin + 4, yPos, 22, 12);
+      doc.setFontSize(6);
+      doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
+    }
+
+    // Main title
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Pydah Group Of Institutions', pageWidth / 2, yPos + 8, { align: 'center' });
+
+    // Right side
+    doc.setFontSize(8);
+    doc.text('HOSTEL ADMIT CARD', pageWidth - margin - 5, yPos + 4, { align: 'right' });
+    doc.setFontSize(6);
+    doc.text(`${studentAcademicYear} AY`, pageWidth - margin - 5, yPos + 8, { align: 'right' });
+
+    // Divider line
+    yPos = startY + 24;
+    doc.setDrawColor(100, 100, 100);
+    doc.setLineWidth(0.3);
+    doc.line(margin + 5, yPos, pageWidth - margin - 5, yPos);
+
+    yPos += 6;
+    const centerX = pageWidth / 2;
+    const photoWidth = 30;
+    const photoHeight = 35;
+
+    // QR Code
+    const qrCodeX = margin + 15;
+    const qrCodeY = yPos + 2;
+    const qrCodeSize = 30;
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Visit our website', qrCodeX + qrCodeSize / 2, qrCodeY - 3, { align: 'center' });
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+    doc.rect(qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
+
+    if (qrBase64) {
+      try {
+        doc.addImage(qrBase64, 'PNG', qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
+      } catch (error) {
+        doc.setFontSize(4);
+        doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
+      }
+    } else {
+      doc.setFontSize(4);
+      doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
+    }
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'normal');
+    doc.text('www.hms.pydahsoft.in', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize + 4, { align: 'center' });
+
+    // Emergency Contacts
+    const emergencyY = qrCodeY + qrCodeSize + 18;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('EMERGENCY CONTACTS:', qrCodeX, emergencyY);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text(`1. Warden (${studentGender === 'female' ? 'Girls' : 'Boys'}): ${wardenPhone}`, qrCodeX, emergencyY + 5);
+    doc.text(`2. AO (${getCourseName(student.course)}): ${aoPhone}`, qrCodeX, emergencyY + 10);
+    doc.text(`3. Security: ${securityNumber}`, qrCodeX, emergencyY + 15);
+
+    // Photo Box
+    const photoX = centerX + 35;
+    const photoY = yPos + 4;
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('STUDENT PHOTO', photoX + photoWidth / 2, photoY - 4, { align: 'center' });
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.rect(photoX, photoY, photoWidth, photoHeight);
+
+    if (student.studentPhoto) {
+      try {
+        const decodedImg = getBase64ImageUint8Array(student.studentPhoto);
+        if (decodedImg) {
+          doc.addImage(decodedImg.data, decodedImg.format, photoX, photoY, photoWidth, photoHeight);
+        } else if (student.studentPhoto.startsWith('data:image')) {
+          doc.addImage(student.studentPhoto, 'JPEG', photoX, photoY, photoWidth, photoHeight);
+        } else {
+          doc.setFontSize(4);
+          doc.text('Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+        }
+      } catch (error) {
+        console.error('Error rendering student photo:', error);
+        doc.setFontSize(4);
+        doc.text('Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+      }
+    } else {
+      doc.setFontSize(4);
+      doc.text('Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+    }
+
+    // Student details
+    const detailsX = qrCodeX + qrCodeSize + 15;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('STUDENT DETAILS', detailsX, yPos);
+    yPos += 4;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+
+    const studentDetails = [
+      ['Name:', String(student.name || '')],
+      ['Roll No:', String(student.rollNumber || '')],
+      ['Course:', String(getCourseName(student.course))],
+      ['Year:', String(student.year || '')],
+      ['Hostel:', String(hostelName)],
+      ['Mobile No:', String(student.studentPhone || '')],
+      ['Parent No:', String(student.parentPhone || '')],
+      ['Address:', String(student.address || '')],
+      ['Hostel ID:', String(student.hostelId || '')],
+      ['Category:', String(student.category || '')],
+      ['Room:', String(student.room?.roomNumber || student.roomNumber || '')]
+    ];
+
+    studentDetails.forEach(([label, value]) => {
+      doc.setFont('helvetica', 'bold');
+      doc.text(label, detailsX, yPos);
+      doc.setFont('helvetica', 'normal');
+      doc.text(value || '', detailsX + 25, yPos);
+      yPos += 3.0;
+    });
+
+    // Fee structure table
+    yPos = startY + 71;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('FEE STRUCTURE', centerX - 35, yPos);
+    yPos += 3;
+
+    const actualFeeStructure = feeStructure;
+    const feeData = [
+      ['Term', 'Original Amount', 'After Concession', 'Remarks'],
+      ['1st Term', `Rs : ${actualFeeStructure?.term1Fee || 0}`, `Rs : ${student.calculatedTerm1Fee || actualFeeStructure?.term1Fee || 0}`, ''],
+      ['2nd Term', `Rs : ${actualFeeStructure?.term2Fee || 0}`, `Rs : ${student.calculatedTerm2Fee || actualFeeStructure?.term2Fee || 0}`, 'Before 2nd MID Term'],
+      ['3rd Term', `Rs : ${actualFeeStructure?.term3Fee || 0}`, `Rs : ${student.calculatedTerm3Fee || actualFeeStructure?.term3Fee || 0}`, 'Before 2nd Sem Start']
+    ];
+
+    const totalOriginalFee = (actualFeeStructure?.term1Fee || 0) + (actualFeeStructure?.term2Fee || 0) + (actualFeeStructure?.term3Fee || 0);
+    const totalAfterConcession = (student.calculatedTerm1Fee || actualFeeStructure?.term1Fee || 0) +
+      (student.calculatedTerm2Fee || actualFeeStructure?.term2Fee || 0) +
+      (student.calculatedTerm3Fee || actualFeeStructure?.term3Fee || 0);
+
+    feeData.push(['TOTAL', `Rs : ${totalOriginalFee.toLocaleString()}`, `Rs : ${totalAfterConcession.toLocaleString()}`, '']);
+
+    try {
+      autoTable(doc, {
+        startY: yPos + 4,
+        head: [feeData[0]],
+        body: feeData.slice(1),
+        theme: 'grid',
+        styles: {
+          fontSize: 5,
+          cellPadding: 1.5,
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+          halign: 'center',
+          valign: 'middle'
+        },
+        headStyles: {
+          fillColor: [70, 70, 70],
+          textColor: 255,
+          fontStyle: 'bold',
+          fontSize: 6,
+          lineColor: [0, 0, 0],
+          lineWidth: 0.2,
+          halign: 'center',
+          valign: 'middle'
+        },
+        columnStyles: {
+          0: { cellWidth: 20, fontSize: 6, lineColor: [0, 0, 0], lineWidth: 0.2, halign: 'center' },
+          1: { cellWidth: 24, fontSize: 6, lineColor: [0, 0, 0], lineWidth: 0.2, halign: 'center' },
+          2: { cellWidth: 24, fontSize: 6, lineColor: [0, 0, 0], lineWidth: 0.2, halign: 'center' },
+          3: { cellWidth: 20, fontSize: 4, lineColor: [0, 0, 0], lineWidth: 0.2, halign: 'center' }
+        },
+        margin: { left: centerX - 35 },
+        tableWidth: 'auto',
+        showFoot: 'lastPage'
+      });
+    } catch (autoTableError) {
+      console.error('autoTable error in printService:', autoTableError);
+    }
+
+    const tableEndY = doc.lastAutoTable ? doc.lastAutoTable.finalY : (yPos + 4);
+    yPos = tableEndY + 12;
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'bold');
+    doc.text('IMPORTANT NOTES:', centerX - 35, yPos);
+    yPos += 3;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(5);
+    doc.text('1. Late fee Rs.500/- per term if not paid on time', centerX - 35, yPos);
+    yPos += 2.5;
+    doc.text('2. Electricity bill extra monthly as per room sharing', centerX - 35, yPos);
+    yPos += 2.5;
+    doc.text('3. Present this card at hostel entrance for verification', centerX - 35, yPos);
+  };
+
+  // Generate Student Copy (top half)
+  generateOneCopy(margin, 'STUDENT COPY', finalPassword);
+
+  // Add divider line
+  doc.setDrawColor(100, 100, 100);
+  doc.setLineWidth(0.3);
+  doc.line(margin + 5, halfPageHeight, pageWidth - margin - 5, halfPageHeight);
+
+  // Generate Warden Copy (bottom half)
+  generateOneCopy(halfPageHeight + 2, 'WARDEN COPY', null);
+
+  doc.autoPrint();
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+/**
+ * STAFF/GUEST ADMIT CARD GENERATOR
+ */
+export const generateStaffGuestAdmit = async (staffGuestId) => {
+  const staffGuest = await StaffGuest.findById(staffGuestId)
+    .populate('hostelId')
+    .populate('categoryId')
+    .populate('roomId');
+  
+  if (!staffGuest) {
+    throw new Error('Staff/Guest record not found');
+  }
+
+  // Base64 images
+  const logoBase64 = getAssetAsBase64('../../../client/public/PYDAH_LOGO_PHOTO.jpg');
+  const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
+
+  // For guests, charges are always 0
+  const isGuest = staffGuest.type === 'guest';
+  const dailyRate = isGuest ? 0 : (staffGuest.dailyRate || 100);
+
+  // Calculate day count
+  let dayCount = 0;
+  if (!isGuest) {
+    if (staffGuest.stayType === 'monthly' && staffGuest.selectedMonth) {
+      const [year, month] = staffGuest.selectedMonth.split('-').map(Number);
+      dayCount = new Date(year, month, 0).getDate();
+    } else if (staffGuest.checkinDate) {
+      const startDate = new Date(staffGuest.checkinDate);
+      const endDate = staffGuest.checkoutDate ? new Date(staffGuest.checkoutDate) : new Date();
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(0, 0, 0, 0);
+      const timeDiff = endDate.getTime() - startDate.getTime();
+      dayCount = Math.max(0, Math.ceil(timeDiff / (1000 * 3600 * 24)));
+    }
+  }
+
+  const totalCharges = isGuest ? 0 : (dailyRate * dayCount);
+  const actualCharges = isGuest ? 0 : (staffGuest.calculatedCharges || totalCharges);
+  const staffGender = staffGuest.gender?.toLowerCase();
+  const hostelName = staffGender === 'female' ? 'Girls Hostel' : 'Boys Hostel';
+
+  const doc = new jsPDF('p', 'mm', 'a4');
+  const pageWidth = doc.internal.pageSize.width;
+  const pageHeight = doc.internal.pageSize.height;
+  const halfPageHeight = pageHeight / 2;
+  const margin = 10;
+  const contentWidth = pageWidth - (margin * 2);
+
+  const generateOneCopy = async (startY, copyLabel) => {
+    const wardenNumbers = {
+      male: '+91-9493994233',
+      female: '+91-8333068321',
+      default: '+91-9493994233'
+    };
+    const securityNumber = '+91-8317612655';
+    const adminNumber = '+91-9490484418';
+    const wardenPhone = wardenNumbers[staffGender] || wardenNumbers.default;
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.5);
+    doc.rect(margin, startY, contentWidth, halfPageHeight - (margin * 2));
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text(copyLabel, margin + 5, startY + 5);
+
+    let yPos = startY + 8;
+    if (logoBase64) {
+      try {
+        doc.addImage(logoBase64, 'JPEG', margin + 4, yPos, 22, 12);
+      } catch (error) {
+        doc.setFillColor(240, 240, 240);
+        doc.rect(margin + 4, yPos, 22, 12);
+        doc.setFontSize(6);
+        doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
+      }
+    } else {
+      doc.setFillColor(240, 240, 240);
+      doc.rect(margin + 4, yPos, 22, 12);
+      doc.setFontSize(6);
+      doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
+    }
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Pydah Group Of Institutions', pageWidth / 2, yPos + 8, { align: 'center' });
+
+    doc.setFontSize(8);
+    doc.text('HOSTEL ADMIT CARD', pageWidth - margin - 5, yPos + 4, { align: 'right' });
+    doc.setFontSize(6);
+    doc.text(`${staffGuest.type.toUpperCase()} - ${new Date().getFullYear()}`, pageWidth - margin - 5, yPos + 8, { align: 'right' });
+
+    yPos = startY + 24;
+    doc.setDrawColor(100, 100, 100);
+    doc.setLineWidth(0.3);
+    doc.line(margin + 5, yPos, pageWidth - margin - 5, yPos);
+
+    yPos += 6;
+    const centerX = pageWidth / 2;
+    const photoWidth = 30;
+    const photoHeight = 35;
+    const qrCodeX = margin + 15;
+    const qrCodeY = yPos + 2;
+    const qrCodeSize = 30;
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Visit our website', qrCodeX + qrCodeSize / 2, qrCodeY - 3, { align: 'center' });
+
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
+    doc.rect(qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
+
+    if (qrBase64) {
+      try {
+        doc.addImage(qrBase64, 'PNG', qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
+      } catch (error) {
+        doc.setFontSize(4);
+        doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
+      }
+    } else {
+      doc.setFontSize(4);
+      doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
+    }
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'normal');
+    doc.text('www.hms.pydahsoft.in', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize + 4, { align: 'center' });
+
+    const emergencyY = qrCodeY + qrCodeSize + 18;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('EMERGENCY CONTACTS:', qrCodeX, emergencyY);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.text(`1. Warden (${staffGender === 'female' ? 'Girls' : 'Boys'}): ${wardenPhone}`, qrCodeX, emergencyY + 5);
+    doc.text(`2. Admin: ${adminNumber}`, qrCodeX, emergencyY + 10);
+    doc.text(`3. Security: ${securityNumber}`, qrCodeX, emergencyY + 15);
+
+    const chargesSummaryX = centerX + 20;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CHARGES SUMMARY:', chargesSummaryX, emergencyY);
+
+    if (isGuest) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.text(`No charges for guests`, chargesSummaryX, emergencyY + 5);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Total Payable: Rs.0`, chargesSummaryX, emergencyY + 10);
+    } else {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.text(`Daily Rate: Rs.${dailyRate} per day`, chargesSummaryX, emergencyY + 5);
+
+      if (staffGuest.stayType === 'monthly' && staffGuest.selectedMonth) {
+        const monthName = new Date(staffGuest.selectedMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        doc.text(`Stay Type: Monthly Basis`, chargesSummaryX, emergencyY + 10);
+        doc.text(`Valid Month: ${monthName}`, chargesSummaryX, emergencyY + 15);
+        doc.text(`Days in Month: ${dayCount} days`, chargesSummaryX, emergencyY + 20);
+      } else {
+        doc.text(`Stay Duration: ${dayCount} days`, chargesSummaryX, emergencyY + 10);
+      }
+
+      let baseAmountY = staffGuest.stayType === 'monthly' && staffGuest.selectedMonth ? (emergencyY + 25) : (emergencyY + 15);
+      doc.text(`Base Amount: Rs.${totalCharges}`, chargesSummaryX, baseAmountY);
+
+      const totalPayableY = baseAmountY + 5;
+      if (actualCharges !== totalCharges) {
+        doc.text(`- Adjustment: Rs.${totalCharges - actualCharges}`, chargesSummaryX, totalPayableY);
+        doc.setFont('helvetica', 'bold');
+        doc.text(`- Total Payable: Rs.${actualCharges}`, chargesSummaryX, totalPayableY + 5);
+      } else {
+        doc.setFont('helvetica', 'bold');
+        doc.text(`- Total Payable: Rs.${actualCharges}`, chargesSummaryX, totalPayableY);
+      }
+    }
+
+    doc.setFont('helvetica', 'normal');
+
+    const photoX = centerX + 35;
+    const photoY = yPos + 4;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PHOTO', photoX + photoWidth / 2, photoY - 4, { align: 'center' });
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.4);
+    doc.rect(photoX, photoY, photoWidth, photoHeight);
+
+    if (staffGuest.photo) {
+      try {
+        const decodedImg = getBase64ImageUint8Array(staffGuest.photo);
+        if (decodedImg) {
+          doc.addImage(decodedImg.data, decodedImg.format, photoX, photoY, photoWidth, photoHeight);
+        } else if (staffGuest.photo.startsWith('data:image')) {
+          doc.addImage(staffGuest.photo, 'JPEG', photoX, photoY, photoWidth, photoHeight);
+        } else {
+          doc.setFontSize(4);
+          doc.text('Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+        }
+      } catch (error) {
+        console.error('Error rendering staff/guest photo:', error);
+        doc.setFontSize(4);
+        doc.text('Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+      }
+    } else {
+      doc.setFontSize(4);
+      doc.text('Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+    }
+
+    const detailsX = qrCodeX + qrCodeSize + 15;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('STAFF/GUEST DETAILS', detailsX, yPos);
+    yPos += 4;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+
+    const staffDetails = [
+      ['Name:', String(staffGuest.name || '')],
+      ['Type:', String(staffGuest.type || '')],
+      ['Gender:', String(staffGuest.gender || '')],
+      ['Profession:', String(staffGuest.profession || '')],
+      ['Phone:', String(staffGuest.phoneNumber || '')],
+      ['Email:', String(staffGuest.email || 'N/A')],
+      ['Department:', String(staffGuest.department || 'N/A')],
+      ['Purpose:', String(staffGuest.purpose || 'N/A')],
+      ['Hostel:', String(hostelName)],
+      ...(staffGuest.roomNumber ? [['Room:', String(staffGuest.roomNumber)]] : []),
+      ...(staffGuest.bedNumber ? [['Bed:', String(staffGuest.bedNumber)]] : []),
+      ...(staffGuest.stayType === 'monthly' && staffGuest.selectedMonth ? [
+        ['Stay Type:', 'Monthly Basis'],
+        ['Valid Month:', String(new Date(staffGuest.selectedMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }))]
+      ] : [
+        ['Check-in:', formatDateDDMMYYYY(staffGuest.checkinDate)],
+        ['Check-out:', formatDateDDMMYYYY(staffGuest.checkoutDate)]
+      ]),
+      ['Status:', String(staffGuest.checkinDate && !staffGuest.checkoutDate ? 'Checked In' : 'Checked Out')]
+    ];
+
+    staffDetails.forEach(([label, value]) => {
+      doc.setFont('helvetica', 'bold');
+      doc.text(label, detailsX, yPos);
+      doc.setFont('helvetica', 'normal');
+      doc.text(value || '', detailsX + 25, yPos);
+      yPos += 3.5;
+    });
+  };
+
+  await generateOneCopy(margin, 'STAFF/GUEST COPY');
+
+  doc.setDrawColor(100, 100, 100);
+  doc.setLineWidth(0.3);
+  doc.line(margin + 5, halfPageHeight, pageWidth - margin - 5, halfPageHeight);
+
+  await generateOneCopy(halfPageHeight + 2, 'WARDEN COPY');
+
+  doc.autoPrint();
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+/**
+ * TRANSPORT ADMIT CARD GENERATOR (MOCK)
+ */
+export const generateTransportAdmit = async (studentId) => {
+  // Query student
+  let student = await User.findById(studentId);
+  if (!student) {
+    // If not found, try by rollNumber or default placeholder
+    student = await User.findOne({ rollNumber: studentId }) || {
+      name: "Student Placeholder",
+      rollNumber: studentId || "N/A",
+      course: "B.Tech",
+      branch: "CSE",
+      year: "1",
+      gender: "Male"
+    };
+  }
+
+  // Base64 images
+  const logoBase64 = getAssetAsBase64('../../../client/public/PYDAH_LOGO_PHOTO.jpg');
+  const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
+
+  const doc = new jsPDF('p', 'mm', 'a4');
+  const pageWidth = doc.internal.pageSize.width;
+  const pageHeight = doc.internal.pageSize.height;
+  const halfPageHeight = pageHeight / 2;
+  const margin = 10;
+  const contentWidth = pageWidth - (margin * 2);
+
+  const generateOneCopy = (startY, copyLabel) => {
+    const studentCourse = getCourseName(student.course);
+    const busRoute = "Route No 15 (Admissions Special)";
+    const busStop = "Main Junction";
+    const validity = `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`;
+
+    doc.setDrawColor(0, 128, 0); // Green theme for transport
+    doc.setLineWidth(0.5);
+    doc.rect(margin, startY, contentWidth, halfPageHeight - (margin * 2));
+
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 128, 0);
+    doc.text(copyLabel, margin + 5, startY + 5);
+
+    let yPos = startY + 8;
+    if (logoBase64) {
+      try {
+        doc.addImage(logoBase64, 'JPEG', margin + 4, yPos, 22, 12);
+      } catch (error) {
+        doc.setFillColor(240, 240, 240);
+        doc.rect(margin + 4, yPos, 22, 12);
+        doc.setFontSize(6);
+        doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
+      }
+    } else {
+      doc.setFillColor(240, 240, 240);
+      doc.rect(margin + 4, yPos, 22, 12);
+      doc.setFontSize(6);
+      doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
+    }
+
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Pydah Group Of Institutions', pageWidth / 2, yPos + 8, { align: 'center' });
+
+    doc.setFontSize(8);
+    doc.text('TRANSPORT BUS PASS / ADMIT', pageWidth - margin - 5, yPos + 4, { align: 'right' });
+    doc.setFontSize(6);
+    doc.text(`${validity} AY`, pageWidth - margin - 5, yPos + 8, { align: 'right' });
+
+    yPos = startY + 24;
+    doc.setDrawColor(0, 128, 0);
+    doc.setLineWidth(0.3);
+    doc.line(margin + 5, yPos, pageWidth - margin - 5, yPos);
+
+    yPos += 6;
+    const centerX = pageWidth / 2;
+    const photoWidth = 30;
+    const photoHeight = 35;
+    const qrCodeX = margin + 15;
+    const qrCodeY = yPos + 2;
+    const qrCodeSize = 30;
+
+    doc.setFontSize(6);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Scan for validity', qrCodeX + qrCodeSize / 2, qrCodeY - 3, { align: 'center' });
+
+    doc.setDrawColor(0, 128, 0);
+    doc.setLineWidth(0.3);
+    doc.rect(qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
+
+    if (qrBase64) {
+      try {
+        doc.addImage(qrBase64, 'PNG', qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
+      } catch (error) {
+        doc.setFontSize(4);
+        doc.text('QR Pass', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
+      }
+    } else {
+      doc.setFontSize(4);
+      doc.text('QR Pass', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
+    }
+
+    const detailsX = qrCodeX + qrCodeSize + 15;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('PASS HOLDER DETAILS', detailsX, yPos);
+    yPos += 4;
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+
+    const passDetails = [
+      ['Name:', String(student.name || '')],
+      ['Roll No:', String(student.rollNumber || '')],
+      ['Course:', String(studentCourse)],
+      ['Year of Study:', String(student.year || '1')],
+      ['Bus Route:', String(busRoute)],
+      ['Bus Boarding:', String(busStop)],
+      ['Validity Period:', String(validity)],
+      ['Pass Status:', 'ACTIVE / APPROVED']
+    ];
+
+    passDetails.forEach(([label, value]) => {
+      doc.setFont('helvetica', 'bold');
+      doc.text(label, detailsX, yPos);
+      doc.setFont('helvetica', 'normal');
+      doc.text(value || '', detailsX + 25, yPos);
+      yPos += 3.5;
+    });
+
+    const photoX = centerX + 35;
+    const photoY = startY + 30;
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.text('PHOTO', photoX + photoWidth / 2, photoY - 4, { align: 'center' });
+    doc.setDrawColor(0, 128, 0);
+    doc.setLineWidth(0.4);
+    doc.rect(photoX, photoY, photoWidth, photoHeight);
+
+    doc.setFontSize(4);
+    doc.text('Student Pass Photo', photoX + photoWidth / 2, photoY + photoHeight / 2, { align: 'center' });
+
+    // Rules
+    const rulesY = startY + 80;
+    doc.setFontSize(7);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 128, 0);
+    doc.text('IMPORTANT BUS INSTRUCTIONS:', margin + 5, rulesY);
+    
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.setTextColor(0, 0, 0);
+    doc.text('1. Present this bus admit card/pass to the driver upon boarding every day.', margin + 5, rulesY + 4);
+    doc.text('2. Pass is non-transferable and valid only for specified route and stop.', margin + 5, rulesY + 7);
+    doc.text('3. Maintain discipline while travelling in the institutional transport.', margin + 5, rulesY + 10);
+  };
+
+  generateOneCopy(margin, 'STUDENT BUS PASS COPY');
+  
+  doc.setDrawColor(0, 128, 0);
+  doc.setLineWidth(0.3);
+  doc.line(margin + 5, halfPageHeight, pageWidth - margin - 5, halfPageHeight);
+  
+  generateOneCopy(halfPageHeight + 2, 'OFFICE TRANSPORT COPY');
+
+  doc.autoPrint();
+  return Buffer.from(doc.output('arraybuffer'));
+};
+
+/**
+ * LIVE OCCUPANCY REPORT GENERATOR (HTML output)
+ */
+export const generateLiveOccupancyReport = async (passedStudents, filters, isLiveMode) => {
+  let students = passedStudents;
+  
+  // If no students passed, fetch from DB
+  if (!students || !Array.isArray(students) || students.length === 0) {
+    const query = { role: 'student' };
+    if (isLiveMode) {
+      query.hostelStatus = 'Active';
+    }
+    if (filters) {
+      if (filters.search) {
+        const searchRegex = new RegExp(filters.search, 'i');
+        query.$or = [{ name: searchRegex }, { rollNumber: searchRegex }];
+      }
+      if (filters.course) query.course = filters.course;
+      if (filters.branch) query.branch = filters.branch;
+      if (filters.hostel) query.hostel = filters.hostel;
+      if (filters.category) query.hostelCategory = filters.category;
+      if (filters.academicYear) query.academicYear = filters.academicYear;
+    }
+
+    students = await User.find(query)
+      .populate('hostel')
+      .populate('hostelCategory')
+      .populate('room')
+      .sort({ name: 1 });
+  }
+
+  // 1. Group students for detail report: Hostel -> Category -> Room Number
+  const grouped = {};
+  const hostelSummaries = {};
+  let grandTotal = 0;
+
+  students.forEach(student => {
+    const hostelName = student.hostel?.name || 'Unassigned Hostel';
+    const categoryName = student.hostelCategory?.name || student.category || 'Unassigned Category';
+    const roomNo = student.room?.roomNumber || student.roomNumber || 'Unassigned Room';
+
+    // Detail grouping
+    if (!grouped[hostelName]) grouped[hostelName] = {};
+    if (!grouped[hostelName][categoryName]) grouped[hostelName][categoryName] = {};
+    if (!grouped[hostelName][categoryName][roomNo]) grouped[hostelName][categoryName][roomNo] = [];
+    grouped[hostelName][categoryName][roomNo].push(student);
+
+    // Summary calculations (total and category)
+    if (!hostelSummaries[hostelName]) {
+      hostelSummaries[hostelName] = {
+        total: 0,
+        categories: {}
+      };
+    }
+    hostelSummaries[hostelName].total++;
+    grandTotal++;
+
+    if (!hostelSummaries[hostelName].categories[categoryName]) {
+      hostelSummaries[hostelName].categories[categoryName] = 0;
+    }
+    hostelSummaries[hostelName].categories[categoryName]++;
+  });
+
+  const sortedHostels = Object.keys(grouped).sort();
+  const uniqueYears = Array.from(new Set(students.map(s => s.academicYear).filter(Boolean)));
+  const resolvedYear = filters?.academicYear || (uniqueYears.length === 1 ? uniqueYears[0] : (uniqueYears.length > 1 ? 'All Years' : ''));
+  
+  const getDefaultAcademicYear = () => {
+    const date = new Date();
+    const currentMonth = date.getMonth();
+    const currentYear = date.getFullYear();
+    if (currentMonth >= 5) {
+      return `${currentYear}-${currentYear + 1}`;
+    }
+    return `${currentYear - 1}-${currentYear}`;
+  };
+  const displayYear = resolvedYear || getDefaultAcademicYear();
+  const reportTitle = isLiveMode ? 'Live Hostel Occupancy Report' : `Hostel Occupancy Report (${displayYear})`;
+  const reportSubtitle = isLiveMode ? 'Live Overall Abstract & Summary' : 'Overall Abstract & Summary';
+  const detailSubtitle = isLiveMode ? 'Detailed Room-Wise Active List' : 'Detailed Room-Wise Student List';
+  const generatedDate = new Date().toLocaleDateString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+  });
+
+  // Build HTML table for breakdown
+  let breakdownRows = '';
+  sortedHostels.forEach((hostelName) => {
+    const categories = hostelSummaries[hostelName].categories;
+    const sortedCats = Object.keys(categories).sort();
+    
+    sortedCats.forEach((catName, idx) => {
+      breakdownRows += `<tr>`;
+      if (idx === 0) {
+        breakdownRows += `<td rowspan="${sortedCats.length}" style="font-weight: bold; vertical-align: middle;">${hostelName}</td>`;
+      }
+      breakdownRows += `
+        <td>${catName}</td>
+        <td style="text-align: right; font-weight: bold;">${categories[catName]}</td>
+      </tr>`;
+    });
+  });
+
+  // Build HTML for details
+  let detailContent = '';
+  sortedHostels.forEach((hostelName) => {
+    const categories = grouped[hostelName];
+    const sortedCategories = Object.keys(categories).sort();
+
+    detailContent += `
+      <div class="hostel-section">
+        <div class="hostel-title">${hostelName}</div>`;
+
+    sortedCategories.forEach((categoryName) => {
+      const rooms = categories[categoryName];
+      const sortedRooms = Object.keys(rooms).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+
+      detailContent += `
+        <div class="category-section">
+          <div class="category-title">Category: ${categoryName}</div>`;
+
+      sortedRooms.forEach((roomNo) => {
+        const roomStudentsList = rooms[roomNo];
+        
+        detailContent += `
+          <div class="room-section">
+            <div class="room-title">Room ${roomNo} (${roomStudentsList.length} ${isLiveMode ? 'Residents' : 'Students'})</div>
+            <table class="detail-table">
+              <thead>
+                <tr>
+                  <th style="width: 8%">#</th>
+                  <th style="width: 30%">Roll Number</th>
+                  <th style="width: 35%">Student Name</th>
+                  <th style="width: 27%">Course & Branch</th>
+                </tr>
+              </thead>
+              <tbody>`;
+
+        roomStudentsList.forEach((student, index) => {
+          const courseBranch = `${student.course || ''} - ${student.branch || ''}`;
+          detailContent += `
+            <tr>
+              <td>${index + 1}</td>
+              <td><strong>${student.rollNumber || 'N/A'}</strong></td>
+              <td>${student.name || 'N/A'}</td>
+              <td>${courseBranch}</td>
+            </tr>`;
+        });
+
+        detailContent += `
+              </tbody>
+            </table>
+          </div>`;
+      });
+
+      detailContent += `</div>`; // category-section
+    });
+
+    detailContent += `</div>`; // hostel-section
+  });
+
+  // Construct complete HTML page
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <title>${reportTitle}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #1e293b;
+      margin: 1.5cm;
+      padding: 0;
+      background-color: #ffffff;
+    }
+    .page-break {
+      page-break-after: always;
+      break-after: page;
+    }
+    .header-container {
+      text-align: center;
+      margin-bottom: 25px;
+      border-bottom: 2px solid #1e3a8a;
+      padding-bottom: 12px;
+    }
+    h1 {
+      font-size: 24px;
+      color: #1e3a8a;
+      margin: 0 0 5px 0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .report-subtitle {
+      font-size: 13px;
+      color: #475569;
+      margin: 5px 0;
+      font-weight: 500;
+    }
+    .report-date {
+      font-size: 11px;
+      color: #64748b;
+      margin: 0;
+    }
+    .abstract-section {
+      margin-top: 15px;
+    }
+    .abstract-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1e3a8a;
+      margin: 20px 0 10px 0;
+      text-transform: uppercase;
+      border-bottom: 1px solid #cbd5e1;
+      padding-bottom: 4px;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 12px 10px;
+      background-color: #f8fafc;
+      margin-bottom: 25px;
+      box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+    }
+    .summary-item {
+      font-size: 13px;
+      color: #334155;
+      font-weight: 500;
+      display: inline-block;
+      margin-right: 15px;
+    }
+    .summary-item strong {
+      color: #1d4ed8;
+      font-size: 16px;
+      margin-left: 5px;
+    }
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 25px;
+    }
+    .summary-table th, .summary-table td {
+      border: 1px solid #cbd5e1;
+      padding: 8px 10px;
+      font-size: 12px;
+      text-align: left;
+    }
+    .summary-table th {
+      background-color: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 600;
+    }
+    .hostel-section {
+      margin-bottom: 30px;
+    }
+    .hostel-title {
+      font-size: 18px;
+      font-weight: bold;
+      color: #1e3a8a;
+      border-bottom: 1.5px solid #1e3a8a;
+      padding-bottom: 4px;
+      margin-bottom: 15px;
+    }
+    .category-section {
+      margin-bottom: 20px;
+    }
+    .category-title {
+      font-size: 13px;
+      font-weight: bold;
+      color: #334155;
+      background-color: #f1f5f9;
+      padding: 5px 10px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    .room-section {
+      margin-bottom: 15px;
+      page-break-inside: avoid;
+    }
+    .room-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #334155;
+      margin-bottom: 5px;
+    }
+    .detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 8px;
+    }
+    .detail-table th, .detail-table td {
+      border: 1px solid #cbd5e1;
+      padding: 5px 8px;
+      font-size: 11px;
+      text-align: left;
+    }
+    .detail-table th {
+      background-color: #f8fafc;
+      color: #475569;
+      font-weight: 600;
+    }
+    .detail-table tr:nth-child(even) {
+      background-color: #f8fafc;
+    }
+  </style>
+</head>
+<body>
+  <!-- PAGE 1: ABSTRACT & SUMMARY -->
+  <div class="abstract-page page-break">
+    <div class="header-container">
+      <h1>${reportTitle}</h1>
+      <div class="report-subtitle">${reportSubtitle}</div>
+      <div class="report-date">Generated on: ${generatedDate}</div>
+    </div>
+
+    <div class="abstract-section">
+      <div class="abstract-title">Overall Abstract</div>
+      
+      <div class="summary-row">
+        <span class="summary-item">
+          ${isLiveMode ? 'Total Active Residents' : 'Total Registered Students'}: <strong>${grandTotal}</strong>
+        </span>
+        ${sortedHostels.map(h => `<span class="summary-item">${h}: <strong>${hostelSummaries[h].total}</strong></span>`).join('')}
+      </div>
+
+      <div class="abstract-title">Breakdown by Category</div>
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th style="width: 40%">Hostel</th>
+            <th style="width: 40%">Category</th>
+            <th style="width: 20%; text-align: right;">${isLiveMode ? 'Residents Count' : 'Students Count'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${breakdownRows}
+          <tr style="background-color: #ebf8ff; font-weight: bold;">
+            <td colspan="2">${isLiveMode ? 'Grand Total Active Residents' : 'Grand Total Registered Students'}</td>
+            <td style="text-align: right;">${grandTotal}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- PAGE 2+: DETAIL LISTS -->
+  <div class="detail-pages">
+    <div class="header-container">
+      <h1>${reportTitle}</h1>
+      <div class="report-subtitle">${detailSubtitle}</div>
+    </div>
+    ${detailContent}
+  </div>
+</body>
+</html>`;
+};

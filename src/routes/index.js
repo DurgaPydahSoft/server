@@ -24,6 +24,7 @@ import staffAttendanceRoutes from './staffAttendanceRoutes.js';
 import globalSettingsRoutes from './globalSettingsRoutes.js';
 import uploadPastPaymentsRoutes from './uploadPastPaymentsRoutes.js';
 import hostelRoutes from './hostelRoutes.js';
+import printRoutes from './printRoutes.js';
 
 const router = express.Router();
 
@@ -53,5 +54,6 @@ router.use('/staff-attendance', staffAttendanceRoutes);
 router.use('/global-settings', globalSettingsRoutes);
 router.use('/upload-past-payments', uploadPastPaymentsRoutes);
 router.use('/hostels', hostelRoutes);
+router.use('/print', printRoutes);
 
 export default router; 
