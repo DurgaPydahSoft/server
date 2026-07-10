@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
+import QRCode from 'qrcode';
 
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
@@ -131,6 +132,75 @@ const addPrintLogoToDoc = (doc, logoImage, x, y, w = 22, h = 12) => {
     }
   }
   drawPrintLogoPlaceholder(doc, x, y, w, h);
+};
+
+const LOCAL_QR_RELATIVE_PATH = '../../../client/public/qrcode_hms.pydahsoft.in.png';
+const DEFAULT_HMS_PORTAL_URL = 'https://hms.pydahsoft.in';
+
+const generateQrImageFromText = async (text) => {
+  if (!text) return null;
+  try {
+    const dataUrl = await QRCode.toDataURL(text, {
+      width: 256,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    });
+    return getBase64ImageUint8Array(dataUrl);
+  } catch (error) {
+    console.error('Error generating QR code:', error.message);
+    return null;
+  }
+};
+
+/** Load HMS portal QR for PDF printing: local PNG, remote asset, then generate from portal URL. */
+const loadPrintQrImage = async () => {
+  const localBase64 = getAssetAsBase64(LOCAL_QR_RELATIVE_PATH);
+  if (localBase64) {
+    const decoded = getBase64ImageUint8Array(localBase64);
+    if (decoded) return decoded;
+  }
+
+  const remoteCandidates = [
+    `${DEFAULT_HMS_PORTAL_URL}/qrcode_hms.pydahsoft.in.png`,
+    'https://hostel.pydah.edu/qrcode_hms.pydahsoft.in.png',
+  ];
+
+  let portalUrl = DEFAULT_HMS_PORTAL_URL;
+  try {
+    const settings = await GlobalSettings.findOne().lean();
+    const canonical = resolveAbsoluteAssetUrl(settings?.urls?.canonicalUrl);
+    const apiBase = resolveAbsoluteAssetUrl(settings?.urls?.apiBaseUrl);
+    if (canonical) {
+      portalUrl = canonical.replace(/\/$/, '');
+      remoteCandidates.unshift(`${portalUrl}/qrcode_hms.pydahsoft.in.png`);
+    }
+    if (apiBase) {
+      remoteCandidates.push(`${apiBase.replace(/\/$/, '')}/qrcode_hms.pydahsoft.in.png`);
+    }
+  } catch (error) {
+    console.error('Error loading QR settings:', error.message);
+  }
+
+  for (const url of remoteCandidates) {
+    const remoteBase64 = await fetchImageAsBase64(url);
+    const decoded = remoteBase64 ? getBase64ImageUint8Array(remoteBase64) : null;
+    if (decoded) return decoded;
+  }
+
+  return generateQrImageFromText(portalUrl);
+};
+
+const addPrintQrToDoc = (doc, qrImage, x, y, size, placeholderLabel = 'QR CODE') => {
+  if (qrImage?.data) {
+    try {
+      doc.addImage(qrImage.data, qrImage.format, x, y, size, size);
+      return;
+    } catch (error) {
+      console.error('Error adding print QR to PDF:', error.message);
+    }
+  }
+  doc.setFontSize(4);
+  doc.text(placeholderLabel, x + size / 2, y + size / 2, { align: 'center' });
 };
 
 // Helper for course name
@@ -388,7 +458,7 @@ export const generateHostelAdmit = async (studentId) => {
   const finalPassword = tempStudent?.generatedPassword || null;
 
   const printLogo = await loadPrintLogoImage();
-  const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
+  const printQr = await loadPrintQrImage();
 
   const doc = new jsPDF('p', 'mm', 'a4');
   const pageWidth = doc.internal.pageSize.width; // 210mm
@@ -470,17 +540,7 @@ export const generateHostelAdmit = async (studentId) => {
     doc.setLineWidth(0.3);
     doc.rect(qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
 
-    if (qrBase64) {
-      try {
-        doc.addImage(qrBase64, 'PNG', qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
-      } catch (error) {
-        doc.setFontSize(4);
-        doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
-      }
-    } else {
-      doc.setFontSize(4);
-      doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
-    }
+    addPrintQrToDoc(doc, printQr, qrCodeX, qrCodeY, qrCodeSize, 'QR CODE');
 
     doc.setFontSize(6);
     doc.setFont('helvetica', 'normal');
@@ -669,7 +729,7 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
   }
 
   const printLogo = await loadPrintLogoImage();
-  const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
+  const printQr = await loadPrintQrImage();
 
   // For guests, charges are always 0
   const isGuest = staffGuest.type === 'guest';
@@ -755,17 +815,7 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
     doc.setLineWidth(0.3);
     doc.rect(qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
 
-    if (qrBase64) {
-      try {
-        doc.addImage(qrBase64, 'PNG', qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
-      } catch (error) {
-        doc.setFontSize(4);
-        doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
-      }
-    } else {
-      doc.setFontSize(4);
-      doc.text('QR CODE', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
-    }
+    addPrintQrToDoc(doc, printQr, qrCodeX, qrCodeY, qrCodeSize, 'QR CODE');
 
     doc.setFontSize(6);
     doc.setFont('helvetica', 'normal');
@@ -924,7 +974,7 @@ export const generateTransportAdmit = async (studentId) => {
   }
 
   const printLogo = await loadPrintLogoImage();
-  const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
+  const printQr = await loadPrintQrImage();
 
   const doc = new jsPDF('p', 'mm', 'a4');
   const pageWidth = doc.internal.pageSize.width;
@@ -981,17 +1031,7 @@ export const generateTransportAdmit = async (studentId) => {
     doc.setLineWidth(0.3);
     doc.rect(qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
 
-    if (qrBase64) {
-      try {
-        doc.addImage(qrBase64, 'PNG', qrCodeX, qrCodeY, qrCodeSize, qrCodeSize);
-      } catch (error) {
-        doc.setFontSize(4);
-        doc.text('QR Pass', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
-      }
-    } else {
-      doc.setFontSize(4);
-      doc.text('QR Pass', qrCodeX + qrCodeSize / 2, qrCodeY + qrCodeSize / 2, { align: 'center' });
-    }
+    addPrintQrToDoc(doc, printQr, qrCodeX, qrCodeY, qrCodeSize, 'QR Pass');
 
     const detailsX = qrCodeX + qrCodeSize + 15;
     doc.setFontSize(8);
