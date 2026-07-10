@@ -76,6 +76,63 @@ const getBase64ImageUint8Array = (dataUrl) => {
   return null;
 };
 
+const LOCAL_LOGO_RELATIVE_PATH = '../../../client/public/PYDAH_LOGO_PHOTO.jpg';
+/** Same CDN logo used by the admissions application print templates. */
+const FALLBACK_PRINT_LOGO_URL =
+  'https://static.wixstatic.com/media/bfee2e_7d499a9b2c40442e85bb0fa99e7d5d37~mv2.png/v1/fill/w_162,h_89,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/logo1.png';
+
+const resolveAbsoluteAssetUrl = (url) => {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('//')) return `https:${trimmed}`;
+  return null;
+};
+
+/** Load Pydah logo for PDF printing: local file, then GlobalSettings URL, then CDN fallback. */
+const loadPrintLogoImage = async () => {
+  const localBase64 = getAssetAsBase64(LOCAL_LOGO_RELATIVE_PATH);
+  if (localBase64) {
+    const decoded = getBase64ImageUint8Array(localBase64);
+    if (decoded) return decoded;
+  }
+
+  try {
+    const settings = await GlobalSettings.findOne().lean();
+    const settingsUrl = resolveAbsoluteAssetUrl(settings?.urls?.logoUrl);
+    if (settingsUrl) {
+      const remoteBase64 = await fetchImageAsBase64(settingsUrl);
+      const decoded = remoteBase64 ? getBase64ImageUint8Array(remoteBase64) : null;
+      if (decoded) return decoded;
+    }
+  } catch (error) {
+    console.error('Error loading logo from GlobalSettings:', error.message);
+  }
+
+  const fallbackBase64 = await fetchImageAsBase64(FALLBACK_PRINT_LOGO_URL);
+  return fallbackBase64 ? getBase64ImageUint8Array(fallbackBase64) : null;
+};
+
+const drawPrintLogoPlaceholder = (doc, x, y, w, h) => {
+  doc.setFillColor(240, 240, 240);
+  doc.rect(x, y, w, h);
+  doc.setFontSize(6);
+  doc.text('PYDAH', x + w / 2, y + h / 2, { align: 'center' });
+};
+
+const addPrintLogoToDoc = (doc, logoImage, x, y, w = 22, h = 12) => {
+  if (logoImage?.data) {
+    try {
+      doc.addImage(logoImage.data, logoImage.format, x, y, w, h);
+      return;
+    } catch (error) {
+      console.error('Error adding print logo to PDF:', error.message);
+    }
+  }
+  drawPrintLogoPlaceholder(doc, x, y, w, h);
+};
+
 // Helper for course name
 const getCourseName = (course) => {
   if (!course) return 'Unknown';
@@ -330,8 +387,7 @@ export const generateHostelAdmit = async (studentId) => {
   const tempStudent = await TempStudent.findOne({ mainStudentId: student._id });
   const finalPassword = tempStudent?.generatedPassword || null;
 
-  // Base64 images
-  const logoBase64 = getAssetAsBase64('../../../client/public/PYDAH_LOGO_PHOTO.jpg');
+  const printLogo = await loadPrintLogoImage();
   const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
 
   const doc = new jsPDF('p', 'mm', 'a4');
@@ -377,22 +433,7 @@ export const generateHostelAdmit = async (studentId) => {
 
     let yPos = startY + 8;
 
-    // Logo image
-    if (logoBase64) {
-      try {
-        doc.addImage(logoBase64, 'JPEG', margin + 4, yPos, 22, 12);
-      } catch (error) {
-        doc.setFillColor(240, 240, 240);
-        doc.rect(margin + 4, yPos, 22, 12);
-        doc.setFontSize(6);
-        doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
-      }
-    } else {
-      doc.setFillColor(240, 240, 240);
-      doc.rect(margin + 4, yPos, 22, 12);
-      doc.setFontSize(6);
-      doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
-    }
+    addPrintLogoToDoc(doc, printLogo, margin + 4, yPos, 22, 12);
 
     // Main title
     doc.setFontSize(11);
@@ -627,8 +668,7 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
     throw new Error('Staff/Guest record not found');
   }
 
-  // Base64 images
-  const logoBase64 = getAssetAsBase64('../../../client/public/PYDAH_LOGO_PHOTO.jpg');
+  const printLogo = await loadPrintLogoImage();
   const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
 
   // For guests, charges are always 0
@@ -683,21 +723,7 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
     doc.text(copyLabel, margin + 5, startY + 5);
 
     let yPos = startY + 8;
-    if (logoBase64) {
-      try {
-        doc.addImage(logoBase64, 'JPEG', margin + 4, yPos, 22, 12);
-      } catch (error) {
-        doc.setFillColor(240, 240, 240);
-        doc.rect(margin + 4, yPos, 22, 12);
-        doc.setFontSize(6);
-        doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
-      }
-    } else {
-      doc.setFillColor(240, 240, 240);
-      doc.rect(margin + 4, yPos, 22, 12);
-      doc.setFontSize(6);
-      doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
-    }
+    addPrintLogoToDoc(doc, printLogo, margin + 4, yPos, 22, 12);
 
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
@@ -897,8 +923,7 @@ export const generateTransportAdmit = async (studentId) => {
     };
   }
 
-  // Base64 images
-  const logoBase64 = getAssetAsBase64('../../../client/public/PYDAH_LOGO_PHOTO.jpg');
+  const printLogo = await loadPrintLogoImage();
   const qrBase64 = getAssetAsBase64('../../../client/public/qrcode_hms.pydahsoft.in.png');
 
   const doc = new jsPDF('p', 'mm', 'a4');
@@ -924,21 +949,7 @@ export const generateTransportAdmit = async (studentId) => {
     doc.text(copyLabel, margin + 5, startY + 5);
 
     let yPos = startY + 8;
-    if (logoBase64) {
-      try {
-        doc.addImage(logoBase64, 'JPEG', margin + 4, yPos, 22, 12);
-      } catch (error) {
-        doc.setFillColor(240, 240, 240);
-        doc.rect(margin + 4, yPos, 22, 12);
-        doc.setFontSize(6);
-        doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
-      }
-    } else {
-      doc.setFillColor(240, 240, 240);
-      doc.rect(margin + 4, yPos, 22, 12);
-      doc.setFontSize(6);
-      doc.text('PYDAH', margin + 15, yPos + 6, { align: 'center' });
-    }
+    addPrintLogoToDoc(doc, printLogo, margin + 4, yPos, 22, 12);
 
     doc.setFontSize(11);
     doc.setFont('helvetica', 'bold');
