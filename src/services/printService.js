@@ -735,21 +735,7 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
   const isGuest = staffGuest.type === 'guest';
   const dailyRate = isGuest ? 0 : (staffGuest.dailyRate || 100);
 
-  // Calculate day count
-  let dayCount = 0;
-  if (!isGuest) {
-    if (staffGuest.stayType === 'monthly' && staffGuest.selectedMonth) {
-      const [year, month] = staffGuest.selectedMonth.split('-').map(Number);
-      dayCount = new Date(year, month, 0).getDate();
-    } else if (staffGuest.checkinDate) {
-      const startDate = new Date(staffGuest.checkinDate);
-      const endDate = staffGuest.checkoutDate ? new Date(staffGuest.checkoutDate) : new Date();
-      startDate.setHours(0, 0, 0, 0);
-      endDate.setHours(0, 0, 0, 0);
-      const timeDiff = endDate.getTime() - startDate.getTime();
-      dayCount = Math.max(0, Math.ceil(timeDiff / (1000 * 3600 * 24)));
-    }
-  }
+  const dayCount = !isGuest ? staffGuest.getDayCount() : 0;
 
   const totalCharges = isGuest ? 0 : (dailyRate * dayCount);
   const actualCharges = isGuest ? 0 : (staffGuest.calculatedCharges || totalCharges);

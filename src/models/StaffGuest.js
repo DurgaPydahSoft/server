@@ -199,10 +199,12 @@ staffGuestSchema.methods.getDayCount = function() {
   startDate.setHours(0, 0, 0, 0);
   endDate.setHours(0, 0, 0, 0);
   
+  const MS_PER_DAY = 1000 * 60 * 60 * 24;
   const timeDiff = endDate.getTime() - startDate.getTime();
-  const dayCount = Math.ceil(timeDiff / (1000 * 3600 * 24));
-  
-  return Math.max(0, dayCount);
+  if (timeDiff < 0) return 0;
+
+  // Inclusive: check-in day counts as day 1 (e.g. same-day stay = 1 day)
+  return Math.floor(timeDiff / MS_PER_DAY) + 1;
 };
 
 // Method to check if validity period has expired (for monthly basis)
