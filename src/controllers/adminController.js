@@ -320,7 +320,12 @@ export const addStudent = async (req, res, next) => {
                 finalRevisedAmount = Math.max(0, originalFee - revisedAmount);
                 console.log(`💰 [addStudent] Applying CONCESSION: Original: ₹${originalFee}, Concession: ₹${revisedAmount}, Final revised: ₹${finalRevisedAmount}`);
               } else {
-                console.warn(`⚠️ [addStudent] CONCESSION requested but no fee structure found for ${feeCourse}/${feeBranch}/year ${feeYear}`);
+                const feeCourse = sqlAcademics?.course || course;
+                const feeBranch = sqlAcademics?.branch || branch;
+                throw createError(
+                  400,
+                  `No hostel fee structure found for ${feeCourse}, branch ${feeBranch}, year ${feeYear}, category ${finalCategoryName}, academic year ${academicYear}. A fee structure is required to apply SQL concession during registration.`
+                );
               }
             }
 
@@ -350,42 +355,48 @@ export const addStudent = async (req, res, next) => {
           feeYear,
           finalCategoryName
         );
-        
-        if (feeStructure) {
-          console.log('📊 Fee structure found:', feeStructure);
-          
-          // Calculate fees with concession (applied to Term 1 only, excess to Term 2)
-          const concessionAmount = Number(concession) || 0;
-          const totalOriginalFee = feeStructure.totalFee;
-          
-          // Apply concession to Term 1 first
-          calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
-          
-          // If concession exceeds Term 1 fee, apply excess to Term 2
-          let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
-          calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
-          
-          // If concession still exceeds Term 1 + Term 2, apply to Term 3
-          remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
-          calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
-          
-          totalCalculatedFee = calculatedTerm1Fee + calculatedTerm2Fee + calculatedTerm3Fee;
-          
-          console.log('💰 Fee calculation:', {
-            original: totalOriginalFee,
-            concession: concessionAmount,
-            term1: calculatedTerm1Fee,
-            term2: calculatedTerm2Fee,
-            term3: calculatedTerm3Fee,
-            total: totalCalculatedFee,
-            remainingConcession: remainingConcession
-          });
-        } else {
-          console.log('⚠️ No fee structure found for category:', category, 'academic year:', academicYear);
+
+        if (!feeStructure) {
+          throw createError(
+            400,
+            `No hostel fee structure found for ${feeCourse}, branch ${feeBranch}, year ${feeYear}, category ${finalCategoryName}, academic year ${academicYear}. Please add the fee structure in Fee Management before registering this student.`
+          );
         }
+
+        console.log('📊 Fee structure found:', feeStructure);
+        
+        // Calculate fees with concession (applied to Term 1 only, excess to Term 2)
+        const concessionAmount = Number(concession) || 0;
+        const totalOriginalFee = feeStructure.totalFee;
+        
+        // Apply concession to Term 1 first
+        calculatedTerm1Fee = Math.max(0, feeStructure.term1Fee - concessionAmount);
+        
+        // If concession exceeds Term 1 fee, apply excess to Term 2
+        let remainingConcession = Math.max(0, concessionAmount - feeStructure.term1Fee);
+        calculatedTerm2Fee = Math.max(0, feeStructure.term2Fee - remainingConcession);
+        
+        // If concession still exceeds Term 1 + Term 2, apply to Term 3
+        remainingConcession = Math.max(0, remainingConcession - feeStructure.term2Fee);
+        calculatedTerm3Fee = Math.max(0, feeStructure.term3Fee - remainingConcession);
+        
+        totalCalculatedFee = calculatedTerm1Fee + calculatedTerm2Fee + calculatedTerm3Fee;
+        
+        console.log('💰 Fee calculation:', {
+          original: totalOriginalFee,
+          concession: concessionAmount,
+          term1: calculatedTerm1Fee,
+          term2: calculatedTerm2Fee,
+          term3: calculatedTerm3Fee,
+          total: totalCalculatedFee,
+          remainingConcession: remainingConcession
+        });
       } catch (feeError) {
+        if (feeError.statusCode) {
+          throw feeError;
+        }
         console.error('❌ Error calculating fees:', feeError);
-        // Don't fail the registration if fee calculation fails
+        throw createError(500, 'Error validating fee structure for student registration');
       }
     }
 
