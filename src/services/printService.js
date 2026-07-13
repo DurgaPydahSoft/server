@@ -18,6 +18,16 @@ import Course from '../models/Course.js';
 import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
 import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
 
+// Helper function to format date as dd/mm/yyyy
+const formatDateDDMMYYYY = (date) => {
+  if (!date) return 'N/A';
+  const d = new Date(date);
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}/${month}/${year}`;
+};
+
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
   if (!imageUrl) return null;
@@ -726,6 +736,13 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
   
   if (!staffGuest) {
     throw new Error('Staff/Guest record not found');
+  }
+
+  if (staffGuest.photo && !staffGuest.photo.startsWith('data:image')) {
+    const photoBase64 = await photoToBase64ForExport(staffGuest.photo, fetchImageAsBase64);
+    if (photoBase64) {
+      staffGuest.photo = photoBase64;
+    }
   }
 
   const printLogo = await loadPrintLogoImage();
