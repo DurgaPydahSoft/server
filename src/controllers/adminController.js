@@ -1597,7 +1597,8 @@ export const getStudents = async (req, res, next) => {
         const searchRegex = new RegExp(search, 'i');
         query.$or = [
           { name: searchRegex },
-          { rollNumber: searchRegex }
+          { rollNumber: searchRegex },
+          { admissionNumber: searchRegex }
         ];
       }
 
@@ -3154,7 +3155,7 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
+      .select('name rollNumber admissionNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved calculatedTerm1Fee calculatedTerm2Fee calculatedTerm3Fee totalCalculatedFee');
 
     const enrichedStudents = await enrichStudentsAcademics(students.map((s) => s.toObject()));
 
@@ -3269,7 +3270,7 @@ export const generateBulkAdmitCards = async (req, res, next) => {
     })
     .populate('course', 'name')
     .populate('branch', 'name')
-      .select('name rollNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved');
+      .select('name rollNumber admissionNumber course year branch gender category roomNumber studentPhone parentPhone email batch academicYear hostelId hostelStatus studentPhoto address concession concessionApproved');
 
     const enrichedStudents = await enrichStudentsAcademics(students.map((s) => s.toObject()));
 

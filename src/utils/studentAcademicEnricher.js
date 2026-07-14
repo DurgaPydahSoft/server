@@ -213,8 +213,19 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
   const plain = toPlainStudent(student);
   if (!plain) return plain;
 
-  const identifier = plain.rollNumber || plain.admissionNumber;
-  const sqlAcademics = await loadAcademicsFromSQL(identifier);
+  // Prefer roll/PIN, but always fall back to admission number.
+  // Some SDMS records have null pin_no and are only findable by admission_number.
+  const identifiers = [...new Set(
+    [plain.rollNumber, plain.admissionNumber]
+      .map(normalizeKey)
+      .filter(Boolean)
+  )];
+
+  let sqlAcademics = null;
+  for (const identifier of identifiers) {
+    sqlAcademics = await loadAcademicsFromSQL(identifier);
+    if (sqlAcademics) break;
+  }
 
   let enriched = {
     ...plain,
@@ -222,11 +233,21 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
     academicSource: sqlAcademics ? 'sql' : (plain.course ? 'mongo' : 'unknown')
   };
 
+  // Don't let a null SQL pin overwrite an existing Mongo roll number
+  if (sqlAcademics && !sqlAcademics.rollNumber && plain.rollNumber) {
+    enriched.rollNumber = plain.rollNumber;
+  }
+  if (sqlAcademics && !sqlAcademics.admissionNumber && plain.admissionNumber) {
+    enriched.admissionNumber = plain.admissionNumber;
+  }
+
   if (sqlAcademics) {
     const studentPhoto = resolveStudentPhotoDisplay(sqlAcademics.studentPhoto, plain.studentPhoto);
     enriched.studentPhoto = studentPhoto;
     enriched.photoSource = sqlAcademics.studentPhoto ? 'sdms' : (plain.studentPhoto ? 'mongo' : null);
   }
+
+  const identifier = identifiers[0] || null;
 
   // Live Concessions Sync
   if (identifier) {
@@ -344,9 +365,13 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
 export const enrichStudentsAcademics = async (students) => {
   if (!students?.length) return [];
 
-  const identifiers = students
-    .map((s) => normalizeKey(s.rollNumber || s.admissionNumber))
-    .filter(Boolean);
+  const identifiers = [...new Set(
+    students.flatMap((s) =>
+      [s.rollNumber, s.admissionNumber]
+        .map(normalizeKey)
+        .filter(Boolean)
+    )
+  )];
 
   await loadIdentifiersBatch(identifiers);
 
@@ -368,8 +393,11 @@ export const enrichStudentsAcademics = async (students) => {
 
   return Promise.all(
     students.map((s) => {
-      const identifier = normalizeKey(s.rollNumber || s.admissionNumber);
-      const preFetched = concessionsMap.get(identifier) || null;
+      const rollKey = normalizeKey(s.rollNumber);
+      const admKey = normalizeKey(s.admissionNumber);
+      const preFetched = (rollKey && concessionsMap.get(rollKey))
+        || (admKey && concessionsMap.get(admKey))
+        || null;
       return enrichStudentAcademics(s, preFetched);
     })
   );
