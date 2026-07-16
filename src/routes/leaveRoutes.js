@@ -26,7 +26,8 @@ import {
   deleteLeaveRequest,
   resendOTP,
   getOTP,
-  cleanupExpiredLeaves
+  cleanupExpiredLeaves,
+  createLeaveRequestOnBehalf
 } from '../controllers/leaveController.js';
 import { adminAuth, authenticateStudent, protect, wardenAuth, principalAuth } from '../middleware/authMiddleware.js';
 
@@ -38,6 +39,15 @@ const router = express.Router();
 //   console.log(`🔍 Leave route accessed: ${req.method} ${req.path}`);
 //   next();
 // });
+
+// Redirect base leave route to stats or similar (can be customized)
+router.get('/', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'Leave routes are working', 
+    timestamp: new Date() 
+  });
+});
 
 // Test route to verify server is working
 router.get('/test', (req, res) => {
@@ -66,6 +76,7 @@ router.post('/reject', adminAuth, rejectLeaveRequest);
 router.get('/warden/all', wardenAuth, getWardenLeaveRequests);
 router.post('/warden/verify-otp', wardenAuth, wardenVerifyOTP);
 router.post('/warden/reject', wardenAuth, wardenRejectLeave);
+router.post('/warden/apply-on-behalf', wardenAuth, createLeaveRequestOnBehalf);
 
 // Warden routes for Stay in Hostel requests
 router.get('/warden/stay-in-hostel', wardenAuth, getStayInHostelRequestsForWarden);

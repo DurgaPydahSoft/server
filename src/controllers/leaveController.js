@@ -592,6 +592,255 @@ export const createLeaveRequest = async (req, res, next) => {
   }
 };
 
+// Create leave/permission/stay request on behalf of a student (by warden)
+export const createLeaveRequestOnBehalf = async (req, res, next) => {
+  try {
+    const { 
+      studentId,
+      applicationType, 
+      startDate, 
+      endDate, 
+      permissionDate,
+      stayDate,
+      outTime,
+      inTime,
+      gatePassDateTime,
+      reason 
+    } = req.body;
+    
+    const wardenId = req.user.id;
+
+    if (!studentId) {
+      throw createError(400, 'Student ID is required');
+    }
+
+    // Get student details (phones from SQL when available)
+    const studentDoc = await User.findById(studentId).lean();
+    if (!studentDoc) {
+      throw createError(404, 'Student not found');
+    }
+    const student = await enrichStudentAcademics(studentDoc);
+
+    console.log('Student details (on behalf):', {
+      name: student.name,
+      gender: student.gender,
+      parentPhone: student.parentPhone
+    });
+
+    // Validate application type
+    if (!['Leave', 'Permission', 'Stay in Hostel'].includes(applicationType)) {
+      throw createError(400, 'Invalid application type. Must be "Leave", "Permission", or "Stay in Hostel"');
+    }
+
+    // Check daily limit for this application type
+    const today = normalizeToISTStartOfDay(new Date());
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    
+    const existingRequest = await Leave.findOne({
+      student: studentId,
+      applicationType: applicationType,
+      createdAt: {
+        $gte: today,
+        $lt: tomorrow
+      }
+    });
+    
+    if (existingRequest) {
+      throw createError(400, `Student already has a ${applicationType} request for today`);
+    }
+
+    let leaveData = {
+      student: studentId,
+      applicationType,
+      reason: reason || 'Applied on behalf by Warden',
+      appliedOnBehalf: true,
+      appliedOnBehalfBy: wardenId
+    };
+
+    if (applicationType === 'Leave') {
+      // Validate leave-specific fields
+      if (!startDate || !endDate || !gatePassDateTime) {
+        throw createError(400, 'Start date, end date, and gate pass date/time are required for leave applications');
+      }
+
+      const start = normalizeToISTStartOfDay(startDate);
+      const end = normalizeToISTStartOfDay(endDate);
+      const gatePass = new Date(gatePassDateTime);
+      const today = normalizeToISTStartOfDay(new Date());
+      
+      if (start < today) {
+        throw createError(400, 'Start date cannot be in the past');
+      }
+      
+      if (end <= start) {
+        throw createError(400, 'End date must be after start date');
+      }
+
+      // Validate gate pass date and time
+      if (!validateGatePassDateTime(gatePassDateTime, start)) {
+        const today = normalizeToISTStartOfDay(new Date());
+        
+        if (start.getTime() === today.getTime()) {
+          throw createError(400, 'Gate pass time cannot be in the past for same day leave');
+        } else {
+          throw createError(400, 'Gate pass must be after 4:30 PM for future dates');
+        }
+      }
+
+      leaveData = {
+        ...leaveData,
+        startDate: normalizeToISTStartOfDay(startDate),
+        endDate: normalizeToISTStartOfDay(endDate),
+        gatePassDateTime,
+        parentPhone: student.parentPhone
+      };
+
+      // Generate OTP for Leave applications
+      const otp = generateOTP();
+      leaveData.otpCode = otp;
+      leaveData.status = 'Pending OTP Verification';
+
+    } else if (applicationType === 'Permission') {
+      // Validate permission-specific fields
+      if (!permissionDate || !outTime || !inTime) {
+        throw createError(400, 'Permission date, out time, and in time are required for permission applications');
+      }
+
+      const permission = normalizeToISTStartOfDay(permissionDate);
+      const today = normalizeToISTStartOfDay(new Date());
+      
+      if (permission < today) {
+        throw createError(400, 'Permission date cannot be in the past');
+      }
+
+      // Validate time format
+      if (!validateTimeFormat(outTime) || !validateTimeFormat(inTime)) {
+        throw createError(400, 'Time must be in HH:MM format (24-hour)');
+      }
+
+      // Validate that out time is before in time
+      if (outTime >= inTime) {
+        throw createError(400, 'Out time must be before in time');
+      }
+
+      leaveData = {
+        ...leaveData,
+        permissionDate: normalizeToISTStartOfDay(permissionDate),
+        outTime,
+        inTime,
+        parentPhone: student.parentPhone
+      };
+
+      // Check if parent permission is enabled for this student
+      if (student.parentPermissionForOuting) {
+        // Generate OTP for Permission applications with parent permission enabled
+        const otp = generateOTP();
+        leaveData.otpCode = otp;
+        leaveData.status = 'Pending OTP Verification';
+      } else {
+        // Skip OTP and send directly to principal for approval
+        leaveData.status = 'Pending Principal Approval';
+        console.log(`🚀 Permission request on behalf of student ${student.name} (${student.rollNumber}) - Parent permission disabled, sending directly to principal`);
+      }
+
+    } else if (applicationType === 'Stay in Hostel') {
+      // Validate stay in hostel-specific fields
+      if (!stayDate) {
+        throw createError(400, 'Stay date is required for stay in hostel applications');
+      }
+
+      const stay = normalizeToISTStartOfDay(stayDate);
+      const today = normalizeToISTStartOfDay(new Date());
+      const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+
+      if (stay < today || stay > tomorrow) {
+        throw createError(400, 'Stay date must be today or tomorrow only');
+      }
+
+      leaveData = {
+        ...leaveData,
+        stayDate: normalizeToISTStartOfDay(stayDate),
+        status: 'Pending' // No OTP needed for Stay in Hostel
+      };
+    }
+
+    // Create leave/permission/stay request
+    const leave = new Leave(leaveData);
+    await leave.save();
+
+    // Send SMS only for Leave and Permission applications with parent permission enabled
+    if (applicationType !== 'Stay in Hostel' && student.parentPermissionForOuting) {
+      try {
+        const genderInTelugu = student.gender === 'Male' ? 'కొడుకు' : 'కూతురు';
+        
+        console.log('Sending SMS on behalf with params:', {
+          phone: student.parentPhone,
+          otp: leaveData.otpCode,
+          gender: genderInTelugu,
+          name: student.name
+        });
+        
+        const smsResult = await sendSMS(student.parentPhone, '', { 
+          otp: leaveData.otpCode,
+          gender: genderInTelugu,
+          name: student.name
+        });
+        
+        if (smsResult.success) {
+          console.log('SMS Results (on behalf):', smsResult.results);
+        } else {
+          console.log('SMS sending failed (on behalf)');
+        }
+      } catch (smsError) {
+        console.error('SMS sending failed (on behalf):', smsError);
+      }
+    }
+
+    // Notify student about request created on their behalf
+    try {
+      const notificationTitle = `${applicationType} Request Created On Your Behalf`;
+      const notificationMessage = `A ${applicationType} request has been submitted on your behalf by the Warden. Status: ${leave.status}`;
+      
+      await Notification.create({
+        recipient: student._id,
+        recipientModel: 'User',
+        title: notificationTitle,
+        message: notificationMessage,
+        type: 'leave',
+        relatedId: leave._id
+      });
+
+      if (student.oneSignalId) {
+        await sendOneSignalNotification({
+          playerIds: [student.oneSignalId],
+          title: notificationTitle,
+          message: notificationMessage,
+          data: { type: 'leave_created', leaveId: leave._id.toString() }
+        });
+      }
+    } catch (notifErr) {
+      console.error('Notification failed (on behalf):', notifErr);
+    }
+
+    let message = '';
+    if (applicationType === 'Stay in Hostel') {
+      message = 'Stay in Hostel request submitted successfully on behalf of the student.';
+    } else {
+      message = `${applicationType} request created successfully on behalf of the student. Please verify parent OTP.`;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        leave,
+        message
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Get student's leave requests
 export const getStudentLeaveRequests = async (req, res, next) => {
   try {

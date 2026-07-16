@@ -196,6 +196,14 @@ const leaveSchema = new mongoose.Schema({
   // New field to track QR availability window
   qrAvailableFrom: {
     type: Date
+  },
+  appliedOnBehalf: {
+    type: Boolean,
+    default: false
+  },
+  appliedOnBehalfBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
   }
 }, {
   timestamps: true
