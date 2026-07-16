@@ -217,11 +217,12 @@ feeStructureSchema.statics.getFeeStructuresByCourse = async function (academicYe
 
 // Static method to get additional fees for an academic year
 // If category is provided, only returns fees that apply to that category
-feeStructureSchema.statics.getAdditionalFees = async function (academicYear, category = null) {
-  const feeStructure = await this.findOne({
-    academicYear,
-    isActive: true,
-  }).select('additionalFees');
+feeStructureSchema.statics.getAdditionalFees = async function (academicYear, category = null, hostelId = null) {
+  const query = { academicYear, isActive: true };
+  if (hostelId) {
+    query.hostelId = hostelId;
+  }
+  const feeStructure = await this.findOne(query).select('additionalFees');
 
   if (!feeStructure || !feeStructure.additionalFees || feeStructure.additionalFees.size === 0) {
     return {};
@@ -258,12 +259,13 @@ feeStructureSchema.statics.getAdditionalFees = async function (academicYear, cat
 };
 
 // Static method to set additional fees for an academic year
-feeStructureSchema.statics.setAdditionalFees = async function (academicYear, additionalFees, adminId) {
-  // Find any fee structure for this academic year to update additional fees
-  const feeStructure = await this.findOne({ 
-    academicYear, 
-    isActive: true,
-  });
+feeStructureSchema.statics.setAdditionalFees = async function (academicYear, additionalFees, adminId, hostelId = null) {
+  const query = { academicYear, isActive: true };
+  if (hostelId) {
+    query.hostelId = hostelId;
+  }
+  // Find any fee structure for this academic year and hostel to update additional fees
+  const feeStructure = await this.findOne(query);
   
   if (feeStructure) {
     // Convert plain object to Map
@@ -311,10 +313,9 @@ feeStructureSchema.statics.setAdditionalFees = async function (academicYear, add
       additionalFeesObject[key] = value;
     });
     
-    // Update additional fees on this structure using direct MongoDB update to bypass validation
-    // This avoids validation errors if the fee structure has invalid category
-    await this.updateOne(
-      { _id: feeStructure._id },
+    // Update all fee structures for this academic year and hostel
+    await this.updateMany(
+      query,
       { 
         $set: { 
           additionalFees: additionalFeesObject,
@@ -323,33 +324,12 @@ feeStructureSchema.statics.setAdditionalFees = async function (academicYear, add
       }
     );
     
-    // Update all other fee structures for this academic year
-    const otherFeeStructures = await this.find({ 
-      academicYear, 
-      isActive: true, 
-      _id: { $ne: feeStructure._id } 
-    });
-    
-    // Update each fee structure using direct MongoDB update to bypass validation
-    if (otherFeeStructures.length > 0) {
-      await this.updateMany(
-        { academicYear, isActive: true, _id: { $ne: feeStructure._id } },
-        { 
-          $set: { 
-            additionalFees: additionalFeesObject,
-            updatedBy: adminId
-          } 
-        }
-      );
-    }
-    
     // Return the updated fee structure
     const updatedFeeStructure = await this.findById(feeStructure._id);
     return updatedFeeStructure;
   } else {
-    // If no fee structure exists, create a dummy one just for additional fees
-    // This shouldn't happen in normal flow, but handle it gracefully
-    throw new Error('No fee structure found for academic year. Please create fee structures first.');
+    // If no fee structure exists, throw error
+    throw new Error('No fee structure found for this academic year and hostel. Please create fee structures first.');
   }
 };
 

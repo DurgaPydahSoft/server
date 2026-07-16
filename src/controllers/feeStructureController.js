@@ -1012,7 +1012,7 @@ export const getCourseYears = async (req, res) => {
 export const getAdditionalFees = async (req, res) => {
   try {
     const { academicYear } = req.params;
-    const { category } = req.query; // Optional category filter
+    const { category, hostelId } = req.query; // Accept hostelId
     
     if (!academicYear) {
       return res.status(400).json({
@@ -1021,11 +1021,35 @@ export const getAdditionalFees = async (req, res) => {
       });
     }
 
-    const additionalFees = await FeeStructure.getAdditionalFees(academicYear, category || null);
+    const additionalFees = await FeeStructure.getAdditionalFees(academicYear, category || null, hostelId || null);
+
+    // Fetch Caution Deposit fee head details from Fee Management DB
+    let cautionFeeHead = null;
+    try {
+      const { getFeesConnection, isFeesDbConfigured } = await import('../config/feesDatabase.js');
+      if (isFeesDbConfigured()) {
+        const feesConn = getFeesConnection();
+        if (feesConn && feesConn.db) {
+          const feeHeads = feesConn.db.collection('feeheads');
+          const head = await feeHeads.findOne({ $or: [{ code: 'CDT01' }, { name: 'Caution Deposit' }] });
+          if (head) {
+            cautionFeeHead = {
+              _id: head._id,
+              name: head.name,
+              code: head.code,
+              description: head.description || ''
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Could not fetch Caution Deposit fee head from fee management DB:', err.message);
+    }
 
     res.json({
       success: true,
-      data: additionalFees
+      data: additionalFees,
+      cautionFeeHead
     });
   } catch (error) {
     console.error('Error fetching additional fees:', error);
@@ -1039,7 +1063,7 @@ export const getAdditionalFees = async (req, res) => {
 // Set additional fees for an academic year
 export const setAdditionalFees = async (req, res) => {
   try {
-    const { academicYear, additionalFees } = req.body;
+    const { academicYear, additionalFees, hostelId } = req.body; // Accept hostelId
     const adminId = req.admin?._id || req.user?._id;
 
     if (!academicYear) {
@@ -1134,7 +1158,7 @@ export const setAdditionalFees = async (req, res) => {
       }
     });
 
-    await FeeStructure.setAdditionalFees(academicYear, validAdditionalFees, adminId);
+    await FeeStructure.setAdditionalFees(academicYear, validAdditionalFees, adminId, hostelId || null);
 
     res.json({
       success: true,

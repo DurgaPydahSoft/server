@@ -3,7 +3,7 @@ import { matchCourseAndBranch } from './courseBranchMatcher.js';
 import { normalizeBatchToYear } from './batchUtils.js';
 import { formatSqlStudentPhoto, resolveStudentPhotoDisplay } from './studentPhotoService.js';
 
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour cache TTL
+const CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes cache TTL
 const FAIL_CACHE_TTL_MS = 60 * 1000;
 const BATCH_CHUNK_SIZE = 100; // Fetch 100 students per query
 const MAX_CONCURRENT_BATCHES = 8; // Run up to 8 parallel central DB requests
@@ -47,6 +47,25 @@ const cacheFailure = (keys) => {
   keys.forEach((key) => academicsCache.set(key, entry));
 };
 
+const mapGender = (sqlGender) => {
+  if (!sqlGender) return null;
+  const normalized = sqlGender.toString().trim().toUpperCase();
+  if (['M', 'MALE', 'BOY'].includes(normalized)) return 'Male';
+  if (['F', 'FEMALE', 'GIRL'].includes(normalized)) return 'Female';
+  return null;
+};
+
+const sanitizePhoneNumber = (phone) => {
+  if (!phone) return '';
+  // Remove all non-digit characters
+  const digits = phone.toString().replace(/\D/g, '');
+  // If it's a 10-digit number, return it. If it has a country code prefix (e.g. 91) and is 12 digits, return the last 10 digits.
+  if (digits.length >= 10) {
+    return digits.slice(-10);
+  }
+  return digits; // Return whatever digits we found if it's shorter
+};
+
 /**
  * Map a raw SQL students row to normalized academic fields.
  */
@@ -59,6 +78,7 @@ export const parseSqlStudentRow = async (sqlRow) => {
   let branchId = null;
   let sqlCourseId = null;
   let sqlBranchId = null;
+  let college = null;
 
   if (course) {
     const match = await matchCourseAndBranch(course, branch);
@@ -67,6 +87,7 @@ export const parseSqlStudentRow = async (sqlRow) => {
       branch = match.branchName || branch;
       courseId = match.courseId;
       branchId = match.branchId;
+      college = match.college;
       if (courseId?.toString().startsWith('sql_')) {
         sqlCourseId = parseInt(courseId.toString().replace('sql_', ''), 10);
       }
@@ -79,6 +100,13 @@ export const parseSqlStudentRow = async (sqlRow) => {
   const studentPhoto = formatSqlStudentPhoto(sqlRow.student_photo);
 
   return {
+    name: sqlRow.student_name || null,
+    gender: mapGender(sqlRow.gender),
+    fatherName: sqlRow.father_name || null,
+    dob: sqlRow.dob || null,
+    adharNo: sqlRow.adhar_no || null,
+    address: sqlRow.student_address || null,
+    college: college || null,
     rollNumber: (sqlRow.pin_no || '').toString().trim().toUpperCase() || null,
     pin_no: (sqlRow.pin_no || '').toString().trim().toUpperCase() || null,
     admissionNumber:
@@ -91,9 +119,9 @@ export const parseSqlStudentRow = async (sqlRow) => {
     branchId,
     sqlCourseId,
     sqlBranchId,
-    studentPhone: (sqlRow.student_mobile || '').toString().trim(),
-    parentPhone: (sqlRow.parent_mobile1 || '').toString().trim(),
-    motherPhone: (sqlRow.parent_mobile2 || '').toString().trim(),
+    studentPhone: sanitizePhoneNumber(sqlRow.student_mobile),
+    parentPhone: sanitizePhoneNumber(sqlRow.preferred_mobile_number || sqlRow.parent_mobile1),
+    motherPhone: sanitizePhoneNumber(sqlRow.parent_mobile2),
     studType: (sqlRow.stud_type || '').toString().trim() || null,
     stud_type: (sqlRow.stud_type || '').toString().trim() || null,
     studentPhoto,
@@ -245,6 +273,74 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
     const studentPhoto = resolveStudentPhotoDisplay(sqlAcademics.studentPhoto, plain.studentPhoto);
     enriched.studentPhoto = studentPhoto;
     enriched.photoSource = sqlAcademics.studentPhoto ? 'sdms' : (plain.studentPhoto ? 'mongo' : null);
+
+    // Check if any key fields differ from plain (MongoDB) data and prepare updates
+    const updates = {};
+    
+    if (sqlAcademics.name && sqlAcademics.name !== plain.name) {
+      updates.name = sqlAcademics.name;
+    }
+    if (sqlAcademics.gender && sqlAcademics.gender !== plain.gender) {
+      updates.gender = sqlAcademics.gender;
+    }
+    if (sqlAcademics.studentPhone && sqlAcademics.studentPhone !== plain.studentPhone) {
+      updates.studentPhone = sqlAcademics.studentPhone;
+    }
+    if (sqlAcademics.parentPhone && sqlAcademics.parentPhone !== plain.parentPhone) {
+      updates.parentPhone = sqlAcademics.parentPhone;
+    }
+    if (sqlAcademics.motherPhone && sqlAcademics.motherPhone !== plain.motherPhone) {
+      updates.motherPhone = sqlAcademics.motherPhone;
+    }
+    if (sqlAcademics.dob && sqlAcademics.dob !== plain.dob) {
+      updates.dob = sqlAcademics.dob;
+    }
+    if (sqlAcademics.adharNo && sqlAcademics.adharNo !== plain.adharNo) {
+      updates.adharNo = sqlAcademics.adharNo;
+    }
+    if (sqlAcademics.address && sqlAcademics.address !== plain.address) {
+      updates.address = sqlAcademics.address;
+    }
+    if (sqlAcademics.fatherName && sqlAcademics.fatherName !== plain.fatherName) {
+      updates.fatherName = sqlAcademics.fatherName;
+    }
+    
+    // Compare college details
+    if (sqlAcademics.college) {
+      const col = sqlAcademics.college;
+      const plainCol = plain.college || {};
+      if (col.id !== plainCol.id || col.name !== plainCol.name || col.code !== plainCol.code) {
+        updates.college = col;
+      }
+    }
+    
+    // Compare course/branch/year/batch details
+    if (sqlAcademics.course && sqlAcademics.course !== plain.course) {
+      updates.course = sqlAcademics.course;
+    }
+    if (sqlAcademics.branch && sqlAcademics.branch !== plain.branch) {
+      updates.branch = sqlAcademics.branch;
+    }
+    if (sqlAcademics.year && Number(sqlAcademics.year) !== Number(plain.year)) {
+      updates.year = sqlAcademics.year;
+    }
+    if (sqlAcademics.batch && sqlAcademics.batch !== plain.batch) {
+      updates.batch = sqlAcademics.batch;
+    }
+    
+    // Write changes to MongoDB if there are any discrepancies
+    if (Object.keys(updates).length > 0) {
+      try {
+        const User = (await import('../models/User.js')).default;
+        await User.updateOne({ _id: plain._id }, { $set: updates });
+        console.log(`🔄 [enrichStudentAcademics] Automatically updated MongoDB User ${plain.rollNumber} with latest SQL database details:`, updates);
+        
+        // Keep in-memory enriched values synchronized
+        Object.assign(enriched, updates);
+      } catch (dbErr) {
+        console.error('❌ Error updating student database discrepancies in MongoDB:', dbErr);
+      }
+    }
   }
 
   const identifier = identifiers[0] || null;

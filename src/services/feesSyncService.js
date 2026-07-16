@@ -4,9 +4,12 @@ import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
 
 const HOSTEL_FEE_HEAD_CODE = 'HST01';
 const HOSTEL_FEE_HEAD_NAME = 'Hostel Fee';
+const CAUTION_FEE_HEAD_CODE = 'CDT01';
+const CAUTION_FEE_HEAD_NAME = 'Caution Deposit';
 const FEE_HEADS_COLLECTION = 'feeheads';
 
 let cachedHostelFeeHeadId = null;
+let cachedCautionFeeHeadId = null;
 
 export const toFeesAcademicYear = (academicYear) => {
   if (!academicYear) return null;
@@ -64,6 +67,48 @@ export const resolveHostelFeeHeadId = async () => {
   throw new Error(
     `Hostel Fee head (${HOSTEL_FEE_HEAD_CODE}) not found in Fees database collection "${FEE_HEADS_COLLECTION}"`
   );
+};
+
+export const resolveCautionFeeHeadId = async () => {
+  if (cachedCautionFeeHeadId) return cachedCautionFeeHeadId;
+
+  const ready = await ensureFeesReady();
+  if (!ready) {
+    throw new Error('Fees database is not configured or not connected');
+  }
+
+  const db = getFeesConnection().db;
+  const feeHeads = db.collection(FEE_HEADS_COLLECTION);
+  const byCode = await feeHeads.findOne({ code: CAUTION_FEE_HEAD_CODE });
+  if (byCode?._id) {
+    cachedCautionFeeHeadId = byCode._id;
+    return cachedCautionFeeHeadId;
+  }
+
+  const byName = await feeHeads.findOne({ name: CAUTION_FEE_HEAD_NAME });
+  if (byName?._id) {
+    cachedCautionFeeHeadId = byName._id;
+    return cachedCautionFeeHeadId;
+  }
+
+  throw new Error(
+    `Caution Deposit Fee head (${CAUTION_FEE_HEAD_CODE}) not found in Fees database collection "${FEE_HEADS_COLLECTION}"`
+  );
+};
+
+export const isFirstHostelYear = (student, currentSyncYear) => {
+  if (!student) return false;
+  
+  let startingYear = student.academicYear;
+  if (student.renewalHistory && student.renewalHistory.length > 0) {
+    const sorted = [...student.renewalHistory].sort((a, b) => new Date(a.renewedAt) - new Date(b.renewedAt));
+    startingYear = sorted[0].previousAcademicYear;
+  } else if (student.totalRenewals > 0) {
+    return false;
+  }
+  
+  const norm = (ay) => (ay || '').toString().trim();
+  return norm(startingYear) === norm(currentSyncYear);
 };
 
 /** Fees DB uses admission number as studentId (e.g. "20230353"), not PIN/roll. */
@@ -244,6 +289,96 @@ export const syncStudentHostelFee = async (studentDoc, options = {}) => {
     { upsert: true, new: true, runValidators: false }
   );
 
+  // --- Caution Deposit Sync (New Feature) ---
+  try {
+    const isFirstYear = isFirstHostelYear(plain, academicYear);
+    if (isFirstYear) {
+      const cautionFeeHeadId = await resolveCautionFeeHeadId();
+      
+      // Determine caution deposit amount
+      let cautionAmount = 0;
+      const FeeStructure = (await import('../models/FeeStructure.js')).default;
+      
+      // 1. Try new format query first (using hostelId and categoryId)
+      if (plain.hostel && plain.hostelCategory) {
+        const newFormatQuery = {
+          academicYear,
+          course: enriched.course || plain.course,
+          year: Number(enriched.year ?? plain.year ?? 1),
+          isActive: true,
+          hostelId: plain.hostel,
+          categoryId: plain.hostelCategory,
+          feeType: { $in: ['caution_deposit', 'cautionDeposit'] }
+        };
+        const branchVal = enriched.branch || plain.branch;
+        if (branchVal) {
+          newFormatQuery.$or = [
+            { branch: branchVal },
+            { branch: null },
+            { branch: { $exists: false } }
+          ];
+        }
+        
+        const fs = await FeeStructure.findOne(newFormatQuery);
+        if (fs) {
+          cautionAmount = fs.amount;
+        }
+      }
+      
+      // 2. Try legacy/additionalFees fallback if amount is still 0
+      if (cautionAmount === 0) {
+        const additionalFees = await FeeStructure.getAdditionalFees(academicYear, plain.category);
+        const feeData = additionalFees.cautionDeposit || additionalFees.caution_deposit;
+        if (feeData && feeData.isActive) {
+          if (feeData.categoryAmounts && feeData.categoryAmounts[plain.category] !== undefined) {
+            cautionAmount = feeData.categoryAmounts[plain.category];
+          } else {
+            cautionAmount = feeData.amount;
+          }
+        }
+      }
+      
+      if (cautionAmount > 0) {
+        const cautionPayload = buildStudentFeePayload(plain, enriched, cautionFeeHeadId, academicYear, cautionAmount);
+        if (cautionPayload.studentId && cautionPayload.academicYear) {
+          const StudentFeeModel = getStudentFeeModel();
+          
+          // Clean legacy short year if exists
+          const cautionLegacyShortYear = cautionPayload.academicYear.includes('-')
+            ? cautionPayload.academicYear.split('-')[0]
+            : null;
+          if (cautionLegacyShortYear) {
+            await StudentFeeModel.deleteOne({
+              studentId: cautionPayload.studentId,
+              feeHead: cautionFeeHeadId,
+              academicYear: cautionLegacyShortYear
+            });
+          }
+          
+          await StudentFeeModel.findOneAndUpdate(
+            {
+              studentId: cautionPayload.studentId,
+              feeHead: cautionFeeHeadId,
+              academicYear: cautionPayload.academicYear
+            },
+            {
+              $set: cautionPayload,
+              $setOnInsert: { createdAt: new Date() }
+            },
+            { upsert: true, new: true, runValidators: false }
+          );
+          console.log(`💰 [syncStudentHostelFee] Automatically synced Caution Deposit: ₹${cautionAmount} for student ${plain.rollNumber}`);
+        }
+      } else {
+        console.log(`ℹ️ [syncStudentHostelFee] Caution Deposit amount is 0 or not configured for student ${plain.rollNumber} — skipping caution deposit sync`);
+      }
+    } else {
+      console.log(`ℹ️ [syncStudentHostelFee] Student ${plain.rollNumber} is renewed/not in their first year of study for academic year ${academicYear} — skipping caution deposit sync`);
+    }
+  } catch (cautionError) {
+    console.warn(`⚠️ [syncStudentHostelFee] Caution Deposit sync skipped/failed: ${cautionError.message}`);
+  }
+
   return { ok: true, id: result._id, studentId: payload.studentId };
 };
 
@@ -259,29 +394,52 @@ export const deleteStudentHostelFeesForAcademicYear = async (admissionNumber, ac
   }
 
   let feeHeadId = null;
+  let cautionFeeHeadId = null;
   try {
     feeHeadId = await resolveHostelFeeHeadId();
   } catch (error) {
-    console.warn('Fees sync: hostel fee head not found during delete — removing by student/year only');
+    console.warn('Fees sync: hostel fee head not found during delete');
   }
-
-  const filter = { studentId, academicYear: feesAcademicYear };
-  if (feeHeadId) filter.feeHead = feeHeadId;
+  try {
+    cautionFeeHeadId = await resolveCautionFeeHeadId();
+  } catch (error) {
+    console.warn('Fees sync: caution fee head not found during delete');
+  }
 
   const StudentFee = getStudentFeeModel();
-  let result = await StudentFee.deleteMany(filter);
+  let deletedCount = 0;
 
-  const legacyShortYear = feesAcademicYear.includes('-')
-    ? feesAcademicYear.split('-')[0]
-    : null;
-  if (legacyShortYear && legacyShortYear !== feesAcademicYear) {
-    const legacyFilter = { studentId, academicYear: legacyShortYear };
-    if (feeHeadId) legacyFilter.feeHead = feeHeadId;
-    const legacyResult = await StudentFee.deleteMany(legacyFilter);
-    result = { deletedCount: result.deletedCount + legacyResult.deletedCount };
+  if (feeHeadId) {
+    const filter = { studentId, academicYear: feesAcademicYear, feeHead: feeHeadId };
+    const res = await StudentFee.deleteMany(filter);
+    deletedCount += res.deletedCount;
+
+    const legacyShortYear = feesAcademicYear.includes('-')
+      ? feesAcademicYear.split('-')[0]
+      : null;
+    if (legacyShortYear && legacyShortYear !== feesAcademicYear) {
+      const legacyFilter = { studentId, academicYear: legacyShortYear, feeHead: feeHeadId };
+      const legacyResult = await StudentFee.deleteMany(legacyFilter);
+      deletedCount += legacyResult.deletedCount;
+    }
   }
 
-  return { ok: true, deletedCount: result.deletedCount };
+  if (cautionFeeHeadId) {
+    const filter = { studentId, academicYear: feesAcademicYear, feeHead: cautionFeeHeadId };
+    const res = await StudentFee.deleteMany(filter);
+    deletedCount += res.deletedCount;
+
+    const legacyShortYear = feesAcademicYear.includes('-')
+      ? feesAcademicYear.split('-')[0]
+      : null;
+    if (legacyShortYear && legacyShortYear !== feesAcademicYear) {
+      const legacyFilter = { studentId, academicYear: legacyShortYear, feeHead: cautionFeeHeadId };
+      const legacyResult = await StudentFee.deleteMany(legacyFilter);
+      deletedCount += legacyResult.deletedCount;
+    }
+  }
+
+  return { ok: true, deletedCount };
 };
 
 export const deleteAllStudentHostelFees = async (admissionNumber) => {
@@ -295,16 +453,31 @@ export const deleteAllStudentHostelFees = async (admissionNumber) => {
   }
 
   let feeHeadId = null;
+  let cautionFeeHeadId = null;
   try {
     feeHeadId = await resolveHostelFeeHeadId();
   } catch (error) {
-    console.warn('Fees sync: hostel fee head not found during delete-all — skipping');
-    return { skipped: true, reason: 'hostel_fee_head_not_found' };
+    console.warn('Fees sync: hostel fee head not found during delete-all');
+  }
+  try {
+    cautionFeeHeadId = await resolveCautionFeeHeadId();
+  } catch (error) {
+    console.warn('Fees sync: caution fee head not found during delete-all');
   }
 
   const StudentFee = getStudentFeeModel();
-  const result = await StudentFee.deleteMany({ studentId, feeHead: feeHeadId });
-  return { ok: true, deletedCount: result.deletedCount };
+  let deletedCount = 0;
+
+  if (feeHeadId) {
+    const res = await StudentFee.deleteMany({ studentId, feeHead: feeHeadId });
+    deletedCount += res.deletedCount;
+  }
+  if (cautionFeeHeadId) {
+    const res = await StudentFee.deleteMany({ studentId, feeHead: cautionFeeHeadId });
+    deletedCount += res.deletedCount;
+  }
+
+  return { ok: true, deletedCount };
 };
 
 export const syncStudentHostelFeeSafely = async (studentDoc, options = {}) => {
