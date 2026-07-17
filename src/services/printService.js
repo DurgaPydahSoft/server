@@ -1104,6 +1104,113 @@ export const generateTransportAdmit = async (studentId) => {
   return Buffer.from(doc.output('arraybuffer'));
 };
 
+const buildCourseWiseTable = (studentsList, title) => {
+  // Find all unique courses and unique years in this list
+  const coursesSet = new Set();
+  const yearsSet = new Set();
+  
+  studentsList.forEach(s => {
+    const course = s.course || 'Unassigned Course';
+    const year = s.year ? String(s.year) : 'Unassigned Year';
+    coursesSet.add(course);
+    yearsSet.add(year);
+  });
+
+  const sortedCourses = Array.from(coursesSet).sort();
+  // Sort years numerically, keeping 'Unassigned Year' at the end
+  const sortedYears = Array.from(yearsSet).sort((a, b) => {
+    const numA = parseInt(a, 10);
+    const numB = parseInt(b, 10);
+    if (isNaN(numA) && isNaN(numB)) return a.localeCompare(b);
+    if (isNaN(numA)) return 1;
+    if (isNaN(numB)) return -1;
+    return numA - numB;
+  });
+
+  // Create count matrix: matrix[course][year] = count
+  const matrix = {};
+  sortedCourses.forEach(c => {
+    matrix[c] = {};
+    sortedYears.forEach(y => {
+      matrix[c][y] = 0;
+    });
+  });
+
+  // Populate matrix
+  studentsList.forEach(s => {
+    const course = s.course || 'Unassigned Course';
+    const year = s.year ? String(s.year) : 'Unassigned Year';
+    if (matrix[course] && matrix[course][year] !== undefined) {
+      matrix[course][year]++;
+    }
+  });
+
+  // Calculate course totals and year totals
+  const courseTotals = {};
+  const yearTotals = {};
+  sortedYears.forEach(y => { yearTotals[y] = 0; });
+  let grandTotal = 0;
+
+  sortedCourses.forEach(c => {
+    let rowSum = 0;
+    sortedYears.forEach(y => {
+      const val = matrix[c][y] || 0;
+      rowSum += val;
+      yearTotals[y] += val;
+    });
+    courseTotals[c] = rowSum;
+    grandTotal += rowSum;
+  });
+
+  // Format years for header
+  const getYearHeader = (y) => {
+    if (y === 'Unassigned Year') return 'Unassigned';
+    return `Year ${y}`;
+  };
+
+  // Generate HTML
+  let html = `
+    <div style="margin-top: 8px; margin-bottom: 12px; page-break-inside: avoid;">
+      <h3 style="font-size: 12px; font-weight: bold; color: #1e3a8a; margin-bottom: 4px;">${title}</h3>
+      <table class="pivot-table" style="width: 100%; border-collapse: collapse; font-size: 10px;">
+        <thead>
+          <tr>
+            <th style="font-weight: bold; background-color: #e2e8f0; padding: 6px 8px;">Course</th>
+            ${sortedYears.map(y => `<th style="text-align: center; font-weight: bold; background-color: #e2e8f0; padding: 6px 8px;">${getYearHeader(y)}</th>`).join('')}
+            <th style="text-align: right; font-weight: bold; width: 90px; background-color: #cbd5e1; padding: 6px 8px;">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+
+  sortedCourses.forEach(c => {
+    html += `
+          <tr>
+            <td style="font-weight: 500; border: 1px solid #334155; padding: 6px 8px;">${c}</td>
+            ${sortedYears.map(y => {
+              const val = matrix[c][y];
+              return `<td class="text-center ${val === 0 ? 'cell-zero' : 'text-bold'}" style="border: 1px solid #334155; padding: 6px 8px; text-align: center; ${val === 0 ? 'color: #94a3b8;' : 'font-weight: bold;'}">${val === 0 ? '-' : val}</td>`;
+            }).join('')}
+            <td style="text-align: right; font-weight: bold; background-color: #f8fafc; border: 1px solid #334155; padding: 6px 8px;">${courseTotals[c]}</td>
+          </tr>
+    `;
+  });
+
+  // Total row
+  html += `
+          <tr style="background-color: #eff6ff; font-weight: bold; border-top: 2px solid #334155;">
+            <td style="border: 1px solid #334155; padding: 6px 8px;">Total</td>
+            ${sortedYears.map(y => `<td class="text-center" style="border: 1px solid #334155; padding: 6px 8px; text-align: center; font-weight: bold;">${yearTotals[y]}</td>`).join('')}
+            <td style="text-align: right; background-color: #dbeafe; color: #1d4ed8; font-weight: bold; border: 1px solid #334155; padding: 6px 8px;">${grandTotal}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  return html;
+};
+
 /**
  * LIVE OCCUPANCY REPORT GENERATOR (HTML output)
  */
@@ -1112,6 +1219,8 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
   const includeSummary = printOptions.includeSummary !== undefined ? printOptions.includeSummary : true;
   const includeDetails = printOptions.includeDetails !== undefined ? printOptions.includeDetails : true;
   const passedPivotMatrixHtml = printOptions.pivotMatrixHtml || '';
+  const detailedReportMode = printOptions.detailedReportMode || 'category-wise';
+  const detailedReportType = printOptions.detailedReportType || 'room-wise';
   
   // If no students passed, fetch from DB
   if (!students || !Array.isArray(students) || students.length === 0) {
@@ -1135,6 +1244,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       .populate('hostel')
       .populate('hostelCategory')
       .populate('room')
+      .populate('college')
       .sort({ name: 1 });
   }
 
@@ -1311,9 +1421,17 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     return `${currentYear - 1}-${currentYear}`;
   };
   const displayYear = resolvedYear || getDefaultAcademicYear();
-  const reportTitle = isLiveMode ? 'Live Hostel Occupancy Report' : `Hostel Occupancy Report (${displayYear})`;
-  const reportSubtitle = isLiveMode ? 'Live Overall Abstract & Summary' : 'Overall Abstract & Summary';
-  const detailSubtitle = isLiveMode ? 'Detailed Room-Wise Active List' : 'Detailed Room-Wise Student List';
+  const reportTitle = isLiveMode 
+    ? `Live Hostel Occupancy Report` 
+    : `Hostel Occupancy Report (${displayYear})`;
+  
+  const reportSubtitle = detailedReportType === 'course-wise'
+    ? 'Category Course-Wise Abstract & Summary'
+    : (isLiveMode ? 'Live Overall Abstract & Summary' : 'Overall Abstract & Summary');
+    
+  const detailSubtitle = detailedReportType === 'course-wise'
+    ? 'Detailed Hostel Category Course-Wise Lists'
+    : (isLiveMode ? 'Detailed Room-Wise Active List' : 'Detailed Room-Wise Student List');
   const generatedDate = new Date().toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
   });
@@ -1340,138 +1458,321 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
   let hostelSummariesHtml = '';
   let roomDetailsHtml = '';
 
-  sortedHostels.forEach((hostelName) => {
-    const categories = grouped[hostelName];
-    const sortedCategories = Object.keys(categories).sort();
-
-    // Group counts by Course and Category for this hostel
-    const hostelStudents = students.filter(s => (s.hostel?.name || 'Unassigned Hostel') === hostelName);
-    const hostelCourses = Array.from(new Set(hostelStudents.map(s => s.course || 'Unassigned Course'))).sort();
-    const hostelCats = Array.from(new Set(hostelStudents.map(s => s.hostelCategory?.name || s.category || 'Unassigned Category'))).sort();
-
-    const matrix = {};
-    const courseTotals = {};
-    const catTotals = {};
-    let hostelGrandTotal = 0;
-
-    hostelStudents.forEach(s => {
+  if (detailedReportType === 'course-wise') {
+    const courseExpectedYears = {};
+    students.forEach(s => {
+      if (!s.year) return;
       const cName = s.course || 'Unassigned Course';
-      const catName = s.hostelCategory?.name || s.category || 'Unassigned Category';
-
-      if (!matrix[cName]) matrix[cName] = {};
-      if (!matrix[cName][catName]) matrix[cName][catName] = 0;
-      matrix[cName][catName]++;
-
-      courseTotals[cName] = (courseTotals[cName] || 0) + 1;
-      catTotals[catName] = (catTotals[catName] || 0) + 1;
-      hostelGrandTotal++;
+      if (!courseExpectedYears[cName]) {
+        courseExpectedYears[cName] = new Set();
+      }
+      courseExpectedYears[cName].add(String(s.year));
     });
 
-    let hostelMatrixHtml = `
-      <div style="margin-bottom: 25px; page-break-inside: avoid;">
-        <table class="summary-table" style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 11px;">
-          <thead>
-            <tr style="background-color: #f1f5f9;">
-              <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: left; background-color: #e2e8f0; color: #0f172a;">Course</th>
-              ${hostelCats.map(cat => `
-                <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: center; background-color: #e2e8f0; color: #0f172a;">${cat}</th>
-              `).join('')}
-              <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: right; width: 80px; background-color: #e2e8f0; color: #0f172a;">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-    `;
+    const studentsByHostelCategory = {}; // { hostelName: { categoryName: [students] } }
+    students.forEach(student => {
+      if (!student.hostel || !student.hostel.name) return;
+      const hostelName = student.hostel.name;
+      const catName = student.hostelCategory?.name || student.category || 'Unassigned Category';
 
-    hostelCourses.forEach(course => {
-      hostelMatrixHtml += `
-        <tr>
-          <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: 500;">${course}</td>
-          ${hostelCats.map(cat => {
-            const count = matrix[course]?.[cat] || 0;
-            return `<td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; ${count === 0 ? 'color: #cbd5e1;' : 'font-weight: bold;'}">${count === 0 ? '-' : count}</td>`;
-          }).join('')}
-          <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; font-weight: bold; background-color: #f8fafc;">${courseTotals[course] || 0}</td>
-        </tr>
+      if (!studentsByHostelCategory[hostelName]) {
+        studentsByHostelCategory[hostelName] = {};
+      }
+      if (!studentsByHostelCategory[hostelName][catName]) {
+        studentsByHostelCategory[hostelName][catName] = [];
+      }
+      studentsByHostelCategory[hostelName][catName].push(student);
+    });
+
+    const sortedHostelsForDetails = Object.keys(studentsByHostelCategory).sort();
+    sortedHostelsForDetails.forEach(hostelName => {
+      roomDetailsHtml += `
+        <div class="hostel-section" style="margin-bottom: 40px;">
+          <div class="hostel-title" style="font-size: 18px; font-weight: bold; color: #1e3a8a; border-bottom: 1.5px solid #1e3a8a; padding-bottom: 4px; margin-bottom: 15px;">${hostelName} - Detailed Lists</div>
       `;
-    });
 
-    hostelMatrixHtml += `
-            <tr style="background-color: #eff6ff; font-weight: bold; color: #0f172a; border-top: 2px solid #cbd5e1;">
-              <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold;">Total</td>
-              ${hostelCats.map(cat => `
-                <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; font-weight: bold;">${catTotals[cat] || 0}</td>
-              `).join('')}
-              <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; background-color: #dbeafe; font-weight: bold; color: #1d4ed8;">${hostelGrandTotal}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    `;
+      const hostelCats = Object.keys(studentsByHostelCategory[hostelName]).sort();
+      hostelCats.forEach(catName => {
+        const catStudents = studentsByHostelCategory[hostelName][catName];
 
-    hostelSummariesHtml += `
-      <div class="hostel-section" style="page-break-inside: avoid; margin-bottom: 30px;">
-        <div class="hostel-title">${hostelName} Abstract</div>
-        ${hostelMatrixHtml}
-      </div>
-    `;
+        // 1. Render Category Abstract (Summary counts table)
+        roomDetailsHtml += `
+          <div class="category-section" style="margin-bottom: 30px;">
+            <div class="category-title" style="font-size: 13px; font-weight: bold; color: #1e3a8a; background-color: #eff6ff; padding: 6px 12px; border-radius: 4px; margin-bottom: 10px; border-left: 3px solid #3b82f6;">Category: ${catName}</div>
+            ${buildCourseWiseTable(catStudents, `Course-Wise Summary - Category ${catName}`)}
+          </div>
+        `;
 
-    let hostelRoomDetails = `
-      <div class="hostel-section">
-        <div class="hostel-title">${hostelName} - Detailed Room-Wise Active List</div>
-    `;
-
-    sortedCategories.forEach((categoryName) => {
-      const rooms = categories[categoryName];
-      const sortedRooms = Object.keys(rooms).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
-
-      hostelRoomDetails += `
-        <div class="category-section">
-          <div class="category-title">Category: ${categoryName}</div>`;
-
-      sortedRooms.forEach((roomNo) => {
-        const roomStudentsList = rooms[roomNo];
-        
-        hostelRoomDetails += `
-          <div class="room-section">
-            <div class="room-title">Room ${roomNo} (${roomStudentsList.length} ${isLiveMode ? 'Residents' : 'Students'})</div>
-            <table class="detail-table">
-              <thead>
-                <tr>
-                  <th style="width: 8%">#</th>
-                  <th style="width: 30%">Roll Number</th>
-                  <th style="width: 35%">Student Name</th>
-                  <th style="width: 27%">Course & Branch</th>
-                </tr>
-              </thead>
-              <tbody>`;
-
-        roomStudentsList.forEach((student, index) => {
-          const courseBranch = `${student.course || ''} - ${student.branch || ''}`;
-          hostelRoomDetails += `
-            <tr>
-              <td>${index + 1}</td>
-              <td><strong>${student.rollNumber || 'N/A'}</strong></td>
-              <td>${student.name || 'N/A'}</td>
-              <td>${courseBranch}</td>
-            </tr>`;
+        // 2. Group students by Course for detailed student listing with Year as a column
+        const courseGroups = {};
+        catStudents.forEach(s => {
+          const course = s.course || 'Unassigned Course';
+          if (!courseGroups[course]) {
+            courseGroups[course] = [];
+          }
+          courseGroups[course].push(s);
         });
 
-        hostelRoomDetails += `
-              </tbody>
-            </table>
-          </div>`;
+        const sortedCourses = Object.keys(courseGroups).sort();
+        sortedCourses.forEach(courseName => {
+          const courseStudents = courseGroups[courseName];
+          
+          // Get expected years for this course
+          const expectedYears = Array.from(courseExpectedYears[courseName] || []).sort((a, b) => parseInt(a) - parseInt(b));
+          
+          // Add dummy entry if a year is completely missing for this course
+          expectedYears.forEach(y => {
+            const hasStudents = courseStudents.some(s => String(s.year) === y);
+            if (!hasStudents) {
+              courseStudents.push({
+                year: y,
+                rollNumber: '-',
+                name: '-',
+                branch: '-',
+                roomNumber: '-',
+                isDummy: true
+              });
+            }
+          });
+
+          // Sort by Year (ascending), then by Roll Number or Name
+          courseStudents.sort((a, b) => {
+            const yearA = a.year ? parseInt(a.year, 10) : 999;
+            const yearB = b.year ? parseInt(b.year, 10) : 999;
+            if (yearA !== yearB) return yearA - yearB;
+            
+            if (a.isDummy && !b.isDummy) return 1;
+            if (!a.isDummy && b.isDummy) return -1;
+            
+            const rollA = a.rollNumber || '';
+            const rollB = b.rollNumber || '';
+            return rollA.localeCompare(rollB);
+          });
+
+          // Precalculate the rowspan counts for each Year
+          const yearRowSpans = {};
+          courseStudents.forEach(s => {
+            const formattedYear = s.year ? `Year ${s.year}` : 'Unassigned';
+            yearRowSpans[formattedYear] = (yearRowSpans[formattedYear] || 0) + 1;
+          });
+
+          const renderedYears = {};
+          const activeCount = courseStudents.filter(s => !s.isDummy).length;
+
+          roomDetailsHtml += `
+            <div class="room-section" style="margin-bottom: 30px; page-break-inside: avoid;">
+              <div class="room-title" style="font-size: 13px; font-weight: bold; color: #1e3a8a; margin-bottom: 8px;">
+                🎓 ${courseName} (${activeCount} Students)
+              </div>
+              <table class="detail-table" style="width: 100%; border-collapse: collapse; margin-bottom: 15px;">
+                <thead>
+                  <tr style="background-color: #f1f5f9;">
+                    <th style="width: 6%; border: 1px solid #cbd5e1; padding: 5px 8px; font-weight: bold; font-size: 11px; text-align: left;">#</th>
+                    <th style="width: 12%; border: 1px solid #cbd5e1; padding: 5px 8px; font-weight: bold; font-size: 11px; text-align: left;">Year</th>
+                    <th style="width: 22%; border: 1px solid #cbd5e1; padding: 5px 8px; font-weight: bold; font-size: 11px; text-align: left;">Roll Number</th>
+                    <th style="width: 32%; border: 1px solid #cbd5e1; padding: 5px 8px; font-weight: bold; font-size: 11px; text-align: left;">Student Name</th>
+                    <th style="width: 15%; border: 1px solid #cbd5e1; padding: 5px 8px; font-weight: bold; font-size: 11px; text-align: left;">Branch</th>
+                    <th style="width: 13%; border: 1px solid #cbd5e1; padding: 5px 8px; font-weight: bold; font-size: 11px; text-align: left;">Room No</th>
+                  </tr>
+                </thead>
+                <tbody>
+          `;
+
+          let serialCounter = 1;
+          courseStudents.forEach((student) => {
+            const formattedYear = student.year ? `Year ${student.year}` : 'Unassigned';
+            const isDummy = student.isDummy;
+            const roll = student.rollNumber || 'N/A';
+            const name = student.name || 'N/A';
+            const branch = student.branch || 'N/A';
+            const room = student.room?.roomNumber || student.roomNumber || 'N/A';
+
+            let yearCellHtml = '';
+            if (!renderedYears[formattedYear]) {
+              const span = yearRowSpans[formattedYear];
+              yearCellHtml = `<td rowspan="${span}" style="border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px; font-weight: bold; color: #475569; vertical-align: middle; background-color: #fafafa; text-align: center;">${formattedYear}</td>`;
+              renderedYears[formattedYear] = true;
+            }
+
+            const serialText = isDummy ? '-' : String(serialCounter++);
+
+            roomDetailsHtml += `
+                  <tr>
+                    <td style="border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px;">${serialText}</td>
+                    ${yearCellHtml}
+                    <td style="border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px;"><strong>${roll}</strong></td>
+                    <td style="border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px;">${name}</td>
+                    <td style="border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px;">${branch}</td>
+                    <td style="border: 1px solid #cbd5e1; padding: 5px 8px; font-size: 11px;">${room}</td>
+                  </tr>
+            `;
+          });
+
+          roomDetailsHtml += `
+                </tbody>
+              </table>
+            </div>
+          `;
+        });
       });
 
-      hostelRoomDetails += `</div>`; // category-section
+      roomDetailsHtml += `</div>`;
     });
+  } else {
+    sortedHostels.forEach((hostelName) => {
+      const categories = grouped[hostelName];
+      const sortedCategories = Object.keys(categories).sort();
 
-    hostelRoomDetails += `</div>`; // hostel-section
-    roomDetailsHtml += hostelRoomDetails;
-  });
+      // Group counts by Course and Category for this hostel
+      const hostelStudents = students.filter(s => (s.hostel?.name || 'Unassigned Hostel') === hostelName);
+      const hostelCourses = Array.from(new Set(hostelStudents.map(s => s.course || 'Unassigned Course'))).sort();
+      const hostelCats = Array.from(new Set(hostelStudents.map(s => s.hostelCategory?.name || s.category || 'Unassigned Category'))).sort();
+
+      const matrix = {};
+      const courseTotals = {};
+      const catTotals = {};
+      let hostelGrandTotal = 0;
+
+      hostelStudents.forEach(s => {
+        const cName = s.course || 'Unassigned Course';
+        const catName = s.hostelCategory?.name || s.category || 'Unassigned Category';
+
+        if (!matrix[cName]) matrix[cName] = {};
+        if (!matrix[cName][catName]) matrix[cName][catName] = 0;
+        matrix[cName][catName]++;
+
+        courseTotals[cName] = (courseTotals[cName] || 0) + 1;
+        catTotals[catName] = (catTotals[catName] || 0) + 1;
+        hostelGrandTotal++;
+      });
+
+      let hostelMatrixHtml = `
+        <div style="margin-bottom: 25px; page-break-inside: avoid;">
+          <table class="summary-table" style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 11px;">
+            <thead>
+              <tr style="background-color: #f1f5f9;">
+                <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: left; background-color: #e2e8f0; color: #0f172a;">Course</th>
+                ${hostelCats.map(cat => `
+                  <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: center; background-color: #e2e8f0; color: #0f172a;">${cat}</th>
+                `).join('')}
+                <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: right; width: 80px; background-color: #e2e8f0; color: #0f172a;">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+      `;
+
+      hostelCourses.forEach(course => {
+        hostelMatrixHtml += `
+          <tr>
+            <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: 500;">${course}</td>
+            ${hostelCats.map(cat => {
+              const count = matrix[course]?.[cat] || 0;
+              return `<td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; ${count === 0 ? 'color: #cbd5e1;' : 'font-weight: bold;'}">${count === 0 ? '-' : count}</td>`;
+            }).join('')}
+            <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; font-weight: bold; background-color: #f8fafc;">${courseTotals[course] || 0}</td>
+          </tr>
+        `;
+      });
+
+      hostelMatrixHtml += `
+              <tr style="background-color: #eff6ff; font-weight: bold; color: #0f172a; border-top: 2px solid #cbd5e1;">
+                <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold;">Total</td>
+                ${hostelCats.map(cat => `
+                  <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; font-weight: bold;">${catTotals[cat] || 0}</td>
+                `).join('')}
+                <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; background-color: #dbeafe; font-weight: bold; color: #1d4ed8;">${hostelGrandTotal}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      hostelSummariesHtml += `
+        <div class="hostel-section" style="page-break-inside: avoid; margin-bottom: 30px;">
+          <div class="hostel-title">${hostelName} Abstract</div>
+          ${hostelMatrixHtml}
+        </div>
+      `;
+
+      let hostelRoomDetails = `
+        <div class="hostel-section">
+          <div class="hostel-title">${hostelName} - Detailed Room-Wise Active List</div>
+      `;
+
+      sortedCategories.forEach((categoryName) => {
+        const rooms = categories[categoryName];
+        const sortedRooms = Object.keys(rooms).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+
+        hostelRoomDetails += `
+          <div class="category-section">
+            <div class="category-title">Category: ${categoryName}</div>`;
+
+        sortedRooms.forEach((roomNo) => {
+          const roomStudentsList = rooms[roomNo];
+          
+          hostelRoomDetails += `
+            <div class="room-section">
+              <div class="room-title">Room ${roomNo} (${roomStudentsList.length} ${isLiveMode ? 'Residents' : 'Students'})</div>
+              <table class="detail-table">
+                <thead>
+                  <tr>
+                    <th style="width: 8%">#</th>
+                    <th style="width: 30%">Roll Number</th>
+                    <th style="width: 35%">Student Name</th>
+                    <th style="width: 27%">Course & Branch</th>
+                  </tr>
+                </thead>
+                <tbody>`;
+
+          roomStudentsList.forEach((student, index) => {
+            const courseBranch = `${student.course || ''} - ${student.branch || ''}`;
+            hostelRoomDetails += `
+              <tr>
+                <td>${index + 1}</td>
+                <td><strong>${student.rollNumber || 'N/A'}</strong></td>
+                <td>${student.name || 'N/A'}</td>
+                <td>${courseBranch}</td>
+              </tr>`;
+          });
+
+          hostelRoomDetails += `
+                </tbody>
+              </table>
+            </div>`;
+        });
+
+        hostelRoomDetails += `</div>`; // category-section
+      });
+
+      hostelRoomDetails += `</div>`; // hostel-section
+      roomDetailsHtml += hostelRoomDetails;
+    });
+  }
 
   // Build Pivot Matrix Table HTML (use passed HTML or generate)
   let pivotMatrixHtml = passedPivotMatrixHtml;
-  if (!pivotMatrixHtml) {
+  if (detailedReportType === 'course-wise') {
+    // Group students by category
+    const studentsByCategory = {};
+    students.forEach(student => {
+      const catName = student.hostelCategory?.name || student.category || 'Unassigned Category';
+      if (!studentsByCategory[catName]) {
+        studentsByCategory[catName] = [];
+      }
+      studentsByCategory[catName].push(student);
+    });
+
+    const sortedCategories = Object.keys(studentsByCategory).sort();
+    pivotMatrixHtml = '';
+    sortedCategories.forEach(catName => {
+      pivotMatrixHtml += `
+        <div style="margin-bottom: 30px; page-break-inside: avoid;">
+          <h2 style="font-size: 15px; font-weight: bold; color: #1e3a8a; border-bottom: 2px solid #cbd5e1; padding-bottom: 4px; margin-bottom: 10px;">Category: ${catName}</h2>
+          ${buildCourseWiseTable(studentsByCategory[catName], `Consolidated Course-Wise Distribution - ${catName}`)}
+        </div>
+      `;
+    });
+  } else if (!pivotMatrixHtml) {
     pivotMatrixHtml = `
       <table class="pivot-table">
         <thead>
@@ -1564,63 +1865,67 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #1e293b;
-      margin: 1.5cm;
+      margin: 0.8cm;
       padding: 0;
       background-color: #ffffff;
     }
-    .page-break {
-      page-break-after: always;
-      break-after: page;
+    .page-break-separator {
+      page-break-before: always;
+      break-before: page;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      border: none;
     }
     .header-container {
       text-align: center;
-      margin-bottom: 25px;
+      margin-bottom: 15px;
       border-bottom: 2px solid #1e3a8a;
-      padding-bottom: 12px;
+      padding-bottom: 6px;
     }
     h1 {
-      font-size: 24px;
+      font-size: 20px;
       color: #1e3a8a;
-      margin: 0 0 5px 0;
+      margin: 0 0 4px 0;
       text-transform: uppercase;
       letter-spacing: 0.5px;
     }
     .report-subtitle {
-      font-size: 13px;
+      font-size: 12px;
       color: #475569;
-      margin: 5px 0;
+      margin: 3px 0;
       font-weight: 500;
     }
     .report-date {
-      font-size: 11px;
+      font-size: 10px;
       color: #64748b;
       margin: 0;
     }
     .abstract-section {
-      margin-top: 15px;
+      margin-top: 10px;
     }
     .abstract-title {
-      font-size: 16px;
+      font-size: 14px;
       font-weight: 700;
       color: #1e3a8a;
-      margin: 20px 0 10px 0;
+      margin: 15px 0 8px 0;
       text-transform: uppercase;
-      border-bottom: 1px solid #cbd5e1;
-      padding-bottom: 4px;
+      border-bottom: 1.5px solid #334155;
+      padding-bottom: 3px;
     }
     .summary-row {
       display: flex;
       justify-content: space-around;
       align-items: center;
-      border: 1px solid #cbd5e1;
+      border: 1px solid #334155;
       border-radius: 6px;
-      padding: 12px 10px;
+      padding: 8px 10px;
       background-color: #f8fafc;
-      margin-bottom: 25px;
+      margin-bottom: 15px;
       box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     }
     .summary-item {
-      font-size: 13px;
+      font-size: 12px;
       color: #334155;
       font-weight: 500;
       display: inline-block;
@@ -1628,34 +1933,34 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     }
     .summary-item strong {
       color: #1d4ed8;
-      font-size: 16px;
+      font-size: 14px;
       margin-left: 5px;
     }
     .pivot-table {
       width: 100%;
       border-collapse: collapse;
-      margin-bottom: 25px;
+      margin-bottom: 15px;
       font-size: 10px;
     }
     .pivot-table th, .pivot-table td {
-      border: 1px solid #cbd5e1;
-      padding: 6px 8px;
+      border: 1px solid #334155;
+      padding: 4px 6px;
       text-align: left;
     }
     .pivot-table th {
       background-color: #e2e8f0;
       color: #0f172a;
       font-weight: bold;
-      font-size: 11px;
-      border: 1px solid #cbd5e1;
+      font-size: 10px;
+      border: 1px solid #334155;
     }
     .pivot-table .header-row-2 th {
       background-color: #f1f5f9;
       color: #1e293b;
-      font-size: 10px;
-      padding: 6px 8px;
+      font-size: 9px;
+      padding: 4px 6px;
       font-weight: bold;
-      border: 1px solid #cbd5e1;
+      border: 1px solid #334155;
     }
     .pivot-table .text-center {
       text-align: center;
@@ -1672,7 +1977,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     .pivot-table .level-0 {
       background-color: #f1f5f9;
       font-weight: bold;
-      font-size: 11px;
+      font-size: 10px;
       color: #0f172a;
     }
     .pivot-table .level-1 {
@@ -1688,41 +1993,41 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       color: #94a3b8;
       font-weight: normal;
       margin-right: 5px;
-      font-size: 12px;
+      font-size: 11px;
     }
     .hostel-section {
-      margin-bottom: 30px;
+      margin-bottom: 20px;
     }
     .hostel-title {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: bold;
       color: #1e3a8a;
       border-bottom: 1.5px solid #1e3a8a;
-      padding-bottom: 4px;
-      margin-bottom: 15px;
+      padding-bottom: 3px;
+      margin-bottom: 10px;
     }
     .category-section {
-      margin-bottom: 20px;
+      margin-bottom: 15px;
     }
     .category-title {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: bold;
       color: #1e3a8a;
       background-color: #eff6ff;
-      padding: 6px 12px;
+      padding: 4px 8px;
       border-radius: 4px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
       border-left: 3px solid #3b82f6;
     }
     .room-section {
-      margin-bottom: 15px;
+      margin-bottom: 12px;
       page-break-inside: avoid;
     }
     .room-title {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: bold;
       color: #334155;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
     }
     .detail-table {
       width: 100%;
@@ -1730,9 +2035,9 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       margin-bottom: 8px;
     }
     .detail-table th, .detail-table td {
-      border: 1px solid #cbd5e1;
-      padding: 5px 8px;
-      font-size: 11px;
+      border: 1px solid #334155;
+      padding: 4px 6px;
+      font-size: 10px;
       text-align: left;
     }
     .detail-table th {
@@ -1748,7 +2053,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
 <body>
   ${includeSummary ? `
   <!-- PAGE 1: ABSTRACT & SUMMARY -->
-  <div class="abstract-page page-break">
+  <div class="abstract-page" ${(includeDetails || hostelSummariesHtml) ? 'style="page-break-after: always; break-after: page;"' : ''}>
     <div class="header-container">
       <h1>${reportTitle}</h1>
       <div class="report-subtitle">${reportSubtitle}</div>
@@ -1765,13 +2070,14 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
         ${sortedHostels.map(h => `<span class="summary-item">${h}: <strong>${hostelSummaries[h].total}</strong></span>`).join('')}
       </div>
 
-      <div class="abstract-title">Breakdown Matrix</div>
       ${pivotMatrixHtml}
     </div>
   </div>
+  ` : ''}
 
+  ${includeSummary && hostelSummariesHtml ? `
   <!-- PAGE 1.5: HOSTEL ABSTRACT SUMMARY MATRICES -->
-  <div class="abstract-page ${includeDetails ? 'page-break' : ''}">
+  <div class="abstract-page" ${includeDetails ? 'style="page-break-after: always; break-after: page;"' : ''}>
     <div class="header-container">
       <h1>${reportTitle}</h1>
       <div class="report-subtitle">Hostel-wise Abstract Matrix Summaries</div>
@@ -1787,6 +2093,19 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       <h1>${reportTitle}</h1>
       <div class="report-subtitle">${detailSubtitle}</div>
     </div>
+
+    ${!includeSummary ? `
+    <div class="abstract-section" style="margin-bottom: 25px;">
+      <div class="abstract-title" style="margin-top: 0;">Overall Abstract</div>
+      <div class="summary-row" style="margin-bottom: 15px;">
+        <span class="summary-item">
+          ${isLiveMode ? 'Total Active Residents' : 'Total Registered Students'}: <strong>${grandTotal}</strong>
+        </span>
+        ${sortedHostels.map(h => `<span class="summary-item">${h}: <strong>${hostelSummaries[h].total}</strong></span>`).join('')}
+      </div>
+    </div>
+    ` : ''}
+
     ${roomDetailsHtml}
   </div>
   ` : ''}
