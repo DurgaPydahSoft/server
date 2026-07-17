@@ -1111,6 +1111,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
   let students = passedStudents;
   const includeSummary = printOptions.includeSummary !== undefined ? printOptions.includeSummary : true;
   const includeDetails = printOptions.includeDetails !== undefined ? printOptions.includeDetails : true;
+  const passedPivotMatrixHtml = printOptions.pivotMatrixHtml || '';
   
   // If no students passed, fetch from DB
   if (!students || !Array.isArray(students) || students.length === 0) {
@@ -1146,7 +1147,10 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
   const collegesMap = {};
 
   students.forEach(student => {
-    const hostelName = student.hostel?.name || 'Unassigned Hostel';
+    // Exclude students who do not have a valid hostel assigned
+    if (!student.hostel || !student.hostel.name) return;
+
+    const hostelName = student.hostel.name;
     const categoryName = student.hostelCategory?.name || student.category || 'Unassigned Category';
     const roomNo = student.room?.roomNumber || student.roomNumber || 'Unassigned Room';
     const collegeName = student.college?.name || 'Unassigned College';
@@ -1465,88 +1469,91 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     roomDetailsHtml += hostelRoomDetails;
   });
 
-  // Build Pivot Matrix Table HTML
-  let pivotMatrixHtml = `
-    <table class="pivot-table">
-      <thead>
-        <tr class="header-row-1">
-          <th rowspan="2">Institution / Course / Year</th>
-          ${hostelGroups.map(group => `
-            <th colspan="${group.categories.length}" class="text-center" style="border-bottom: 1px solid #cbd5e1;">
-              ${group.hostelName}
-            </th>
-          `).join('')}
-          <th rowspan="2" class="text-right" style="width: 100px;">Total</th>
-        </tr>
-        <tr class="header-row-2">
-          ${hostelGroups.map(group => 
-            group.categories.map(cat => `
-              <th class="text-center">
-                ${cat.categoryName}
+  // Build Pivot Matrix Table HTML (use passed HTML or generate)
+  let pivotMatrixHtml = passedPivotMatrixHtml;
+  if (!pivotMatrixHtml) {
+    pivotMatrixHtml = `
+      <table class="pivot-table">
+        <thead>
+          <tr class="header-row-1">
+            <th rowspan="2">Institution / Course / Year</th>
+            ${hostelGroups.map(group => `
+              <th colspan="${group.categories.length}" class="text-center" style="border-bottom: 1px solid #cbd5e1;">
+                ${group.hostelName}
               </th>
-            `).join('')
-          ).join('')}
-        </tr>
-      </thead>
-      <tbody>
-  `;
-
-  const normalizeCourseName = (courseName) => {
-    if (!courseName) return '';
-    return courseName.trim().toUpperCase().replace(/\s+/g, ' ');
-  };
-
-  Object.values(collegesMap).sort((a, b) => a.name.localeCompare(b.name)).forEach(college => {
-    pivotMatrixHtml += `
-      <tr class="level-0">
-        <td>${college.name}</td>
-        ${columns.map(col => {
-          const val = getCollegeColumnCount(college, col.hostelName, col.categoryName);
-          return `<td class="text-center ${val === 0 ? 'cell-zero' : 'text-bold'}">${val === 0 ? '-' : val}</td>`;
-        }).join('')}
-        <td class="text-right text-bold">${college.count}</td>
-      </tr>
+            `).join('')}
+            <th rowspan="2" class="text-right" style="width: 100px;">Total</th>
+          </tr>
+          <tr class="header-row-2">
+            ${hostelGroups.map(group => 
+              group.categories.map(cat => `
+                <th class="text-center">
+                  ${cat.categoryName}
+                </th>
+              `).join('')
+            ).join('')}
+          </tr>
+        </thead>
+        <tbody>
     `;
 
-    Object.values(college.courses).sort((a, b) => a.name.localeCompare(b.name)).forEach(course => {
+    const normalizeCourseName = (courseName) => {
+      if (!courseName) return '';
+      return courseName.trim().toUpperCase().replace(/\s+/g, ' ');
+    };
+
+    Object.values(collegesMap).sort((a, b) => a.name.localeCompare(b.name)).forEach(college => {
       pivotMatrixHtml += `
-        <tr class="level-1">
-          <td style="padding-left: 15px;"><span class="hierarchy-arrow">↳</span> ${course.name}</td>
+        <tr class="level-0">
+          <td>${college.name}</td>
           ${columns.map(col => {
-            const val = getCourseColumnCount(course, col.hostelName, col.categoryName);
+            const val = getCollegeColumnCount(college, col.hostelName, col.categoryName);
             return `<td class="text-center ${val === 0 ? 'cell-zero' : 'text-bold'}">${val === 0 ? '-' : val}</td>`;
           }).join('')}
-          <td class="text-right text-bold">${course.count}</td>
+          <td class="text-right text-bold">${college.count}</td>
         </tr>
       `;
+
+      Object.values(college.courses).sort((a, b) => a.name.localeCompare(b.name)).forEach(course => {
+        pivotMatrixHtml += `
+          <tr class="level-1">
+            <td style="padding-left: 15px;"><span class="hierarchy-arrow">↳</span> ${course.name}</td>
+            ${columns.map(col => {
+              const val = getCourseColumnCount(course, col.hostelName, col.categoryName);
+              return `<td class="text-center ${val === 0 ? 'cell-zero' : 'text-bold'}">${val === 0 ? '-' : val}</td>`;
+            }).join('')}
+            <td class="text-right text-bold">${course.count}</td>
+          </tr>
+        `;
+      });
     });
-  });
 
-  // Calculate column totals across all colleges
-  let totalRowHtml = `
-      <tr style="background-color: #eff6ff; font-weight: bold; border-top: 2.5px double #1e3a8a;">
-        <td style="font-weight: bold; color: #1e3a8a;">Total</td>
-  `;
-  
-  let grandSum = 0;
-  columns.forEach(col => {
-    let colSum = 0;
-    Object.values(collegesMap).forEach(college => {
-      colSum += getCollegeColumnCount(college, col.hostelName, col.categoryName);
+    // Calculate column totals across all colleges
+    let totalRowHtml = `
+        <tr style="background-color: #eff6ff; font-weight: bold; border-top: 2.5px double #1e3a8a;">
+          <td style="font-weight: bold; color: #1e3a8a;">Total</td>
+    `;
+    
+    let grandSum = 0;
+    columns.forEach(col => {
+      let colSum = 0;
+      Object.values(collegesMap).forEach(college => {
+        colSum += getCollegeColumnCount(college, col.hostelName, col.categoryName);
+      });
+      grandSum += colSum;
+      totalRowHtml += `<td class="text-center text-bold" style="color: #1e3a8a;">${colSum === 0 ? '-' : colSum}</td>`;
     });
-    grandSum += colSum;
-    totalRowHtml += `<td class="text-center text-bold" style="color: #1e3a8a;">${colSum === 0 ? '-' : colSum}</td>`;
-  });
 
-  totalRowHtml += `
-        <td class="text-right text-bold" style="background-color: #dbeafe; color: #1d4ed8;">${grandSum}</td>
-      </tr>
-  `;
+    totalRowHtml += `
+          <td class="text-right text-bold" style="background-color: #dbeafe; color: #1d4ed8;">${grandSum}</td>
+        </tr>
+    `;
 
-  pivotMatrixHtml += totalRowHtml + `
-      </tbody>
-    </table>
-  `;
+    pivotMatrixHtml += totalRowHtml + `
+        </tbody>
+      </table>
+    `;
+  }
 
   // Construct complete HTML page
   return `<!DOCTYPE html>
