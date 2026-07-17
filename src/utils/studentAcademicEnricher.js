@@ -237,7 +237,7 @@ export const repairMissingRollNumber = async (student, academicSnapshot = null) 
   return false;
 };
 
-export const enrichStudentAcademics = async (student, preFetchedConcession = undefined) => {
+export const enrichStudentAcademics = async (student, preFetchedConcession = undefined, options = {}) => {
   const plain = toPlainStudent(student);
   if (!plain) return plain;
 
@@ -343,10 +343,11 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
     }
   }
 
+  const skipFeesAndConcessions = options.skipFeesAndConcessions || false;
   const identifier = identifiers[0] || null;
 
   // Live Concessions Sync
-  if (identifier) {
+  if (identifier && !skipFeesAndConcessions) {
     let concessionRow = preFetchedConcession;
 
     if (concessionRow === undefined) {
@@ -458,8 +459,10 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
 /**
  * Batch-enrich students (batched SQL queries, avoids pool exhaustion).
  */
-export const enrichStudentsAcademics = async (students) => {
+export const enrichStudentsAcademics = async (students, options = {}) => {
   if (!students?.length) return [];
+
+  const skipFeesAndConcessions = options.skipFeesAndConcessions || false;
 
   const identifiers = [...new Set(
     students.flatMap((s) =>
@@ -473,18 +476,20 @@ export const enrichStudentsAcademics = async (students) => {
 
   // Batch fetch concessions in a single SQL query
   const concessionsMap = new Map();
-  try {
-    const concessionsResult = await fetchConcessionsForStudents(identifiers);
-    if (concessionsResult.success && concessionsResult.data) {
-      concessionsResult.data.forEach(c => {
-        const keyPin = normalizeKey(c.pin_no);
-        const keyAdm = normalizeKey(c.admission_number);
-        if (keyPin) concessionsMap.set(keyPin, c);
-        if (keyAdm) concessionsMap.set(keyAdm, c);
-      });
+  if (!skipFeesAndConcessions) {
+    try {
+      const concessionsResult = await fetchConcessionsForStudents(identifiers);
+      if (concessionsResult.success && concessionsResult.data) {
+        concessionsResult.data.forEach(c => {
+          const keyPin = normalizeKey(c.pin_no);
+          const keyAdm = normalizeKey(c.admission_number);
+          if (keyPin) concessionsMap.set(keyPin, c);
+          if (keyAdm) concessionsMap.set(keyAdm, c);
+        });
+      }
+    } catch (err) {
+      console.error('❌ Error batch fetching concessions during enrichment:', err);
     }
-  } catch (err) {
-    console.error('❌ Error batch fetching concessions during enrichment:', err);
   }
 
   return Promise.all(
@@ -494,7 +499,7 @@ export const enrichStudentsAcademics = async (students) => {
       const preFetched = (rollKey && concessionsMap.get(rollKey))
         || (admKey && concessionsMap.get(admKey))
         || null;
-      return enrichStudentAcademics(s, preFetched);
+      return enrichStudentAcademics(s, preFetched, options);
     })
   );
 };

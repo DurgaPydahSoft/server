@@ -382,4 +382,200 @@ export const updateProfilePhotos = async (req, res) => {
       message: 'Error updating profile photos'
     });
   }
+};
+const normalizeCourseName = (courseName) => {
+  if (!courseName) return '';
+  return courseName.trim().toUpperCase().replace(/\s+/g, ' ');
+};
+
+const getPrincipalAllowedCourses = async (principal) => {
+  let allowedCourses = [];
+  if (principal.assignedCollegeIds && principal.assignedCollegeIds.length > 0) {
+    try {
+      const { fetchCoursesFromSQL } = await import('../utils/sqlService.js');
+      const sqlCoursesResult = await fetchCoursesFromSQL();
+      if (sqlCoursesResult.success) {
+        const matchingCourses = sqlCoursesResult.data.filter(course => {
+          const collegeMatch = course.college_id && principal.assignedCollegeIds.includes(course.college_id);
+          const levelMatch = (!principal.assignedLevels || principal.assignedLevels.length === 0) || 
+                            (course.level && principal.assignedLevels.map(l => l.toLowerCase()).includes(course.level.toLowerCase()));
+          return collegeMatch && levelMatch;
+        });
+        allowedCourses = matchingCourses.map(c => normalizeCourseName(c.name));
+      }
+    } catch (err) {
+      console.error('🎓 Error fetching SQL courses for principal:', err);
+    }
+  }
+  if (allowedCourses.length === 0) {
+    if (principal.assignedCourses && principal.assignedCourses.length > 0) {
+      allowedCourses = principal.assignedCourses.map(c => normalizeCourseName(c.trim()));
+    } else if (principal.course) {
+      allowedCourses = [normalizeCourseName(principal.course.trim())];
+    }
+  }
+  return allowedCourses;
+};
+
+// Generate student count report summary (nested levels: College -> Course -> Hostel -> Category -> Year)
+export const getStudentCountReport = async (req, res) => {
+  try {
+    const { academicYear, hostelStatus } = req.query;
+
+    let enrichedStudents;
+    if (academicYear) {
+      const { fetchStudentsForAcademicYear } = await import('../utils/applicationExpiryService.js');
+      const result = await fetchStudentsForAcademicYear({
+        academicYear,
+        filters: { hostelStatus },
+        page: 1,
+        limit: 1000000,
+        skipEnrichment: true
+      });
+      enrichedStudents = result.students;
+    } else {
+      const query = { role: 'student' };
+      if (hostelStatus) query.hostelStatus = hostelStatus;
+
+      enrichedStudents = await User.find(query)
+        .populate('hostel', 'name')
+        .populate('hostelCategory', 'name')
+        .select('college course hostel hostelCategory year name rollNumber branch')
+        .lean();
+    }
+
+    // Apply Principal permissions course/branch filters to ensure count alignment
+    const adminUser = req.admin;
+    if (adminUser?.role === 'principal') {
+      const allowedCourses = await getPrincipalAllowedCourses(adminUser);
+      enrichedStudents = enrichedStudents.filter(student => {
+        const normCourse = normalizeCourseName(student.course);
+        if (!allowedCourses.includes(normCourse)) return false;
+
+        if (adminUser.assignedCourses && adminUser.assignedCourses.length > 1) {
+          return true;
+        }
+        if (adminUser.branch) {
+          const principalBranch = adminUser.branch.trim().toLowerCase();
+          const studentBranch = (student.branch || '').trim().toLowerCase();
+          return studentBranch === principalBranch;
+        }
+        return true;
+      });
+    }
+
+    const overallCount = enrichedStudents.length;
+
+    // Grouping structure
+    const collegesMap = {};
+
+    enrichedStudents.forEach(student => {
+      const collegeName = student.college?.name || 'Unassigned College';
+      const courseName = student.course || 'Unassigned Course';
+      const hostelName = student.hostel?.name || 'Unassigned Hostel';
+      const categoryName = student.hostelCategory?.name || 'Unassigned Category';
+      const yearVal = student.year ? `${student.year} Year` : 'Unassigned Year';
+
+      // 1. College level
+      if (!collegesMap[collegeName]) {
+        collegesMap[collegeName] = {
+          name: collegeName,
+          count: 0,
+          courses: {}
+        };
+      }
+      collegesMap[collegeName].count++;
+
+      // 2. Course level
+      const college = collegesMap[collegeName];
+      if (!college.courses[courseName]) {
+        college.courses[courseName] = {
+          name: courseName,
+          count: 0,
+          hostels: {}
+        };
+      }
+      college.courses[courseName].count++;
+
+      // 3. Hostel level
+      const course = college.courses[courseName];
+      if (!course.hostels[hostelName]) {
+        course.hostels[hostelName] = {
+          name: hostelName,
+          count: 0,
+          categories: {}
+        };
+      }
+      course.hostels[hostelName].count++;
+
+      // 4. Category level
+      const hostel = course.hostels[hostelName];
+      if (!hostel.categories[categoryName]) {
+        hostel.categories[categoryName] = {
+          name: categoryName,
+          count: 0,
+          years: {}
+        };
+      }
+      hostel.categories[categoryName].count++;
+
+      // 5. Year level
+      const category = hostel.categories[categoryName];
+      if (!category.years[yearVal]) {
+        category.years[yearVal] = 0;
+      }
+      category.years[yearVal]++;
+    });
+
+    // Convert nested maps into sorted arrays for easier frontend consumption
+    const result = Object.values(collegesMap).map(coll => {
+      const coursesArr = Object.values(coll.courses).map(crs => {
+        const hostelsArr = Object.values(crs.hostels).map(hst => {
+          const categoriesArr = Object.values(hst.categories).map(cat => {
+            const yearsArr = Object.entries(cat.years).map(([yr, cnt]) => ({
+              year: yr,
+              count: cnt
+            })).sort((a, b) => a.year.localeCompare(b.year));
+
+            return {
+              name: cat.name,
+              count: cat.count,
+              years: yearsArr
+            };
+          }).sort((a, b) => a.name.localeCompare(b.name));
+
+          return {
+            name: hst.name,
+            count: hst.count,
+            categories: categoriesArr
+          };
+        }).sort((a, b) => a.name.localeCompare(b.name));
+
+        return {
+          name: crs.name,
+          count: crs.count,
+          hostels: hostelsArr
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+
+      return {
+        name: coll.name,
+        count: coll.count,
+        courses: coursesArr
+      };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+
+    res.json({
+      success: true,
+      overallCount,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error generating student count report:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generating report',
+      error: error.message
+    });
+  }
 }; 

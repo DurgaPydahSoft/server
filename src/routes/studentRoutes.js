@@ -9,7 +9,8 @@ import {
   deleteStudent,
   updateProfile,
   getProfile,
-  updateProfilePhotos
+  updateProfilePhotos,
+  getStudentCountReport
 } from '../controllers/studentController.js';
 import { renewBatches } from '../controllers/adminController.js';
 
@@ -37,6 +38,8 @@ router.post('/upload', adminAuth, upload.single('file'), uploadStudents);
 router.post('/add', adminAuth, addStudent);
 // List all
 router.get('/', adminAuth, listStudents);
+// Student count report
+router.get('/reports/count-summary', adminAuth, getStudentCountReport);
 // Renew Batches
 router.post('/renew-batch', adminAuth, renewBatches);
 // Edit

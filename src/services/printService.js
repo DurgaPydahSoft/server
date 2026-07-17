@@ -1107,8 +1107,10 @@ export const generateTransportAdmit = async (studentId) => {
 /**
  * LIVE OCCUPANCY REPORT GENERATOR (HTML output)
  */
-export const generateLiveOccupancyReport = async (passedStudents, filters, isLiveMode) => {
+export const generateLiveOccupancyReport = async (passedStudents, filters, isLiveMode, printOptions = {}) => {
   let students = passedStudents;
+  const includeSummary = printOptions.includeSummary !== undefined ? printOptions.includeSummary : true;
+  const includeDetails = printOptions.includeDetails !== undefined ? printOptions.includeDetails : true;
   
   // If no students passed, fetch from DB
   if (!students || !Array.isArray(students) || students.length === 0) {
@@ -1140,10 +1142,16 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
   const hostelSummaries = {};
   let grandTotal = 0;
 
+  // Colleges map for Pivot Matrix Table
+  const collegesMap = {};
+
   students.forEach(student => {
     const hostelName = student.hostel?.name || 'Unassigned Hostel';
     const categoryName = student.hostelCategory?.name || student.category || 'Unassigned Category';
     const roomNo = student.room?.roomNumber || student.roomNumber || 'Unassigned Room';
+    const collegeName = student.college?.name || 'Unassigned College';
+    const courseName = student.course || 'Unassigned Course';
+    const yearVal = student.year ? `${student.year} Year` : 'Unassigned Year';
 
     // Detail grouping
     if (!grouped[hostelName]) grouped[hostelName] = {};
@@ -1165,6 +1173,124 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       hostelSummaries[hostelName].categories[categoryName] = 0;
     }
     hostelSummaries[hostelName].categories[categoryName]++;
+
+    // Pivot Matrix Table grouping
+    if (!collegesMap[collegeName]) {
+      collegesMap[collegeName] = { name: collegeName, count: 0, courses: {} };
+    }
+    collegesMap[collegeName].count++;
+
+    if (!collegesMap[collegeName].courses[courseName]) {
+      collegesMap[collegeName].courses[courseName] = { name: courseName, count: 0, hostels: {} };
+    }
+    collegesMap[collegeName].courses[courseName].count++;
+
+    const courseObj = collegesMap[collegeName].courses[courseName];
+    if (!courseObj.hostels[hostelName]) {
+      courseObj.hostels[hostelName] = { name: hostelName, count: 0, categories: {} };
+    }
+    courseObj.hostels[hostelName].count++;
+
+    const hostelObj = courseObj.hostels[hostelName];
+    if (!hostelObj.categories[categoryName]) {
+      hostelObj.categories[categoryName] = { name: categoryName, count: 0, years: {} };
+    }
+    hostelObj.categories[categoryName].count++;
+
+    const categoryObj = hostelObj.categories[categoryName];
+    if (!categoryObj.years[yearVal]) {
+      categoryObj.years[yearVal] = 0;
+    }
+    categoryObj.years[yearVal]++;
+  });
+
+  // Pivot Matrix helpers
+  const getCollegeColumnCount = (college, hostelName, categoryName) => {
+    let count = 0;
+    Object.values(college.courses).forEach(course => {
+      if (course.hostels[hostelName]) {
+        const hostelObj = course.hostels[hostelName];
+        if (hostelObj.categories[categoryName]) {
+          count += hostelObj.categories[categoryName].count;
+        }
+      }
+    });
+    return count;
+  };
+
+  const getCourseColumnCount = (course, hostelName, categoryName) => {
+    let count = 0;
+    if (course.hostels[hostelName]) {
+      const hostelObj = course.hostels[hostelName];
+      if (hostelObj.categories[categoryName]) {
+        count += hostelObj.categories[categoryName].count;
+      }
+    }
+    return count;
+  };
+
+  const getYearColumnCount = (course, yearName, hostelName, categoryName) => {
+    if (course.hostels[hostelName]) {
+      const hostelObj = course.hostels[hostelName];
+      if (hostelObj.categories[categoryName]) {
+        return hostelObj.categories[categoryName].years[yearName] || 0;
+      }
+    }
+    return 0;
+  };
+
+  const getYearTotalCount = (course, yearName) => {
+    let total = 0;
+    Object.values(course.hostels).forEach(hostelObj => {
+      Object.values(hostelObj.categories).forEach(catObj => {
+        total += (catObj.years[yearName] || 0);
+      });
+    });
+    return total;
+  };
+
+  const getCourseYears = (course) => {
+    const years = new Set();
+    Object.values(course.hostels).forEach(hostelObj => {
+      Object.values(hostelObj.categories).forEach(catObj => {
+        Object.keys(catObj.years).forEach(yr => years.add(yr));
+      });
+    });
+    return Array.from(years).sort();
+  };
+
+  // Derive unique Hostel + Category combinations for Pivot Matrix columns
+  const groupsForPivot = {};
+  students.forEach(student => {
+    const hostelName = student.hostel?.name || 'Unassigned Hostel';
+    const categoryName = student.hostelCategory?.name || student.category || 'Unassigned Category';
+    if (!groupsForPivot[hostelName]) {
+      groupsForPivot[hostelName] = new Set();
+    }
+    groupsForPivot[hostelName].add(categoryName);
+  });
+
+  const hostelGroups = [];
+  Object.keys(groupsForPivot).sort().forEach(hostelName => {
+    const categories = Array.from(groupsForPivot[hostelName]).sort();
+    hostelGroups.push({
+      hostelName,
+      categories: categories.map(catName => ({
+        categoryName: catName,
+        key: `${hostelName} - ${catName}`
+      }))
+    });
+  });
+
+  const columns = [];
+  hostelGroups.forEach(group => {
+    group.categories.forEach(cat => {
+      columns.push({
+        hostelName: group.hostelName,
+        categoryName: cat.categoryName,
+        key: cat.key
+      });
+    });
   });
 
   const sortedHostels = Object.keys(grouped).sort();
@@ -1206,28 +1332,102 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     });
   });
 
-  // Build HTML for details
-  let detailContent = '';
+  // Build HTML for details and summaries
+  let hostelSummariesHtml = '';
+  let roomDetailsHtml = '';
+
   sortedHostels.forEach((hostelName) => {
     const categories = grouped[hostelName];
     const sortedCategories = Object.keys(categories).sort();
 
-    detailContent += `
+    // Group counts by Course and Category for this hostel
+    const hostelStudents = students.filter(s => (s.hostel?.name || 'Unassigned Hostel') === hostelName);
+    const hostelCourses = Array.from(new Set(hostelStudents.map(s => s.course || 'Unassigned Course'))).sort();
+    const hostelCats = Array.from(new Set(hostelStudents.map(s => s.hostelCategory?.name || s.category || 'Unassigned Category'))).sort();
+
+    const matrix = {};
+    const courseTotals = {};
+    const catTotals = {};
+    let hostelGrandTotal = 0;
+
+    hostelStudents.forEach(s => {
+      const cName = s.course || 'Unassigned Course';
+      const catName = s.hostelCategory?.name || s.category || 'Unassigned Category';
+
+      if (!matrix[cName]) matrix[cName] = {};
+      if (!matrix[cName][catName]) matrix[cName][catName] = 0;
+      matrix[cName][catName]++;
+
+      courseTotals[cName] = (courseTotals[cName] || 0) + 1;
+      catTotals[catName] = (catTotals[catName] || 0) + 1;
+      hostelGrandTotal++;
+    });
+
+    let hostelMatrixHtml = `
+      <div style="margin-bottom: 25px; page-break-inside: avoid;">
+        <table class="summary-table" style="width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 11px;">
+          <thead>
+            <tr style="background-color: #f1f5f9;">
+              <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: left; background-color: #e2e8f0; color: #0f172a;">Course</th>
+              ${hostelCats.map(cat => `
+                <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: center; background-color: #e2e8f0; color: #0f172a;">${cat}</th>
+              `).join('')}
+              <th style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold; text-align: right; width: 80px; background-color: #e2e8f0; color: #0f172a;">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    hostelCourses.forEach(course => {
+      hostelMatrixHtml += `
+        <tr>
+          <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: 500;">${course}</td>
+          ${hostelCats.map(cat => {
+            const count = matrix[course]?.[cat] || 0;
+            return `<td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; ${count === 0 ? 'color: #cbd5e1;' : 'font-weight: bold;'}">${count === 0 ? '-' : count}</td>`;
+          }).join('')}
+          <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; font-weight: bold; background-color: #f8fafc;">${courseTotals[course] || 0}</td>
+        </tr>
+      `;
+    });
+
+    hostelMatrixHtml += `
+            <tr style="background-color: #eff6ff; font-weight: bold; color: #0f172a; border-top: 2px solid #cbd5e1;">
+              <td style="border: 1px solid #cbd5e1; padding: 6px 8px; font-weight: bold;">Total</td>
+              ${hostelCats.map(cat => `
+                <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center; font-weight: bold;">${catTotals[cat] || 0}</td>
+              `).join('')}
+              <td style="border: 1px solid #cbd5e1; padding: 6px 8px; text-align: right; background-color: #dbeafe; font-weight: bold; color: #1d4ed8;">${hostelGrandTotal}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    hostelSummariesHtml += `
+      <div class="hostel-section" style="page-break-inside: avoid; margin-bottom: 30px;">
+        <div class="hostel-title">${hostelName} Abstract</div>
+        ${hostelMatrixHtml}
+      </div>
+    `;
+
+    let hostelRoomDetails = `
       <div class="hostel-section">
-        <div class="hostel-title">${hostelName}</div>`;
+        <div class="hostel-title">${hostelName} - Detailed Room-Wise Active List</div>
+    `;
 
     sortedCategories.forEach((categoryName) => {
       const rooms = categories[categoryName];
       const sortedRooms = Object.keys(rooms).sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
 
-      detailContent += `
+      hostelRoomDetails += `
         <div class="category-section">
           <div class="category-title">Category: ${categoryName}</div>`;
 
       sortedRooms.forEach((roomNo) => {
         const roomStudentsList = rooms[roomNo];
         
-        detailContent += `
+        hostelRoomDetails += `
           <div class="room-section">
             <div class="room-title">Room ${roomNo} (${roomStudentsList.length} ${isLiveMode ? 'Residents' : 'Students'})</div>
             <table class="detail-table">
@@ -1243,7 +1443,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
 
         roomStudentsList.forEach((student, index) => {
           const courseBranch = `${student.course || ''} - ${student.branch || ''}`;
-          detailContent += `
+          hostelRoomDetails += `
             <tr>
               <td>${index + 1}</td>
               <td><strong>${student.rollNumber || 'N/A'}</strong></td>
@@ -1252,17 +1452,101 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
             </tr>`;
         });
 
-        detailContent += `
+        hostelRoomDetails += `
               </tbody>
             </table>
           </div>`;
       });
 
-      detailContent += `</div>`; // category-section
+      hostelRoomDetails += `</div>`; // category-section
     });
 
-    detailContent += `</div>`; // hostel-section
+    hostelRoomDetails += `</div>`; // hostel-section
+    roomDetailsHtml += hostelRoomDetails;
   });
+
+  // Build Pivot Matrix Table HTML
+  let pivotMatrixHtml = `
+    <table class="pivot-table">
+      <thead>
+        <tr class="header-row-1">
+          <th rowspan="2">Institution / Course / Year</th>
+          ${hostelGroups.map(group => `
+            <th colspan="${group.categories.length}" class="text-center" style="border-bottom: 1px solid #cbd5e1;">
+              ${group.hostelName}
+            </th>
+          `).join('')}
+          <th rowspan="2" class="text-right" style="width: 100px;">Total</th>
+        </tr>
+        <tr class="header-row-2">
+          ${hostelGroups.map(group => 
+            group.categories.map(cat => `
+              <th class="text-center">
+                ${cat.categoryName}
+              </th>
+            `).join('')
+          ).join('')}
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  const normalizeCourseName = (courseName) => {
+    if (!courseName) return '';
+    return courseName.trim().toUpperCase().replace(/\s+/g, ' ');
+  };
+
+  Object.values(collegesMap).sort((a, b) => a.name.localeCompare(b.name)).forEach(college => {
+    pivotMatrixHtml += `
+      <tr class="level-0">
+        <td>${college.name}</td>
+        ${columns.map(col => {
+          const val = getCollegeColumnCount(college, col.hostelName, col.categoryName);
+          return `<td class="text-center ${val === 0 ? 'cell-zero' : 'text-bold'}">${val === 0 ? '-' : val}</td>`;
+        }).join('')}
+        <td class="text-right text-bold">${college.count}</td>
+      </tr>
+    `;
+
+    Object.values(college.courses).sort((a, b) => a.name.localeCompare(b.name)).forEach(course => {
+      pivotMatrixHtml += `
+        <tr class="level-1">
+          <td style="padding-left: 15px;"><span class="hierarchy-arrow">↳</span> ${course.name}</td>
+          ${columns.map(col => {
+            const val = getCourseColumnCount(course, col.hostelName, col.categoryName);
+            return `<td class="text-center ${val === 0 ? 'cell-zero' : 'text-bold'}">${val === 0 ? '-' : val}</td>`;
+          }).join('')}
+          <td class="text-right text-bold">${course.count}</td>
+        </tr>
+      `;
+    });
+  });
+
+  // Calculate column totals across all colleges
+  let totalRowHtml = `
+      <tr style="background-color: #eff6ff; font-weight: bold; border-top: 2.5px double #1e3a8a;">
+        <td style="font-weight: bold; color: #1e3a8a;">Total</td>
+  `;
+  
+  let grandSum = 0;
+  columns.forEach(col => {
+    let colSum = 0;
+    Object.values(collegesMap).forEach(college => {
+      colSum += getCollegeColumnCount(college, col.hostelName, col.categoryName);
+    });
+    grandSum += colSum;
+    totalRowHtml += `<td class="text-center text-bold" style="color: #1e3a8a;">${colSum === 0 ? '-' : colSum}</td>`;
+  });
+
+  totalRowHtml += `
+        <td class="text-right text-bold" style="background-color: #dbeafe; color: #1d4ed8;">${grandSum}</td>
+      </tr>
+  `;
+
+  pivotMatrixHtml += totalRowHtml + `
+      </tbody>
+    </table>
+  `;
 
   // Construct complete HTML page
   return `<!DOCTYPE html>
@@ -1340,21 +1624,64 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       font-size: 16px;
       margin-left: 5px;
     }
-    .summary-table {
+    .pivot-table {
       width: 100%;
       border-collapse: collapse;
       margin-bottom: 25px;
+      font-size: 10px;
     }
-    .summary-table th, .summary-table td {
+    .pivot-table th, .pivot-table td {
       border: 1px solid #cbd5e1;
-      padding: 8px 10px;
-      font-size: 12px;
+      padding: 6px 8px;
       text-align: left;
     }
-    .summary-table th {
-      background-color: #eff6ff;
-      color: #1d4ed8;
-      font-weight: 600;
+    .pivot-table th {
+      background-color: #e2e8f0;
+      color: #0f172a;
+      font-weight: bold;
+      font-size: 11px;
+      border: 1px solid #cbd5e1;
+    }
+    .pivot-table .header-row-2 th {
+      background-color: #f1f5f9;
+      color: #1e293b;
+      font-size: 10px;
+      padding: 6px 8px;
+      font-weight: bold;
+      border: 1px solid #cbd5e1;
+    }
+    .pivot-table .text-center {
+      text-align: center;
+    }
+    .pivot-table .text-right {
+      text-align: right;
+    }
+    .pivot-table .text-bold {
+      font-weight: bold;
+    }
+    .pivot-table .cell-zero {
+      color: #cbd5e1;
+    }
+    .pivot-table .level-0 {
+      background-color: #f1f5f9;
+      font-weight: bold;
+      font-size: 11px;
+      color: #0f172a;
+    }
+    .pivot-table .level-1 {
+      background-color: #f8fafc;
+      font-weight: bold;
+      color: #1e293b;
+    }
+    .pivot-table .level-2 {
+      font-weight: 400;
+      color: #475569;
+    }
+    .hierarchy-arrow {
+      color: #94a3b8;
+      font-weight: normal;
+      margin-right: 5px;
+      font-size: 12px;
     }
     .hostel-section {
       margin-bottom: 30px;
@@ -1373,11 +1700,12 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     .category-title {
       font-size: 13px;
       font-weight: bold;
-      color: #334155;
-      background-color: #f1f5f9;
-      padding: 5px 10px;
+      color: #1e3a8a;
+      background-color: #eff6ff;
+      padding: 6px 12px;
       border-radius: 4px;
       margin-bottom: 10px;
+      border-left: 3px solid #3b82f6;
     }
     .room-section {
       margin-bottom: 15px;
@@ -1385,7 +1713,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
     }
     .room-title {
       font-size: 12px;
-      font-weight: 600;
+      font-weight: bold;
       color: #334155;
       margin-bottom: 5px;
     }
@@ -1401,9 +1729,9 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
       text-align: left;
     }
     .detail-table th {
-      background-color: #f8fafc;
-      color: #475569;
-      font-weight: 600;
+      background-color: #e2e8f0;
+      color: #0f172a;
+      font-weight: bold;
     }
     .detail-table tr:nth-child(even) {
       background-color: #f8fafc;
@@ -1411,6 +1739,7 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
   </style>
 </head>
 <body>
+  ${includeSummary ? `
   <!-- PAGE 1: ABSTRACT & SUMMARY -->
   <div class="abstract-page page-break">
     <div class="header-container">
@@ -1429,34 +1758,31 @@ export const generateLiveOccupancyReport = async (passedStudents, filters, isLiv
         ${sortedHostels.map(h => `<span class="summary-item">${h}: <strong>${hostelSummaries[h].total}</strong></span>`).join('')}
       </div>
 
-      <div class="abstract-title">Breakdown by Category</div>
-      <table class="summary-table">
-        <thead>
-          <tr>
-            <th style="width: 40%">Hostel</th>
-            <th style="width: 40%">Category</th>
-            <th style="width: 20%; text-align: right;">${isLiveMode ? 'Residents Count' : 'Students Count'}</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${breakdownRows}
-          <tr style="background-color: #ebf8ff; font-weight: bold;">
-            <td colspan="2">${isLiveMode ? 'Grand Total Active Residents' : 'Grand Total Registered Students'}</td>
-            <td style="text-align: right;">${grandTotal}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="abstract-title">Breakdown Matrix</div>
+      ${pivotMatrixHtml}
     </div>
   </div>
 
+  <!-- PAGE 1.5: HOSTEL ABSTRACT SUMMARY MATRICES -->
+  <div class="abstract-page ${includeDetails ? 'page-break' : ''}">
+    <div class="header-container">
+      <h1>${reportTitle}</h1>
+      <div class="report-subtitle">Hostel-wise Abstract Matrix Summaries</div>
+    </div>
+    ${hostelSummariesHtml}
+  </div>
+  ` : ''}
+
+  ${includeDetails ? `
   <!-- PAGE 2+: DETAIL LISTS -->
   <div class="detail-pages">
     <div class="header-container">
       <h1>${reportTitle}</h1>
       <div class="report-subtitle">${detailSubtitle}</div>
     </div>
-    ${detailContent}
+    ${roomDetailsHtml}
   </div>
+  ` : ''}
 </body>
 </html>`;
 };

@@ -503,7 +503,9 @@ export const fetchStudentsForAcademicYear = async ({
   filters = {},
   page = 1,
   limit = 10,
-  academicFilters = {}
+  academicFilters = {},
+  skipFeesAndConcessions = false,
+  skipEnrichment = false
 }) => {
   const { gender, category, roomNumber, batch, search, hostelStatus, hostel } = filters;
   const hasAcademicFilter = !!(
@@ -642,7 +644,9 @@ export const fetchStudentsForAcademicYear = async ({
   }
 
   if (hasAcademicFilter) {
-    students = await enrichStudentsAcademics(students);
+    if (!skipEnrichment) {
+      students = await enrichStudentsAcademics(students, { skipFeesAndConcessions });
+    }
     students = students.filter((s) => matchesAcademicFilters(s, academicFilters));
   }
 
@@ -652,8 +656,8 @@ export const fetchStudentsForAcademicYear = async ({
   
   let paginatedStudents = students.slice((pageNum - 1) * limitNum, pageNum * limitNum);
 
-  if (!hasAcademicFilter) {
-    paginatedStudents = await enrichStudentsAcademics(paginatedStudents);
+  if (!hasAcademicFilter && !skipEnrichment) {
+    paginatedStudents = await enrichStudentsAcademics(paginatedStudents, { skipFeesAndConcessions });
   }
 
   const getYearDifference = (ay1, ay2) => {

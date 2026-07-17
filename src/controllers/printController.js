@@ -86,8 +86,10 @@ export const handlePrintRequest = async (req, res, next) => {
         const students = data?.students || [];
         const filters = data?.filters || {};
         const isLiveMode = data?.isLiveMode !== undefined ? data?.isLiveMode : true;
+        const includeSummary = data?.includeSummary !== undefined ? data?.includeSummary : true;
+        const includeDetails = data?.includeDetails !== undefined ? data?.includeDetails : true;
         
-        const htmlString = await generateLiveOccupancyReport(students, filters, isLiveMode);
+        const htmlString = await generateLiveOccupancyReport(students, filters, isLiveMode, { includeSummary, includeDetails });
         documentBuffer = Buffer.from(htmlString, 'utf8');
         break;
       }

@@ -1566,12 +1566,14 @@ export const bulkAddStudents = async (req, res, next) => {
 // Get all students with pagination and filters
 export const getStudents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel } = req.query;
+    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel, skipFeesAndConcessions } = req.query;
     const academicFilters = { course, branch, year: year ? parseInt(year, 10) : undefined };
     const hasAcademicFilter = !!(course || branch || year);
 
     let students;
     let count;
+
+    const isSkipFees = skipFeesAndConcessions === 'true';
 
     if (academicYear) {
       const result = await fetchStudentsForAcademicYear({
@@ -1579,7 +1581,8 @@ export const getStudents = async (req, res, next) => {
         filters: { gender, category, roomNumber, batch, search, hostelStatus, hostel },
         page,
         limit,
-        academicFilters
+        academicFilters,
+        skipFeesAndConcessions: isSkipFees
       });
       students = result.students;
       count = result.count;
@@ -1613,7 +1616,7 @@ export const getStudents = async (req, res, next) => {
           .populate(populateOpts)
           .sort({ createdAt: -1 })
           .lean();
-        let enriched = await enrichStudentsAcademics(allDocs);
+        let enriched = await enrichStudentsAcademics(allDocs, { skipFeesAndConcessions: isSkipFees });
         enriched = enriched.filter(s => matchesAcademicFilters(s, academicFilters));
         count = enriched.length;
         const pageNum = parseInt(page, 10);
@@ -1627,7 +1630,7 @@ export const getStudents = async (req, res, next) => {
           .limit(limit * 1)
           .skip((page - 1) * limit)
           .lean();
-        students = await enrichStudentsAcademics(students);
+        students = await enrichStudentsAcademics(students, { skipFeesAndConcessions: isSkipFees });
         count = await User.countDocuments(query);
       }
     }
