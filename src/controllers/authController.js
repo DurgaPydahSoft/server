@@ -48,23 +48,58 @@ export const studentLogin = async (req, res, next) => {
 
     console.log(`Student login attempt - Identifier: ${identifier}`);
 
-    // Find student
-    const student = await User.findOne({ 
+    // Find all student records matching this identifier, sorted by latest first
+    let students = await User.find({ 
       $or: [
         { rollNumber: identifier },
         { admissionNumber: identifier }
       ],
       role: 'student'
-    });
+    }).sort({ createdAt: -1 });
     
-    if (student) {
-      console.log(`Student found: ${student.rollNumber} (Admission: ${student.admissionNumber})`);
+    // Expand search to catch matching records across different identifiers (e.g. rollNumber vs admissionNumber)
+    if (students && students.length > 0) {
+      const rollNumbers = students.map(s => s.rollNumber).filter(Boolean);
+      const admissionNumbers = students.map(s => s.admissionNumber).filter(Boolean);
+      students = await User.find({
+        $or: [
+          { rollNumber: { $in: [...rollNumbers, ...admissionNumbers] } },
+          { admissionNumber: { $in: [...rollNumbers, ...admissionNumbers] } }
+        ],
+        role: 'student'
+      }).sort({ createdAt: -1 });
+      console.log(`Student records found: ${students.length} record(s). Latest: ${students[0].rollNumber} (Admission: ${students[0].admissionNumber})`);
     } else {
       console.log('Student not found with identifier:', identifier);
     }
     
-    if (!student) {
+    if (!students || students.length === 0) {
       throw createError(401, 'Invalid roll number or password');
+    }
+
+    const student = students[0];
+
+    // Proactively sync password from older custom password record if latest record has default password
+    if (student && !student.isPasswordChanged && students.length > 1) {
+      const olderWithCustomPassword = students.slice(1).find(s => s.isPasswordChanged && s.password);
+      if (olderWithCustomPassword) {
+        console.log(`🔄 Proactively syncing custom password from older record ${olderWithCustomPassword._id} to latest record ${student._id}`);
+        try {
+          await User.updateOne(
+            { _id: student._id },
+            { 
+              $set: { 
+                password: olderWithCustomPassword.password,
+                isPasswordChanged: true
+              } 
+            }
+          );
+          student.password = olderWithCustomPassword.password;
+          student.isPasswordChanged = true;
+        } catch (syncError) {
+          console.error('Error in proactive password sync:', syncError);
+        }
+      }
     }
 
     // Check hostel status - prevent inactive students from logging in
@@ -73,9 +108,57 @@ export const studentLogin = async (req, res, next) => {
     }
 
     // Verify password with MongoDB first (skip if no hostel password stored)
-    let isMatch = student.password
-      ? await student.comparePassword(password)
-      : false;
+    let isMatch = false;
+    let passwordMatchedFromOlder = false;
+    let matchedOlderPasswordHash = '';
+    let matchedOlderIsPasswordChanged = false;
+
+    if (student.password) {
+      isMatch = await student.comparePassword(password);
+      if (isMatch) {
+        console.log('✅ Password verified against latest MongoDB record');
+      }
+    }
+
+    // If password doesn't match the latest record, check older records
+    if (!isMatch && students.length > 1) {
+      console.log('Checking password against older MongoDB records...');
+      for (let i = 1; i < students.length; i++) {
+        const olderStudent = students[i];
+        if (olderStudent.password) {
+          const matchOlder = await olderStudent.comparePassword(password);
+          if (matchOlder) {
+            isMatch = true;
+            passwordMatchedFromOlder = true;
+            matchedOlderPasswordHash = olderStudent.password;
+            matchedOlderIsPasswordChanged = olderStudent.isPasswordChanged;
+            console.log(`✅ Password verified against older MongoDB record (index ${i})`);
+            break;
+          }
+        }
+      }
+
+      // If matched from older record, copy it to the latest record for subsequent logins
+      if (passwordMatchedFromOlder) {
+        try {
+          await User.updateOne(
+            { _id: student._id },
+            { 
+              $set: { 
+                password: matchedOlderPasswordHash,
+                isPasswordChanged: matchedOlderIsPasswordChanged
+              } 
+            }
+          );
+          // Update the in-memory object properties so they are correct in the response
+          student.password = matchedOlderPasswordHash;
+          student.isPasswordChanged = matchedOlderIsPasswordChanged;
+          console.log(`✅ Synced password from older record to latest record (${student._id})`);
+        } catch (syncError) {
+          console.error('Error syncing password to latest record:', syncError);
+        }
+      }
+    }
     
     // If MongoDB password doesn't match or isn't set, check against SQL database
     if (!isMatch) {
@@ -109,8 +192,6 @@ export const studentLogin = async (req, res, next) => {
         console.error('Error verifying SQL password:', sqlError);
         // Don't throw here, let the final check handle the failure
       }
-    } else {
-       console.log('✅ Password verified against MongoDB');
     }
 
     if (!isMatch) {
@@ -197,7 +278,7 @@ export const verifyRollNumber = async (req, res) => {
         { admissionNumber: identifier }
       ],
       role: 'student'
-    });
+    }).sort({ createdAt: -1 });
     
     if (!student) {
       return res.status(404).json({ message: 'Roll number not found' });
@@ -236,7 +317,7 @@ export const completeRegistration = async (req, res) => {
         { admissionNumber: identifier }
       ],
       role: 'student'
-    });
+    }).sort({ createdAt: -1 });
     
     if (!student) {
       return res.status(404).json({ message: 'Roll number not found' });
