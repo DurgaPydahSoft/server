@@ -126,22 +126,6 @@ export const addStaffGuest = async (req, res, next) => {
       }
     }
 
-    // Check for duplicates - check phone number and name combination
-    const existingStaffGuest = await StaffGuest.findOne({ 
-      $or: [
-        { phoneNumber, isActive: true },
-        { 
-          name: name.trim(),
-          phoneNumber,
-          type,
-          isActive: true 
-        }
-      ]
-    });
-    if (existingStaffGuest) {
-      throw createError(400, `A ${type} with the same phone number or name already exists. Please check existing records.`);
-    }
-
     // Handle room allocation for staff using new hierarchy
     let roomAllocation = null;
     let selectedRoom = null;
