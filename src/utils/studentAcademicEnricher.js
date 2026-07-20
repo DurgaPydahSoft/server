@@ -48,15 +48,15 @@ const cacheFailure = (keys) => {
 };
 
 const mapGender = (sqlGender) => {
-  if (!sqlGender) return null;
+  if (sqlGender == null || sqlGender === '') return null;
   const normalized = sqlGender.toString().trim().toUpperCase();
-  if (['M', 'MALE', 'BOY'].includes(normalized)) return 'Male';
-  if (['F', 'FEMALE', 'GIRL'].includes(normalized)) return 'Female';
+  if (['M', 'MALE', 'BOY', 'BOYS', '1'].includes(normalized)) return 'Male';
+  if (['F', 'FEMALE', 'GIRL', 'GIRLS', '2'].includes(normalized)) return 'Female';
   return null;
 };
 
 const sanitizePhoneNumber = (phone) => {
-  if (!phone) return '';
+  if (phone == null || phone === '') return '';
   // Remove all non-digit characters
   const digits = phone.toString().replace(/\D/g, '');
   // If it's a 10-digit number, return it. If it has a country code prefix (e.g. 91) and is 12 digits, return the last 10 digits.
@@ -64,6 +64,12 @@ const sanitizePhoneNumber = (phone) => {
     return digits.slice(-10);
   }
   return digits; // Return whatever digits we found if it's shorter
+};
+
+const phonesDiffer = (sqlPhone, mongoPhone) => {
+  const sql = sanitizePhoneNumber(sqlPhone);
+  if (!sql) return false; // Don't clear Mongo when SQL is empty
+  return sql !== sanitizePhoneNumber(mongoPhone);
 };
 
 /**
@@ -283,14 +289,14 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
     if (sqlAcademics.gender && sqlAcademics.gender !== plain.gender) {
       updates.gender = sqlAcademics.gender;
     }
-    if (sqlAcademics.studentPhone && sqlAcademics.studentPhone !== plain.studentPhone) {
-      updates.studentPhone = sqlAcademics.studentPhone;
+    if (phonesDiffer(sqlAcademics.studentPhone, plain.studentPhone)) {
+      updates.studentPhone = sanitizePhoneNumber(sqlAcademics.studentPhone);
     }
-    if (sqlAcademics.parentPhone && sqlAcademics.parentPhone !== plain.parentPhone) {
-      updates.parentPhone = sqlAcademics.parentPhone;
+    if (phonesDiffer(sqlAcademics.parentPhone, plain.parentPhone)) {
+      updates.parentPhone = sanitizePhoneNumber(sqlAcademics.parentPhone);
     }
-    if (sqlAcademics.motherPhone && sqlAcademics.motherPhone !== plain.motherPhone) {
-      updates.motherPhone = sqlAcademics.motherPhone;
+    if (phonesDiffer(sqlAcademics.motherPhone, plain.motherPhone)) {
+      updates.motherPhone = sanitizePhoneNumber(sqlAcademics.motherPhone);
     }
     if (sqlAcademics.dob && sqlAcademics.dob !== plain.dob) {
       updates.dob = sqlAcademics.dob;
@@ -333,7 +339,7 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
       try {
         const User = (await import('../models/User.js')).default;
         await User.updateOne({ _id: plain._id }, { $set: updates });
-        console.log(`🔄 [enrichStudentAcademics] Automatically updated MongoDB User ${plain.rollNumber} with latest SQL database details:`, updates);
+        console.log(`🔄 [enrichStudentAcademics] Automatically updated MongoDB User ${plain.rollNumber || plain.admissionNumber} with latest SQL database details:`, updates);
         
         // Keep in-memory enriched values synchronized
         Object.assign(enriched, updates);

@@ -619,6 +619,24 @@ export const createLeaveRequestOnBehalf = async (req, res, next) => {
     if (!studentDoc) {
       throw createError(404, 'Student not found');
     }
+
+    // Enforce warden hostel scope
+    const warden = req.warden || req.user;
+    const assignedHostelId = warden?.assignedHostelId?._id || warden?.assignedHostelId;
+    if (assignedHostelId) {
+      const studentHostel = studentDoc.hostel?._id || studentDoc.hostel;
+      if (!studentHostel || studentHostel.toString() !== assignedHostelId.toString()) {
+        throw createError(403, 'You can only apply leave for students in your assigned hostel');
+      }
+    } else if (warden?.hostelType) {
+      const expectedGender = warden.hostelType.toLowerCase() === 'boys' ? 'Male'
+        : warden.hostelType.toLowerCase() === 'girls' ? 'Female'
+        : null;
+      if (expectedGender && studentDoc.gender !== expectedGender) {
+        throw createError(403, 'You can only apply leave for students in your hostel type');
+      }
+    }
+
     const student = await enrichStudentAcademics(studentDoc);
 
     console.log('Student details (on behalf):', {

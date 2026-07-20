@@ -1566,9 +1566,23 @@ export const bulkAddStudents = async (req, res, next) => {
 // Get all students with pagination and filters
 export const getStudents = async (req, res, next) => {
   try {
-    const { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel, skipFeesAndConcessions } = req.query;
+    let { page = 1, limit = 10, course, branch, gender, category, roomNumber, batch, academicYear, year, search, hostelStatus, hostel, skipFeesAndConcessions } = req.query;
     const academicFilters = { course, branch, year: year ? parseInt(year, 10) : undefined };
     const hasAcademicFilter = !!(course || branch || year);
+
+    // Wardens are always scoped to their assigned hostel (legacy: hostelType → gender)
+    const warden = req.warden || (req.admin?.role === 'warden' ? req.admin : null);
+    if (warden) {
+      const assignedHostelId = warden.assignedHostelId?._id || warden.assignedHostelId;
+      if (assignedHostelId) {
+        hostel = assignedHostelId.toString();
+        gender = undefined; // Prefer hostel occupancy over gender
+      } else if (warden.hostelType) {
+        gender = warden.hostelType.toLowerCase() === 'boys' ? 'Male'
+          : warden.hostelType.toLowerCase() === 'girls' ? 'Female'
+          : gender;
+      }
+    }
 
     let students;
     let count;

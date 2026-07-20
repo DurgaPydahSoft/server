@@ -133,6 +133,7 @@ const STUDENT_SELECT_COLUMNS = `
         student_mobile,
         parent_mobile1,
         parent_mobile2,
+        preferred_mobile_number,
         caste,
         gender,
         father_name,
