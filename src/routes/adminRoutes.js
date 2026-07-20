@@ -9,6 +9,7 @@ import {
   getTempStudentsSummary,
   getStudentsCount,
   getCourseCounts,
+  getDashboardSummary,
   addElectricityBill,
   getElectricityBills,
   previewBulkUpload,
@@ -220,6 +221,9 @@ router.get('/students/count', getStudentsCount);
 
 // New route to get course counts
 router.get('/students/course-counts', getCourseCounts);
+
+// Consolidated dashboard summary route
+router.get('/dashboard-summary', getDashboardSummary);
 
 // New route for renewing student batches (disabled — use SQL registration per academic year)
 router.post('/students/renew-batch', renewBatches);

@@ -589,9 +589,14 @@ export const fetchStudentsForAcademicYear = async ({
     { path: 'hostelCategory', select: '_id name' }
   ];
 
-  const users = await User.find(userQuery)
-    .select('-password')
-    .populate(populateOpts)
+  let userQueryBuilder = User.find(userQuery);
+  if (!skipEnrichment) {
+    userQueryBuilder = userQueryBuilder.select('-password').populate(populateOpts);
+  } else {
+    userQueryBuilder = userQueryBuilder.select('name rollNumber admissionNumber course branch year gender roomNumber hostel hostelCategory hostelStatus currentAcademicYear createdAt applicationStatus');
+  }
+
+  const users = await userQueryBuilder
     .sort({ createdAt: -1 })
     .lean();
 

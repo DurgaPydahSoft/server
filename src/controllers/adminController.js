@@ -1607,8 +1607,22 @@ export const getStudents = async (req, res, next) => {
       if (category) query.category = category;
       if (roomNumber) query.roomNumber = roomNumber;
       if (batch) query.batch = batch;
-      if (hostelStatus) query.hostelStatus = hostelStatus;
       if (hostel) query.hostel = hostel;
+
+      if (hostelStatus) {
+        if (hostelStatus === 'Active') {
+          query.hostelStatus = 'Active';
+          query.applicationStatus = { $nin: ['Expired', 'Withdrawn'] };
+        } else if (hostelStatus === 'Inactive') {
+          query.$or = [
+            { hostelStatus: 'Inactive' },
+            { applicationStatus: 'Expired' },
+            { applicationStatus: 'Withdrawn' }
+          ];
+        } else {
+          query.hostelStatus = hostelStatus;
+        }
+      }
 
       if (search) {
         const searchRegex = new RegExp(search, 'i');
@@ -2252,7 +2266,9 @@ export const getStudentsCount = async (req, res, next) => {
         filters: { gender, hostelStatus },
         page: 1,
         limit: 1000000,
-        academicFilters: { course, branch }
+        academicFilters: { course, branch },
+        skipEnrichment: true,
+        skipFeesAndConcessions: true
       });
       
       const oneWeekAgo = new Date();
@@ -2284,7 +2300,6 @@ export const getStudentsCount = async (req, res, next) => {
 
     const totalStudents = await User.countDocuments(query);
     
-    // Calculate new students in the last 7 days (efficiently from MongoDB)
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
     
@@ -2299,42 +2314,7 @@ export const getStudentsCount = async (req, res, next) => {
     }
     if (gender) newStudentsQuery.gender = gender;
     
-    const newStudentsDocs = await User.find(newStudentsQuery).select('rollNumber admissionNumber createdAt').lean();
-    let newThisWeek = 0;
-    
-    if (newStudentsDocs.length > 0) {
-      const enrichedNewStudents = await enrichStudentsAcademics(newStudentsDocs);
-      
-      // Determine course filters if principal/custom role has them
-      const adminUser = req.admin || req.user;
-      let allowedCourses = [];
-      if (adminUser?.role === 'principal') {
-        if (adminUser.assignedCourses && adminUser.assignedCourses.length > 0) {
-          allowedCourses = adminUser.assignedCourses.map(c => c.trim().toUpperCase());
-        } else if (adminUser.course) {
-          const courseName = typeof adminUser.course === 'string' ? adminUser.course : adminUser.course.name;
-          if (courseName) {
-            allowedCourses = [courseName.trim().toUpperCase()];
-          }
-        }
-      } else if (adminUser?.role === 'custom' && adminUser.customRoleId) {
-        const customRole = adminUser.customRoleId;
-        if (customRole.assignedCourses && customRole.assignedCourses.length > 0) {
-          allowedCourses = customRole.assignedCourses.map(c => c.trim().toUpperCase());
-        }
-      }
-      
-      if (allowedCourses.length > 0) {
-        const allowedSet = new Set(allowedCourses);
-        const filteredNewStudents = enrichedNewStudents.filter(s => {
-          const courseName = typeof s.course === 'string' ? s.course : s.course?.name;
-          return courseName && allowedSet.has(courseName.trim().toUpperCase());
-        });
-        newThisWeek = filteredNewStudents.length;
-      } else {
-        newThisWeek = enrichedNewStudents.length;
-      }
-    }
+    const newThisWeek = await User.countDocuments(newStudentsQuery);
     
     res.status(200).json({
       success: true,
@@ -2364,7 +2344,9 @@ export const getCourseCounts = async (req, res, next) => {
         filters: { category, roomNumber, hostelStatus, hostel },
         page: 1,
         limit: 100000,
-        academicFilters: { course, branch }
+        academicFilters: { course, branch },
+        skipEnrichment: true,
+        skipFeesAndConcessions: true
       });
       enriched = result.students;
     } else {
@@ -2377,14 +2359,13 @@ export const getCourseCounts = async (req, res, next) => {
       if (hostelStatus) query.hostelStatus = hostelStatus;
       if (hostel) query.hostel = hostel;
 
-      const students = await User.find(query).select('rollNumber admissionNumber').lean();
-      enriched = await enrichStudentsAcademics(students);
+      enriched = await User.find(query).select('course').lean();
     }
 
     const countsObject = {};
 
     for (const student of enriched) {
-      const courseName = student.course || 'Unknown';
+      const courseName = (typeof student.course === 'string' ? student.course : student.course?.name) || 'Unknown';
       countsObject[courseName] = (countsObject[courseName] || 0) + 1;
     }
 
@@ -2397,6 +2378,165 @@ export const getCourseCounts = async (req, res, next) => {
     next(createError(500, 'Failed to fetch course counts.'));
   }
 };
+
+const dashboardSummaryCache = new Map();
+const DASHBOARD_CACHE_TTL = 15 * 1000;
+
+// Lightweight consolidated endpoint for Admin Dashboard Summary
+export const getDashboardSummary = async (req, res, next) => {
+  try {
+    const { academicYear } = req.query;
+    const cacheKey = academicYear ? `ay_${academicYear}` : 'live';
+    const cached = dashboardSummaryCache.get(cacheKey);
+
+    if (cached && (Date.now() - cached.ts < DASHBOARD_CACHE_TTL)) {
+      return res.status(200).json(cached.response);
+    }
+
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    let activeStudentsCount = 0;
+    let inactiveStudentsCount = 0;
+    let totalStudentsCount = 0;
+    let newThisWeekCount = 0;
+    let byCourse = [];
+
+    if (academicYear) {
+      const [activeAyResult, allAyResult] = await Promise.all([
+        fetchStudentsForAcademicYear({
+          academicYear,
+          filters: { hostelStatus: 'Active' },
+          page: 1,
+          limit: 100000,
+          skipEnrichment: true,
+          skipFeesAndConcessions: true
+        }),
+        fetchStudentsForAcademicYear({
+          academicYear,
+          page: 1,
+          limit: 100000,
+          skipEnrichment: true,
+          skipFeesAndConcessions: true
+        })
+      ]);
+
+      const activeList = activeAyResult.students || [];
+      const allList = allAyResult.students || [];
+
+      activeStudentsCount = activeAyResult.count || activeList.length;
+      totalStudentsCount = allAyResult.count || allList.length;
+      inactiveStudentsCount = Math.max(0, totalStudentsCount - activeStudentsCount);
+      newThisWeekCount = allList.filter(s => new Date(s.createdAt) >= oneWeekAgo).length;
+
+      const countsMap = {};
+      allList.forEach(s => {
+        const cName = (typeof s.course === 'string' ? s.course : s.course?.name) || 'Unassigned';
+        countsMap[cName] = (countsMap[cName] || 0) + 1;
+      });
+
+      byCourse = Object.entries(countsMap)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count);
+    } else {
+      const activeFilter = { role: 'student', hostelStatus: 'Active', applicationStatus: { $nin: ['Expired', 'Withdrawn'] } };
+      const [activeCount, totalCount, newCount, studentsByCourseRaw] = await Promise.all([
+        User.countDocuments(activeFilter),
+        User.countDocuments({ role: 'student' }),
+        User.countDocuments({ ...activeFilter, createdAt: { $gte: oneWeekAgo } }),
+        User.aggregate([
+          { $match: activeFilter },
+          { $group: { _id: '$course', count: { $sum: 1 } } }
+        ])
+      ]);
+
+      activeStudentsCount = activeCount;
+      totalStudentsCount = totalCount;
+      inactiveStudentsCount = Math.max(0, totalCount - activeCount);
+      newThisWeekCount = newCount;
+      byCourse = studentsByCourseRaw
+        .map(item => ({
+          name: item._id || 'Unassigned',
+          count: item.count
+        }))
+        .sort((a, b) => b.count - a.count);
+    }
+
+    const [
+      complaintStats,
+      leaveStats,
+      roomStatsRaw
+    ] = await Promise.all([
+      Complaint.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } }
+      ]),
+      Leave.aggregate([
+        { $group: { _id: '$status', count: { $sum: 1 } } },
+      ]),
+      Room.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalRooms: { $sum: 1 },
+            totalCapacity: { $sum: '$capacity' },
+            totalOccupied: { $sum: '$occupiedBeds' }
+          }
+        }
+      ])
+    ]);
+
+    const complaintsMap = (complaintStats || []).reduce((acc, curr) => {
+      acc[curr._id] = curr.count;
+      return acc;
+    }, {});
+    const totalComplaints = Object.values(complaintsMap).reduce((a, b) => a + b, 0);
+
+    const leavesMap = (leaveStats || []).reduce((acc, curr) => {
+      acc[curr._id] = curr.count;
+      return acc;
+    }, {});
+
+    const rStats = roomStatsRaw[0] || { totalRooms: 0, totalCapacity: 0, totalOccupied: 0 };
+    const roomOccupancyRate = rStats.totalCapacity > 0 ? Math.round((rStats.totalOccupied / rStats.totalCapacity) * 100) : 0;
+
+    const responsePayload = {
+      success: true,
+      data: {
+        students: {
+          total: totalStudentsCount,
+          active: activeStudentsCount,
+          inactive: inactiveStudentsCount,
+          newThisWeek: newThisWeekCount,
+          byCourse
+        },
+        complaints: {
+          total: totalComplaints,
+          active: (complaintsMap['Pending'] || 0) + (complaintsMap['In Progress'] || 0),
+          resolved: complaintsMap['Resolved'] || 0,
+          inProgress: complaintsMap['In Progress'] || 0
+        },
+        leaves: {
+          pending: leavesMap['Pending'] || 0,
+          approved: leavesMap['Approved'] || 0,
+          rejected: leavesMap['Rejected'] || 0
+        },
+        rooms: {
+          total: rStats.totalRooms,
+          occupied: rStats.totalOccupied,
+          available: Math.max(0, rStats.totalCapacity - rStats.totalOccupied),
+          occupancyRate: roomOccupancyRate
+        }
+      }
+    };
+
+    dashboardSummaryCache.set(cacheKey, { ts: Date.now(), response: responsePayload });
+    res.status(200).json(responsePayload);
+  } catch (error) {
+    console.error('Error fetching dashboard summary:', error);
+    next(createError(500, 'Failed to fetch dashboard summary.'));
+  }
+};
+
 
 // Add electricity bill for a room
 export const addElectricityBill = async (req, res, next) => {

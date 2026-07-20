@@ -323,9 +323,13 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
     // Compare course/branch/year/batch details
     if (sqlAcademics.course && sqlAcademics.course !== plain.course) {
       updates.course = sqlAcademics.course;
+      if (sqlAcademics.courseId) updates.courseId = sqlAcademics.courseId;
+      if (sqlAcademics.sqlCourseId) updates.sqlCourseId = sqlAcademics.sqlCourseId;
     }
     if (sqlAcademics.branch && sqlAcademics.branch !== plain.branch) {
       updates.branch = sqlAcademics.branch;
+      if (sqlAcademics.branchId) updates.branchId = sqlAcademics.branchId;
+      if (sqlAcademics.sqlBranchId) updates.sqlBranchId = sqlAcademics.sqlBranchId;
     }
     if (sqlAcademics.year && Number(sqlAcademics.year) !== Number(plain.year)) {
       updates.year = sqlAcademics.year;
@@ -467,6 +471,10 @@ export const enrichStudentAcademics = async (student, preFetchedConcession = und
  */
 export const enrichStudentsAcademics = async (students, options = {}) => {
   if (!students?.length) return [];
+
+  if (options.skipEnrichment) {
+    return students.map(toPlainStudent);
+  }
 
   const skipFeesAndConcessions = options.skipFeesAndConcessions || false;
 

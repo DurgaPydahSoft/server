@@ -142,7 +142,9 @@ export const getStudentsForAttendance = async (req, res, next) => {
         filters: { gender, category, roomNumber, hostelStatus: 'Active', hostel },
         page: 1,
         limit: 1000000,
-        academicFilters: { course, branch }
+        academicFilters: { course, branch },
+        skipFeesAndConcessions: true,
+        skipEnrichment: true
       });
       students = result.students;
 
@@ -166,7 +168,7 @@ export const getStudentsForAttendance = async (req, res, next) => {
         .sort({ name: 1 })
         .lean();
 
-      students = await enrichStudentsAcademics(students);
+      students = await enrichStudentsAcademics(students, { skipFeesAndConcessions: true, skipEnrichment: true });
       students = await filterStudentsByCourseBranch(students, course, branch);
     }
 
@@ -431,7 +433,8 @@ export const getAttendanceForDate = async (req, res, next) => {
         },
         page: 1,
         limit: 1000000,
-        academicFilters: { course, branch }
+        academicFilters: { course, branch },
+        skipFeesAndConcessions: true
       });
       students = result.students;
 
@@ -458,7 +461,7 @@ export const getAttendanceForDate = async (req, res, next) => {
         .sort({ name: 1 })
         .lean();
 
-      students = await enrichStudentsAcademics(students);
+      students = await enrichStudentsAcademics(students, { skipFeesAndConcessions: true });
       students = await filterStudentsByCourseBranch(students, course, branch);
     }
 
@@ -648,7 +651,9 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       const result = await fetchStudentsForAcademicYear({
         academicYear,
         page: 1,
-        limit: 1000000
+        limit: 1000000,
+        skipEnrichment: true,
+        skipFeesAndConcessions: true
       });
       // Filter out students who have renewed to a newer academic year
       const getStartYear = (ay) => {
@@ -1012,7 +1017,7 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
       .sort({ name: 1 })
       .lean();
 
-    students = await enrichStudentsAcademics(students);
+    students = await enrichStudentsAcademics(students, { skipFeesAndConcessions: true });
 
     console.log('🎓 Found students:', students.length);
     if (students.length > 0) {
@@ -1588,7 +1593,7 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
       .sort({ name: 1 })
       .lean();
 
-    students = await enrichStudentsAcademics(students);
+    students = await enrichStudentsAcademics(students, { skipFeesAndConcessions: true });
 
     console.log('🎓 Found students:', students.length);
 
