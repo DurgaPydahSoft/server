@@ -59,12 +59,22 @@ const adminSchema = new mongoose.Schema({
       return this.role === 'custom';
     }
   },
+  // Legacy boys/girls enum — kept for migration; prefer assignedHostelId
   hostelType: {
     type: String,
     enum: ['boys', 'girls'],
     required: function() {
-      return this.role === 'warden';
+      return this.role === 'warden' && !this.assignedHostelId;
     }
+  },
+  // Preferred: warden assigned to a real Hostel document
+  assignedHostelId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Hostel',
+    required: function() {
+      return this.role === 'warden' && !this.hostelType;
+    },
+    index: true
   },
   assignedCourses: [{
     type: String,

@@ -46,20 +46,40 @@ router.get('/validate', adminAuth, async (req, res) => {
       const Admin = (await import('../models/Admin.js')).default;
       adminData = await Admin.findById(req.admin._id).populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
     }
+
+    // Populate assigned hostel for wardens
+    if (req.admin.role === 'warden' && req.admin.assignedHostelId) {
+      const Admin = (await import('../models/Admin.js')).default;
+      adminData = await Admin.findById(req.admin._id).populate('assignedHostelId', '_id name isActive');
+    }
     
     // Prepare user response data
     const userResponse = {
       id: adminData._id,
       username: adminData.username,
+      name: adminData.name || undefined,
+      employeeId: adminData.employeeId || undefined,
       role: adminData.role,
       permissions: adminData.permissions,
       permissionAccessLevels: adminData.permissionAccessLevels,
       isActive: adminData.isActive
     };
 
-    // Include hostelType for wardens
-    if (adminData.role === 'warden' && adminData.hostelType) {
-      userResponse.hostelType = adminData.hostelType;
+    // Include hostel assignment for wardens
+    if (adminData.role === 'warden') {
+      if (adminData.hostelType) {
+        userResponse.hostelType = adminData.hostelType;
+      }
+      if (adminData.assignedHostelId) {
+        const hostelId = adminData.assignedHostelId._id || adminData.assignedHostelId;
+        userResponse.assignedHostelId = hostelId;
+        if (adminData.assignedHostelId.name) {
+          userResponse.assignedHostel = {
+            _id: hostelId,
+            name: adminData.assignedHostelId.name
+          };
+        }
+      }
     }
 
     // Include course for principals

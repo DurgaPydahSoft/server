@@ -1,4 +1,5 @@
 import Admin from '../models/Admin.js';
+import Hostel from '../models/Hostel.js';
 import jwt from 'jsonwebtoken';
 import { createError } from '../utils/error.js';
 import { sendSubAdminRegistrationEmail } from '../utils/emailService.js';
@@ -8,6 +9,30 @@ import {
   verifyHrmsPassword,
   searchHrmsEmployees as searchHrmsFromDb
 } from '../utils/hrmsService.js';
+
+/** Infer legacy hostelType from hostel name when possible */
+const inferHostelTypeFromName = (name = '') => {
+  const lower = name.toLowerCase();
+  if (lower.includes('girl')) return 'girls';
+  if (lower.includes('boy')) return 'boys';
+  return null;
+};
+
+const resolveAndAttachHostel = async (warden, assignedHostelId) => {
+  if (!assignedHostelId) {
+    throw createError(400, 'Hostel assignment is required for wardens');
+  }
+  const hostel = await Hostel.findById(assignedHostelId);
+  if (!hostel || !hostel.isActive) {
+    throw createError(400, 'Invalid or inactive hostel selected');
+  }
+  warden.assignedHostelId = hostel._id;
+  const inferred = inferHostelTypeFromName(hostel.name);
+  if (inferred) {
+    warden.hostelType = inferred;
+  }
+  return hostel;
+};
 
 const applyHrmsLinkToAdmin = async (adminInstance, hrmsData, excludeAdminId = null) => {
   const { employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = hrmsData || {};
@@ -200,11 +225,19 @@ export const createSubAdmin = async (req, res, next) => {
 // Create a new warden
 export const createWarden = async (req, res, next) => {
   try {
-    const { hostelType, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
+    const {
+      hostelType,
+      assignedHostelId,
+      employeeId,
+      hrmsUserId,
+      hrmsEmployeeRef,
+      hrmsLinkType,
+      name,
+      email
+    } = req.body;
 
-    // Validate hostel type
-    if (!hostelType || !['boys', 'girls'].includes(hostelType)) {
-      throw createError(400, 'Hostel type is required and must be either "boys" or "girls"');
+    if (!assignedHostelId && (!hostelType || !['boys', 'girls'].includes(hostelType))) {
+      throw createError(400, 'Hostel assignment is required (select a hostel)');
     }
 
     // Default warden permissions
@@ -221,10 +254,22 @@ export const createWarden = async (req, res, next) => {
     // Create new warden
     const warden = new Admin({
       role: 'warden',
-      hostelType,
+      hostelType: hostelType && ['boys', 'girls'].includes(hostelType) ? hostelType : undefined,
       permissions: wardenPermissions,
       createdBy: req.admin._id
     });
+
+    if (assignedHostelId) {
+      await resolveAndAttachHostel(warden, assignedHostelId);
+    } else if (hostelType) {
+      // Legacy: map boys/girls to a matching Hostel if present
+      const nameHint = hostelType === 'boys' ? /boy/i : /girl/i;
+      const matchedHostel = await Hostel.findOne({ name: nameHint, isActive: true });
+      if (matchedHostel) {
+        warden.assignedHostelId = matchedHostel._id;
+      }
+      warden.hostelType = hostelType;
+    }
 
     await setupNewHrmsOnlyAdmin(warden, {
       employeeId,
@@ -235,6 +280,7 @@ export const createWarden = async (req, res, next) => {
       email
     });
     const savedWarden = await warden.save();
+    await savedWarden.populate('assignedHostelId', '_id name isActive');
     
     // Remove password from response
     const wardenResponse = savedWarden.toObject();
@@ -293,6 +339,7 @@ export const getWardens = async (req, res, next) => {
 
     const wardens = await Admin.find(query)
       .select('-password')
+      .populate('assignedHostelId', '_id name isActive')
       .sort({ createdAt: -1 });
 
     console.log('🏠 Found wardens:', wardens.length);
@@ -451,10 +498,10 @@ export const updateSubAdmin = async (req, res, next) => {
 export const updateWarden = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { username, password, isActive, hostelType, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
+    const { username, password, isActive, hostelType, assignedHostelId, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
 
     console.log('🏠 Updating warden:', id);
-    console.log('🏠 Update data:', { username, isActive, hostelType });
+    console.log('🏠 Update data:', { username, isActive, hostelType, assignedHostelId });
 
     // Build query based on admin role
     let query = {
@@ -488,8 +535,15 @@ export const updateWarden = async (req, res, next) => {
     if (typeof isActive === 'boolean') {
       warden.isActive = isActive;
     }
-    if (hostelType && ['boys', 'girls'].includes(hostelType)) {
+    if (assignedHostelId) {
+      await resolveAndAttachHostel(warden, assignedHostelId);
+    } else if (hostelType && ['boys', 'girls'].includes(hostelType)) {
       warden.hostelType = hostelType;
+      const nameHint = hostelType === 'boys' ? /boy/i : /girl/i;
+      const matchedHostel = await Hostel.findOne({ name: nameHint, isActive: true });
+      if (matchedHostel) {
+        warden.assignedHostelId = matchedHostel._id;
+      }
     }
 
     if (employeeId !== undefined || hrmsLinkType !== undefined) {
@@ -505,6 +559,7 @@ export const updateWarden = async (req, res, next) => {
 
     console.log('🏠 Saving warden');
     const updatedWarden = await warden.save();
+    await updatedWarden.populate('assignedHostelId', '_id name isActive');
     
     // Remove password from response
     const wardenResponse = updatedWarden.toObject();
@@ -601,7 +656,9 @@ export const adminLogin = async (req, res, next) => {
         { employeeId: identifier }
       ],
       isActive: true
-    }).populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
+    })
+      .populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses')
+      .populate('assignedHostelId', '_id name isActive');
     
     if (!admin) {
       throw createError(401, 'Invalid credentials');
@@ -657,9 +714,14 @@ export const adminLogin = async (req, res, next) => {
       }
     }
 
-    // Include hostelType for wardens in the token
-    if (admin.role === 'warden' && admin.hostelType) {
-      tokenData.hostelType = admin.hostelType;
+    // Include hostel assignment for wardens in the token
+    if (admin.role === 'warden') {
+      if (admin.hostelType) {
+        tokenData.hostelType = admin.hostelType;
+      }
+      if (admin.assignedHostelId) {
+        tokenData.assignedHostelId = admin.assignedHostelId._id || admin.assignedHostelId;
+      }
     }
 
     // Include custom role info for custom role admins
@@ -726,14 +788,28 @@ export const adminLogin = async (req, res, next) => {
     const adminResponse = {
       id: admin._id,
       username: admin.username,
+      name: admin.name || undefined,
+      employeeId: admin.employeeId || undefined,
       role: admin.role,
       permissions: admin.permissions,
       permissionAccessLevels: admin.permissionAccessLevels
     };
 
-    // Include hostelType for wardens
-    if (admin.role === 'warden' && admin.hostelType) {
-      adminResponse.hostelType = admin.hostelType;
+    // Include hostel assignment for wardens
+    if (admin.role === 'warden') {
+      if (admin.hostelType) {
+        adminResponse.hostelType = admin.hostelType;
+      }
+      if (admin.assignedHostelId) {
+        const hostelId = admin.assignedHostelId._id || admin.assignedHostelId;
+        adminResponse.assignedHostelId = hostelId;
+        if (admin.assignedHostelId.name) {
+          adminResponse.assignedHostel = {
+            _id: hostelId,
+            name: admin.assignedHostelId.name
+          };
+        }
+      }
     }
 
     // Include course and branch for principals

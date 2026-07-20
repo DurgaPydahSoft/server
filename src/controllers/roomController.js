@@ -82,13 +82,18 @@ export const getRooms = async (req, res, next) => {
   }
 };
 
-// Get rooms for warden with hostel type filtering
+// Get rooms for warden with assigned-hostel filtering
 export const getWardenRooms = async (req, res, next) => {
   try {
     const { hostel, category, includeLastBill } = req.query;
     const query = {};
-    
-    if (hostel) {
+    const admin = req.admin || req.warden || req.user;
+    const assignedHostelId = admin?.assignedHostelId?._id || admin?.assignedHostelId;
+
+    // Wardens are always scoped to their assigned hostel
+    if (admin?.role === 'warden' && assignedHostelId) {
+      query.hostel = assignedHostelId;
+    } else if (hostel) {
       if (!isValidObjectId(hostel)) {
         return res.status(400).json({ success: false, message: 'Invalid hostel id' });
       }

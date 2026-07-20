@@ -34,23 +34,24 @@ export const createBulkOuting = async (req, res, next) => {
       throw createError(400, 'Some selected students are not found or inactive');
     }
 
-    // Check if warden has permission for the students' hostel type
+    // Check if warden has permission for the students' hostel
     const warden = req.warden;
+    const assignedHostelId = warden.assignedHostelId?._id || warden.assignedHostelId;
     const studentsWithDifferentHostel = students.filter(student => {
+      if (assignedHostelId) {
+        const studentHostel = student.hostel?._id || student.hostel;
+        return !studentHostel || studentHostel.toString() !== assignedHostelId.toString();
+      }
+      // Legacy fallback by gender
       const studentGender = student.gender;
       const wardenHostelType = warden.hostelType;
-      
-      if (wardenHostelType === 'boys' && studentGender !== 'Male') {
-        return true;
-      }
-      if (wardenHostelType === 'girls' && studentGender !== 'Female') {
-        return true;
-      }
+      if (wardenHostelType === 'boys' && studentGender !== 'Male') return true;
+      if (wardenHostelType === 'girls' && studentGender !== 'Female') return true;
       return false;
     });
 
     if (studentsWithDifferentHostel.length > 0) {
-      throw createError(400, 'You can only create outings for students in your hostel type');
+      throw createError(400, 'You can only create outings for students in your assigned hostel');
     }
 
     // Create bulk outing request
@@ -255,14 +256,16 @@ export const getStudentsForBulkOuting = async (req, res, next) => {
     const { course, branch, gender, category, roomNumber, batch, academicYear, hostelStatus = 'Active' } = req.query;
     const warden = req.warden;
 
-    // Build query based on warden's hostel type
+    // Build query based on warden's assigned hostel (prefer hostel id over gender)
     const query = { 
       role: 'student',
       hostelStatus: hostelStatus
     };
 
-    // Filter by warden's hostel type
-    if (warden.hostelType === 'boys') {
+    const assignedHostelId = warden.assignedHostelId?._id || warden.assignedHostelId;
+    if (assignedHostelId) {
+      query.hostel = assignedHostelId;
+    } else if (warden.hostelType === 'boys') {
       query.gender = 'Male';
     } else if (warden.hostelType === 'girls') {
       query.gender = 'Female';
@@ -271,14 +274,14 @@ export const getStudentsForBulkOuting = async (req, res, next) => {
     // Add other filters
     if (course) query.course = course;
     if (branch) query.branch = branch;
-    if (gender) query.gender = gender;
+    if (!assignedHostelId && gender) query.gender = gender;
     if (category) query.category = category;
     if (roomNumber) query.roomNumber = roomNumber;
     if (batch) query.batch = batch;
     if (academicYear) query.academicYear = academicYear;
 
     const students = await User.find(query)
-      .select('name rollNumber course branch year gender category roomNumber studentPhone parentPhone')
+      .select('name rollNumber course branch year gender category roomNumber hostel studentPhone parentPhone')
       .populate('course', 'name code')
       .populate('branch', 'name code')
       .sort({ name: 1 });

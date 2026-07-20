@@ -15,12 +15,35 @@ import { normalizeToISTStartOfDay, getISTStartOfDay, getISTEndOfDay } from '../u
 import notificationService from '../utils/notificationService.js';
 import { fetchStudentsForAcademicYear } from '../utils/applicationExpiryService.js';
 
+/** Resolve hostel/gender scope for wardens from Admin assignment */
+const resolveWardenStudentScope = (admin, queryGender, queryHostel) => {
+  let gender = queryGender;
+  let hostel = queryHostel;
+
+  if (admin?.role === 'warden') {
+    const assignedHostelId = admin.assignedHostelId?._id || admin.assignedHostelId;
+    if (assignedHostelId) {
+      hostel = assignedHostelId.toString();
+      // Prefer hostel occupancy over gender when hostel is assigned
+      gender = undefined;
+    } else if (admin.hostelType) {
+      // Legacy fallback
+      gender = admin.hostelType.toLowerCase() === 'boys' ? 'Male'
+        : admin.hostelType.toLowerCase() === 'girls' ? 'Female'
+        : queryGender;
+    }
+  }
+
+  return { gender, hostel };
+};
+
 // Shared helpers: same student pool as Take Attendance (getStudentsForAttendance)
-const buildActiveStudentsQuery = ({ gender, category, roomNumber }) => {
+const buildActiveStudentsQuery = ({ gender, category, roomNumber, hostel }) => {
   const query = { role: 'student', hostelStatus: 'Active' };
   if (gender?.trim()) query.gender = gender.trim();
   if (category?.trim()) query.category = category.trim();
   if (roomNumber?.trim()) query.roomNumber = roomNumber.trim();
+  if (hostel) query.hostel = hostel;
   return query;
 };
 
@@ -105,17 +128,18 @@ const computeAttendanceStatistics = (records) => {
 // Get students for attendance taking
 export const getStudentsForAttendance = async (req, res, next) => {
   try {
-    const { date, course, branch, gender, category, roomNumber, academicYear } = req.query;
+    const { date, course, branch, gender: queryGender, category, roomNumber, academicYear, hostel: queryHostel } = req.query;
+    const { gender, hostel } = resolveWardenStudentScope(req.admin, queryGender, queryHostel);
     const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
-    console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber, academicYear });
+    console.log('🔍 getStudentsForAttendance - Query params:', { date, course, branch, gender, category, roomNumber, academicYear, hostel });
     console.log('🔍 getStudentsForAttendance - Normalized date:', normalizedDate);
 
     let students;
     if (academicYear) {
       const result = await fetchStudentsForAcademicYear({
         academicYear,
-        filters: { gender, category, roomNumber, hostelStatus: 'Active' },
+        filters: { gender, category, roomNumber, hostelStatus: 'Active', hostel },
         page: 1,
         limit: 1000000,
         academicFilters: { course, branch }
@@ -133,12 +157,12 @@ export const getStudentsForAttendance = async (req, res, next) => {
         return studentCurrentYearStart <= requestedYearStart;
       });
     } else {
-      const query = buildActiveStudentsQuery({ gender, category, roomNumber });
+      const query = buildActiveStudentsQuery({ gender, category, roomNumber, hostel });
 
       console.log('🔍 getStudentsForAttendance - Query:', query);
 
       students = await User.find(query)
-        .select('name rollNumber admissionNumber course branch year gender roomNumber')
+        .select('name rollNumber admissionNumber course branch year gender roomNumber hostel')
         .sort({ name: 1 })
         .lean();
 
@@ -390,7 +414,8 @@ export const takeAttendance = async (req, res, next) => {
 // Get attendance for a specific date
 export const getAttendanceForDate = async (req, res, next) => {
   try {
-    const { date, course, branch, gender, studentId, status, academicYear } = req.query;
+    const { date, course, branch, gender: queryGender, studentId, status, academicYear, hostel: queryHostel } = req.query;
+    const { gender, hostel } = resolveWardenStudentScope(req.admin, queryGender, queryHostel);
     const normalizedDate = normalizeToISTStartOfDay(date || new Date());
 
     let students;
@@ -401,7 +426,8 @@ export const getAttendanceForDate = async (req, res, next) => {
           gender,
           category: req.query.category,
           roomNumber: req.query.roomNumber,
-          hostelStatus: 'Active'
+          hostelStatus: 'Active',
+          hostel
         },
         page: 1,
         limit: 1000000,
@@ -423,11 +449,12 @@ export const getAttendanceForDate = async (req, res, next) => {
       const studentQuery = buildActiveStudentsQuery({
         gender,
         category: req.query.category,
-        roomNumber: req.query.roomNumber
+        roomNumber: req.query.roomNumber,
+        hostel
       });
 
       students = await User.find(studentQuery)
-        .select('name rollNumber admissionNumber course branch year gender roomNumber category')
+        .select('name rollNumber admissionNumber course branch year gender roomNumber category hostel')
         .sort({ name: 1 })
         .lean();
 
@@ -503,7 +530,8 @@ export const getAttendanceForDate = async (req, res, next) => {
 // Get attendance for a date range
 export const getAttendanceForDateRange = async (req, res, next) => {
   try {
-    const { startDate, endDate, course, branch, gender, studentId, status, academicYear } = req.query;
+    const { startDate, endDate, course, branch, gender: queryGender, studentId, status, academicYear, hostel: queryHostel } = req.query;
+    const { gender, hostel } = resolveWardenStudentScope(req.admin, queryGender, queryHostel);
     
     if (!startDate || !endDate) {
       throw createError(400, 'Start date and end date are required');
@@ -530,7 +558,7 @@ export const getAttendanceForDateRange = async (req, res, next) => {
     let attendance = await Attendance.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender roomNumber',
+        select: 'name rollNumber course branch year gender roomNumber hostel',
         populate: [
           { path: 'course', select: 'name code' },
           { path: 'branch', select: 'name code' }
@@ -657,6 +685,14 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       attendance = attendance.filter(att => 
         att.student?.gender === gender
       );
+    }
+
+    if (hostel) {
+      const hostelId = hostel.toString();
+      attendance = attendance.filter(att => {
+        const studentHostel = att.student?.hostel?._id || att.student?.hostel;
+        return studentHostel?.toString() === hostelId;
+      });
     }
 
     if (status) {

@@ -65,6 +65,11 @@ export const adminAuth = async (req, res, next) => {
       admin = await Admin.findById(userId).select('-password').populate('customRoleId', 'name description permissions permissionAccessLevels courseAssignment assignedCourses');
     }
 
+    // Populate assigned hostel for wardens
+    if (admin && admin.role === 'warden' && admin.assignedHostelId) {
+      admin = await Admin.findById(userId).select('-password').populate('assignedHostelId', '_id name isActive');
+    }
+
     if (!admin || !admin.isActive) {
       return next(createError(401, 'Admin not found or is not active'));
     }
@@ -99,13 +104,14 @@ export const wardenAuth = async (req, res, next) => {
       return next(createError(401, 'Invalid token structure'));
     }
 
-    const admin = await Admin.findById(userId).select('-password');
+    const admin = await Admin.findById(userId).select('-password').populate('assignedHostelId', '_id name isActive');
 
     if (!admin || !admin.isActive || admin.role !== 'warden') {
       return next(createError(401, 'Warden not found or is not active'));
     }
     
     req.warden = admin; // Attach the warden object to the request
+    req.admin = admin; // Also expose as admin so shared helpers work
     req.user = admin; // Also attach as user for consistency
     next();
   } catch (error) {
