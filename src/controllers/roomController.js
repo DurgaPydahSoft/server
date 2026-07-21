@@ -116,7 +116,7 @@ export const getWardenRooms = async (req, res, next) => {
       const studentCount = await User.countDocuments({
         roomNumber: room.roomNumber,
         role: 'student',
-        hostelStatus: 'Active'
+        applicationStatus: { $in: ['Active', 'Extended'] }
       });
       
       // Count staff in the room
@@ -763,7 +763,7 @@ export const getStudentRoomBills = async (req, res, next) => {
     const studentsInRoom = await User.countDocuments({
       room: room._id,
       role: 'student',
-      hostelStatus: 'Active'
+      applicationStatus: { $in: ['Active', 'Extended'] }
     });
 
     // For each bill, find the student's share and check payment status

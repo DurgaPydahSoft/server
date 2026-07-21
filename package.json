@@ -22,7 +22,9 @@
     "run-application-expiry": "node -r dotenv/config src/scripts/runApplicationExpiryJob.js",
     "run-application-expiry:dry": "node -r dotenv/config src/scripts/runApplicationExpiryJob.js --dry-run",
     "migrate-warden-hostels": "node -r dotenv/config src/scripts/migrateWardenAssignedHostels.js",
-    "migrate-warden-hostels:dry": "node -r dotenv/config src/scripts/migrateWardenAssignedHostels.js --dry-run"
+    "migrate-warden-hostels:dry": "node -r dotenv/config src/scripts/migrateWardenAssignedHostels.js --dry-run",
+    "backfill-hostel-requests": "node -r dotenv/config src/scripts/backfillHostelRequests.js",
+    "backfill-hostel-requests:dry": "node -r dotenv/config src/scripts/backfillHostelRequests.js --dry-run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.812.0",

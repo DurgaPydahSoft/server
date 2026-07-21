@@ -310,8 +310,8 @@ export const previewPastPayments = async (req, res, next) => {
         student = studentsMap.get(normalizedRollNumber);
         if (!student) {
           errors.RollNumber = `Student with roll number "${normalizedRollNumber}" not found.`;
-        } else if (student.hostelStatus !== 'Active') {
-          warnings.StudentStatus = `Student is not active in hostel (Status: ${student.hostelStatus}).`;
+        } else if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
+          warnings.StudentStatus = `Student is not active (Status: ${student.applicationStatus}).`;
         }
       }
 

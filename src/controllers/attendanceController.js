@@ -39,7 +39,7 @@ const resolveWardenStudentScope = (admin, queryGender, queryHostel) => {
 
 // Shared helpers: same student pool as Take Attendance (getStudentsForAttendance)
 const buildActiveStudentsQuery = ({ gender, category, roomNumber, hostel }) => {
-  const query = { role: 'student', hostelStatus: 'Active' };
+  const query = { role: 'student', applicationStatus: { $in: ['Active', 'Extended'] } };
   if (gender?.trim()) query.gender = gender.trim();
   if (category?.trim()) query.category = category.trim();
   if (roomNumber?.trim()) query.roomNumber = roomNumber.trim();
@@ -139,6 +139,7 @@ export const getStudentsForAttendance = async (req, res, next) => {
     if (academicYear) {
       const result = await fetchStudentsForAcademicYear({
         academicYear,
+        // 'Active' resolves against HostelRequest.status for the requested AY
         filters: { gender, category, roomNumber, hostelStatus: 'Active', hostel },
         page: 1,
         limit: 1000000,
@@ -302,7 +303,7 @@ export const takeAttendance = async (req, res, next) => {
     const validStudents = await User.find({ 
       _id: { $in: studentIds }, 
       role: 'student', 
-      hostelStatus: 'Active' 
+      applicationStatus: { $in: ['Active', 'Extended'] } 
     }).select('_id name');
 
     const validStudentIds = new Set(validStudents.map(student => student._id.toString()));
@@ -990,7 +991,7 @@ export const getPrincipalAttendanceForDate = async (req, res, next) => {
     // Build query for students
     const studentQuery = { 
       role: 'student', 
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       course: { $in: allowedCourseNames }
     };
 
@@ -1249,7 +1250,7 @@ export const getPrincipalAttendanceForRange = async (req, res, next) => {
     // Build query for students
     const studentQuery = { 
       role: 'student', 
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       course: { $in: finalAllowedCourses }
     };
 
@@ -1428,7 +1429,7 @@ export const getPrincipalStudentCount = async (req, res, next) => {
     // Build query for students
     const studentQuery = {
       role: 'student',
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       course: { $in: allowedCourseNames }
     };
     
@@ -1487,7 +1488,7 @@ export const getPrincipalAttendanceStats = async (req, res, next) => {
     // Build query for students
     const studentQuery = { 
       role: 'student', 
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       course: { $in: allowedCourseNames }
     };
     
@@ -1578,7 +1579,7 @@ export const getPrincipalStudentsByStatus = async (req, res, next) => {
 
     const studentQuery = { 
       role: 'student', 
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       course: { $in: allowedCourseNames }
     };
     

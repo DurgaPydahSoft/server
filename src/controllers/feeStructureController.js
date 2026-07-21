@@ -354,6 +354,121 @@ export const createAdminFeeStructure = async (req, res, next) => {
   }
 };
 
+// POST /api/admin/fee-structures/bulk
+// Saves the complete course-year × hostel-category matrix in one request.
+export const bulkUpsertAdminFeeStructures = async (req, res, next) => {
+  try {
+    const {
+      academicYear,
+      course,
+      branch,
+      hostelId,
+      feeType = 'Hostel Fee',
+      entries,
+    } = req.body;
+
+    if (!academicYear || !course || !hostelId || !Array.isArray(entries) || entries.length === 0) {
+      throw createError(
+        400,
+        'academicYear, course, hostelId, and at least one fee matrix entry are required'
+      );
+    }
+
+    const hostelDoc = await Hostel.findById(hostelId).select('_id');
+    if (!hostelDoc) throw createError(400, 'Invalid hostel');
+
+    const categoryIds = [...new Set(entries.map((entry) => String(entry.categoryId || '')))];
+    if (categoryIds.some((id) => !isObjectIdString(id))) {
+      throw createError(400, 'Every fee matrix entry must have a valid categoryId');
+    }
+
+    const categoryDocs = await HostelCategory.find({
+      _id: { $in: categoryIds },
+      hostel: hostelId,
+    })
+      .select('_id name')
+      .lean();
+    if (categoryDocs.length !== categoryIds.length) {
+      throw createError(400, 'One or more categories do not belong to the selected hostel');
+    }
+
+    const categoryById = new Map(categoryDocs.map((category) => [String(category._id), category]));
+    const normalizedCourse = await normalizeCourseForFeeStructure(course);
+    const normalizedBranch = branch
+      ? ((await resolveBranchName(branch)) || branch)
+      : null;
+    const updatedBy = req.admin?._id || req.user?._id;
+    const seen = new Set();
+
+    const operations = entries.map((entry) => {
+      const year = Number(entry.year);
+      const amount = Number(entry.amount);
+      const categoryId = String(entry.categoryId);
+      const cellKey = `${year}:${categoryId}`;
+
+      if (!Number.isInteger(year) || year < 1 || year > 10) {
+        throw createError(400, `Invalid course year: ${entry.year}`);
+      }
+      if (!Number.isFinite(amount) || amount < 0) {
+        throw createError(400, `Invalid amount for Year ${year}`);
+      }
+      if (seen.has(cellKey)) {
+        throw createError(400, `Duplicate fee matrix entry for Year ${year}`);
+      }
+      seen.add(cellKey);
+
+      const term1Fee = Math.round(amount * 0.4);
+      const term2Fee = Math.round(amount * 0.3);
+      const term3Fee = amount - term1Fee - term2Fee;
+      const category = categoryById.get(categoryId);
+      const filter = {
+        academicYear,
+        course: normalizedCourse,
+        branch: normalizedBranch,
+        year,
+        hostelId: hostelDoc._id,
+        categoryId: category._id,
+        feeType,
+      };
+
+      return {
+        updateOne: {
+          filter,
+          update: {
+            $set: {
+              amount,
+              term1Fee,
+              term2Fee,
+              term3Fee,
+              category: category.name,
+              isActive: true,
+              updatedBy,
+            },
+            $setOnInsert: {
+              ...filter,
+              createdBy: updatedBy,
+            },
+          },
+          upsert: true,
+        },
+      };
+    });
+
+    const result = await FeeStructure.bulkWrite(operations, { ordered: true });
+    res.json({
+      success: true,
+      message: `Saved ${entries.length} fee structure cells`,
+      data: {
+        total: entries.length,
+        created: result.upsertedCount || 0,
+        updated: result.modifiedCount || 0,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // PUT /api/admin/fee-structures/:id
 export const updateAdminFeeStructure = async (req, res, next) => {
   try {

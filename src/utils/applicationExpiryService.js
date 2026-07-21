@@ -1,6 +1,8 @@
 import ApplicationExpiryConfig from '../models/ApplicationExpiryConfig.js';
 import RoomOccupancyHistory from '../models/RoomOccupancyHistory.js';
 import HostelCategory from '../models/HostelCategory.js';
+import HostelRequest from '../models/HostelRequest.js';
+import StudentMaster from '../models/StudentMaster.js';
 import User from '../models/User.js';
 import FeeReminder from '../models/FeeReminder.js';
 import NOC from '../models/NOC.js';
@@ -14,8 +16,16 @@ import {
   deleteStudentHostelFeesForAcademicYearSafely,
   resolveFeesStudentId
 } from '../services/feesSyncService.js';
+import {
+  closeActiveHostelRequestForUser,
+  reopenHostelRequestForYear
+} from '../services/hostelRequestService.js';
 import { fetchSemesterEndDateFromSQL } from './sqlService.js';
 import { getDefaultAcademicYear } from './roomOccupancyUtils.js';
+import {
+  normalizeAdmissionNumber,
+  overlayStudentWithHostelRequest
+} from './hostelRequestListDto.js';
 
 export const getAcademicYearEndYear = (academicYear) => {
   if (!academicYear || !/^\d{4}-\d{4}$/.test(academicYear)) return null;
@@ -145,7 +155,6 @@ const applyHistorySnapshotToStudent = (student, history) => {
   student.hostelCategory = history.hostelCategory;
   student.room = history.room;
   student.roomNumber = history.roomNumber;
-  student.hostelStatus = wasActive ? 'Active' : 'Inactive';
   student.applicationStatus = wasActive ? 'Active' : 'Expired';
   student.bedNumber = wasActive ? history.bedNumber : undefined;
   student.lockerNumber = wasActive ? history.lockerNumber : undefined;
@@ -187,7 +196,31 @@ export const removeStudentEnrollmentForAcademicYear = async ({
   }
 
   await RoomOccupancyHistory.deleteMany({ student: studentId, academicYear });
-  await FeeReminder.deleteMany({ student: studentId, academicYear });
+  await FeeReminder.deleteMany({
+    $or: [
+      { student: studentId, academicYear },
+      {
+        admissionNumber: normalizeAdmissionNumber(student.admissionNumber),
+        academicYear
+      }
+    ]
+  });
+
+  try {
+    await closeActiveHostelRequestForUser(student, {
+      academicYear,
+      status: 'cancelled',
+      statusReason: 'enrollment_removed'
+    });
+    // If already closed, still delete the request document for this year? Prefer cancel only.
+    // Also remove cancelled/expired request for clean year removal:
+    await HostelRequest.deleteMany({
+      admissionNumber: normalizeAdmissionNumber(student.admissionNumber),
+      academicYear
+    });
+  } catch (hrErr) {
+    console.error('Failed to remove HostelRequest for enrollment year:', hrErr.message);
+  }
 
   const enriched = await enrichStudentAcademics(student.toObject());
   const feesStudentId = resolveFeesStudentId(student, enriched);
@@ -222,9 +255,8 @@ export const removeStudentEnrollmentForAcademicYear = async ({
 };
 
 export const expireStudentApplication = async (student, reason = 'academic_year_end', notes = null) => {
-  if (!student || student.hostelStatus !== 'Active') return { changed: false };
+  if (!student || (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) return { changed: false };
 
-  student.hostelStatus = 'Inactive';
   student.applicationStatus = 'Expired';
   student.bedNumber = undefined;
   student.lockerNumber = undefined;
@@ -250,9 +282,32 @@ export const expireStudentApplication = async (student, reason = 'academic_year_
     );
   }
 
+  // Phase 4: expire HostelRequest (also deactivates fee reminders linked to it)
+  const requestStatus =
+    reason === 'admin_inactive' || reason === 'noc' ? 'cancelled' : 'expired';
+  try {
+    await closeActiveHostelRequestForUser(student, {
+      academicYear: student.academicYear,
+      status: requestStatus,
+      statusReason: reason,
+      reason
+    });
+  } catch (hrErr) {
+    console.error('Failed to close HostelRequest on expiry:', hrErr.message);
+  }
+
   try {
     await FeeReminder.updateMany(
-      { student: student._id, academicYear: student.academicYear, isActive: true },
+      {
+        isActive: true,
+        $or: [
+          { student: student._id, academicYear: student.academicYear },
+          {
+            admissionNumber: normalizeAdmissionNumber(student.admissionNumber),
+            academicYear: student.academicYear
+          }
+        ]
+      },
       { $set: { isActive: false } }
     );
   } catch (err) {
@@ -263,7 +318,7 @@ export const expireStudentApplication = async (student, reason = 'academic_year_
 };
 
 export const reactivateStudentApplication = async (student, reason = 'academic_year_end_extended') => {
-  if (!student || student.hostelStatus !== 'Inactive') return { changed: false };
+  if (!student || student.applicationStatus !== 'Expired') return { changed: false };
 
   // Find their last closed RoomOccupancyHistory record for this academic year to restore their bed and locker
   const lastHistory = await RoomOccupancyHistory.findOne({
@@ -272,7 +327,6 @@ export const reactivateStudentApplication = async (student, reason = 'academic_y
     status: 'Expired'
   }).sort({ allocatedTo: -1 });
 
-  student.hostelStatus = 'Active';
   student.applicationStatus = 'Active';
   
   if (lastHistory) {
@@ -290,8 +344,27 @@ export const reactivateStudentApplication = async (student, reason = 'academic_y
   }
 
   try {
+    await reopenHostelRequestForYear({
+      admissionNumber: student.admissionNumber,
+      academicYear: student.academicYear,
+      userId: student._id,
+      statusReason: reason
+    });
+  } catch (hrErr) {
+    console.error('Failed to reopen HostelRequest on reactivation:', hrErr.message);
+  }
+
+  try {
     await FeeReminder.updateMany(
-      { student: student._id, academicYear: student.academicYear },
+      {
+        $or: [
+          { student: student._id, academicYear: student.academicYear },
+          {
+            admissionNumber: normalizeAdmissionNumber(student.admissionNumber),
+            academicYear: student.academicYear
+          }
+        ]
+      },
       { $set: { isActive: true } }
     );
   } catch (err) {
@@ -337,7 +410,6 @@ export const processDueApplicationExpiries = async () => {
   // 1. Process Active -> Expired
   const activeStudents = await User.find({
     role: 'student',
-    hostelStatus: 'Active',
     applicationStatus: { $in: ['Active', 'Extended'] }
   });
 
@@ -372,7 +444,7 @@ export const processDueApplicationExpiries = async () => {
   /*
   const expiredStudents = await User.find({
     role: 'student',
-    hostelStatus: 'Inactive',
+    applicationStatus: 'Expired',
     applicationStatus: 'Expired'
   });
 
@@ -432,7 +504,7 @@ export const overlayStudentWithEnrollmentHistory = (student, history, requestedY
     }
   } else {
     // If they completed their stay successfully (Expired) but didn't renew yet, they were active in that year.
-    if (student.hostelStatus === 'Inactive' && student.applicationStatus === 'Expired') {
+    if (student.applicationStatus === 'Expired') {
       resolvedStatus = 'Active';
       resolvedAppStatus = 'Expired';
     }
@@ -496,7 +568,9 @@ const dedupeHistoryByStudent = (rows) => {
 };
 
 /**
- * List students enrolled in a given academic year (including renewed students via occupancy history).
+ * List students enrolled in a given academic year.
+ * Phase 2 dual-read: prefer HostelRequest allocation/status when present;
+ * fall back to RoomOccupancyHistory + User for legacy rows (pre-backfill).
  */
 export const fetchStudentsForAcademicYear = async ({
   academicYear,
@@ -514,10 +588,7 @@ export const fetchStudentsForAcademicYear = async ({
     academicFilters.year
   );
 
-  const historyQuery = { academicYear };
-  if (roomNumber) historyQuery.roomNumber = roomNumber;
-  if (hostel) historyQuery.hostel = hostel;
-
+  let categoryIds = null;
   if (category) {
     const escaped = category.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const categoryDocs = await HostelCategory.find({
@@ -528,8 +599,30 @@ export const fetchStudentsForAcademicYear = async ({
     if (categoryDocs.length === 0) {
       return { students: [], count: 0 };
     }
-    historyQuery.hostelCategory = { $in: categoryDocs.map((c) => c._id) };
+    categoryIds = categoryDocs.map((c) => c._id);
   }
+
+  // --- HostelRequest pool (preferred SOT when rows exist) ---
+  const requestQuery = { academicYear };
+  if (roomNumber) requestQuery.roomNumber = roomNumber;
+  if (hostel) requestQuery.hostelId = hostel;
+  if (categoryIds) requestQuery.hostelCategoryId = { $in: categoryIds };
+
+  const hostelRequests = await HostelRequest.find(requestQuery)
+    .populate('hostelId', '_id name')
+    .populate('hostelCategoryId', '_id name')
+    .lean();
+
+  const requestByAdmission = new Map();
+  for (const request of hostelRequests) {
+    const key = normalizeAdmissionNumber(request.admissionNumber);
+    if (key) requestByAdmission.set(key, request);
+  }
+
+  const historyQuery = { academicYear };
+  if (roomNumber) historyQuery.roomNumber = roomNumber;
+  if (hostel) historyQuery.hostel = hostel;
+  if (categoryIds) historyQuery.hostelCategory = { $in: categoryIds };
 
   let histories = await RoomOccupancyHistory.find(historyQuery)
     .populate('hostel', '_id name')
@@ -560,12 +653,40 @@ export const fetchStudentsForAcademicYear = async ({
   // Note: hostelStatus is not restricted in MongoDB queries here to allow mapping currently inactive students who were active back then.
   if (search) {
     const searchRegex = new RegExp(search, 'i');
-    liveQuery.$or = [{ name: searchRegex }, { rollNumber: searchRegex }];
+    liveQuery.$or = [
+      { name: searchRegex },
+      { rollNumber: searchRegex },
+      { admissionNumber: searchRegex }
+    ];
   }
 
   const liveStudents = await User.find(liveQuery).select('_id').lean();
   for (const row of liveStudents) {
     studentIdSet.add(row._id.toString());
+  }
+
+  // Expand pool with users linked to HostelRequests for this AY
+  const requestAdmissions = [...requestByAdmission.keys()];
+  if (requestAdmissions.length > 0) {
+    const usersFromRequests = await User.find({
+      role: 'student',
+      admissionNumber: { $in: requestAdmissions }
+    })
+      .select('_id')
+      .lean();
+    for (const row of usersFromRequests) {
+      studentIdSet.add(row._id.toString());
+    }
+
+    const masters = await StudentMaster.find({
+      admissionNumber: { $in: requestAdmissions },
+      userId: { $ne: null }
+    })
+      .select('userId')
+      .lean();
+    for (const master of masters) {
+      if (master.userId) studentIdSet.add(master.userId.toString());
+    }
   }
 
   if (studentIdSet.size === 0) {
@@ -581,7 +702,11 @@ export const fetchStudentsForAcademicYear = async ({
   // Note: hostelStatus filter is applied in-memory after overlaying history to correctly support historically active students
   if (search) {
     const searchRegex = new RegExp(search, 'i');
-    userQuery.$or = [{ name: searchRegex }, { rollNumber: searchRegex }];
+    userQuery.$or = [
+      { name: searchRegex },
+      { rollNumber: searchRegex },
+      { admissionNumber: searchRegex }
+    ];
   }
 
   const populateOpts = [
@@ -602,8 +727,13 @@ export const fetchStudentsForAcademicYear = async ({
 
   let students = users.map((user) => {
     const history = historyByStudent.get(user._id.toString());
-    return overlayStudentWithEnrollmentHistory(user, history, academicYear);
+    const withHistory = overlayStudentWithEnrollmentHistory(user, history, academicYear);
+    const request = requestByAdmission.get(normalizeAdmissionNumber(user.admissionNumber));
+    return overlayStudentWithHostelRequest(withHistory, request, academicYear);
   }).filter((student) => {
+    // Keep students that have a HostelRequest for this AY even without history
+    if (student.hostelRequestId) return true;
+
     // CRITICAL FIX: Exclude students who have no history for this year AND joined AFTER this year
     // This prevents future year students from appearing in past year filters
     const history = historyByStudent.get(student._id.toString());
@@ -621,28 +751,45 @@ export const fetchStudentsForAcademicYear = async ({
 
   if (hostelStatus) {
     if (hostelStatus === 'Active') {
-      console.log(`🔍 Filtering for Active status. Total students before filter: ${students.length}`);
-      students = students.filter(
-        (s) => {
-          const isActive = s.applicationStatus === 'Active' &&
-            s.applicationStatus !== 'Withdrawn' &&
-            s.enrollmentHistoryStatus !== 'Withdrawn';
-          
-          if (s.name && s.name.includes('GANNAVARAPU')) {
-            console.log(`🔍 GANNAVARAPU GEETHA - applicationStatus: ${s.applicationStatus}, hostelStatus: ${s.hostelStatus}, enrollmentHistoryStatus: ${s.enrollmentHistoryStatus}, isActive: ${isActive}`);
-          }
-          
-          return isActive;
+      students = students.filter((s) => {
+        if (s.hostelRequestStatus) {
+          return s.hostelRequestStatus === 'active';
         }
-      );
-      console.log(`🔍 Students after Active filter: ${students.length}`);
+        return (
+          s.applicationStatus === 'Active' &&
+          s.enrollmentHistoryStatus !== 'Withdrawn'
+        );
+      });
     } else if (hostelStatus === 'Inactive') {
-      students = students.filter(
-        (s) =>
-          s.hostelStatus === 'Inactive' ||
+      students = students.filter((s) => {
+        if (s.hostelRequestStatus) {
+          return s.hostelRequestStatus === 'expired' || s.hostelRequestStatus === 'cancelled';
+        }
+        return (
           s.applicationStatus === 'Expired' ||
           s.applicationStatus === 'Withdrawn'
-      );
+        );
+      });
+    } else if (['active', 'expired', 'cancelled'].includes(String(hostelStatus).toLowerCase())) {
+      const wanted = String(hostelStatus).toLowerCase();
+      students = students.filter((s) => {
+        if (s.hostelRequestStatus) {
+          return s.hostelRequestStatus === wanted;
+        }
+        if (wanted === 'active') {
+          return (
+            ['Active', 'Extended'].includes(s.applicationStatus) &&
+            s.enrollmentHistoryStatus !== 'Withdrawn'
+          );
+        }
+        if (wanted === 'expired') {
+          return s.applicationStatus === 'Expired';
+        }
+        if (wanted === 'cancelled') {
+          return s.applicationStatus === 'Withdrawn';
+        }
+        return false;
+      });
     } else {
       students = students.filter((s) => s.hostelStatus === hostelStatus);
     }
@@ -673,6 +820,11 @@ export const fetchStudentsForAcademicYear = async ({
   };
 
   paginatedStudents = paginatedStudents.map((student) => {
+    // HostelRequest already owns allocation for this AY — do not re-apply history
+    if (student.hostelRequestId) {
+      return student;
+    }
+
     const history = historyByStudent.get(student._id.toString());
     if (!history) {
       if (student.isHistoricalView) {
@@ -729,8 +881,7 @@ export const attachResolvedExpiryDates = async (students) => {
       let lockerNumber = student.lockerNumber;
       let actualExpiredAt = student.allocatedTo || null;
 
-      const isExpiredProfile =
-        student.hostelStatus === 'Inactive' || student.applicationStatus === 'Expired';
+      const isExpiredProfile = student.applicationStatus === 'Expired';
 
       if (isExpiredProfile || !roomNumber) {
         const history = await RoomOccupancyHistory.findOne({
@@ -787,8 +938,8 @@ export const extendStudentApplicationExpiry = async ({
   student.applicationExpiryExtendedBy = adminId;
   student.applicationExpiryExtendedAt = new Date();
 
-  if (reactivate && student.hostelStatus === 'Inactive') {
-    student.hostelStatus = 'Active';
+  if (reactivate && student.applicationStatus === 'Expired') {
+    student.applicationStatus = 'Active';
     await createOccupancyHistory({
       student,
       academicYear: student.academicYear,

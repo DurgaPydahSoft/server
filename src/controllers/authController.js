@@ -4,10 +4,11 @@ import mongoose from 'mongoose';
 import axios from 'axios';
 import User from '../models/User.js';
 import Admin from '../models/Admin.js';
-import TempStudent from '../models/TempStudent.js';
 import { createError } from '../utils/error.js';
 import { fetchStudentCredentialsSQL } from '../utils/sqlService.js';
 import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
+import { overlayStudentDtoWithHostelRequest } from '../services/hostelRequestService.js';
+import { isApplicationActive } from '../utils/studentStatusUtils.js';
 
 const buildStudentAuthPayload = (enriched) => ({
   id: enriched._id,
@@ -22,7 +23,7 @@ const buildStudentAuthPayload = (enriched) => ({
   year: enriched.year,
   studentPhone: enriched.studentPhone,
   parentPhone: enriched.parentPhone,
-  hostelStatus: enriched.hostelStatus,
+  applicationStatus: enriched.applicationStatus,
   batch: enriched.batch,
   academicYear: enriched.academicYear,
   email: enriched.email,
@@ -102,8 +103,8 @@ export const studentLogin = async (req, res, next) => {
       }
     }
 
-    // Check hostel status - prevent inactive students from logging in
-    if (student.hostelStatus === 'Inactive') {
+    // Block expired applications from logging in (applicationStatus is the account lifecycle)
+    if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
       throw createError(403, 'Your hostel access has been deactivated. Please contact the administration for assistance.');
     }
 
@@ -199,7 +200,8 @@ export const studentLogin = async (req, res, next) => {
     }
 
     const token = generateToken(student);
-    const enriched = await enrichStudentAcademics(student);
+    let enriched = await enrichStudentAcademics(student);
+    enriched = await overlayStudentDtoWithHostelRequest(enriched);
 
     res.json({
       success: true,
@@ -234,16 +236,6 @@ export const resetPassword = async (req, res, next) => {
     student.isPasswordChanged = true;
     
     await student.save();
-
-    // Attempt to delete TempStudent record
-    try {
-      await TempStudent.deleteOne({ mainStudentId: student._id });
-      // Log successful deletion or if no record was found (which is fine)
-      console.log(`TempStudent record processed for student ID: ${student._id}`);
-    } catch (tempStudentError) {
-      // Log error but don't let it fail the whole password reset
-      console.error(`Error deleting TempStudent for student ID ${student._id}:`, tempStudentError);
-    }
 
     const token = generateToken(student);
 
@@ -284,8 +276,7 @@ export const verifyRollNumber = async (req, res) => {
       return res.status(404).json({ message: 'Roll number not found' });
     }
 
-    // Check hostel status - prevent inactive students from registering
-    if (student.hostelStatus === 'Inactive') {
+    if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
       return res.status(403).json({ message: 'Your hostel access has been deactivated. Please contact the administration for assistance.' });
     }
 
@@ -323,8 +314,7 @@ export const completeRegistration = async (req, res) => {
       return res.status(404).json({ message: 'Roll number not found' });
     }
 
-    // Check hostel status - prevent inactive students from registering
-    if (student.hostelStatus === 'Inactive') {
+    if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
       return res.status(403).json({ message: 'Your hostel access has been deactivated. Please contact the administration for assistance.' });
     }
 
@@ -361,7 +351,8 @@ export const validate = async (req, res, next) => {
   try {
     if (req.user.role === 'student') {
       const student = await User.findById(req.user._id).select('-password').lean();
-      const enriched = await enrichStudentAcademics(student);
+      let enriched = await enrichStudentAcademics(student);
+      enriched = await overlayStudentDtoWithHostelRequest(enriched);
       return res.json({ success: true, data: { user: enriched } });
     }
     // For admins and others, just return req.user
@@ -476,12 +467,13 @@ export const verifySSOToken = async (req, res, next) => {
       if (student.role !== 'student') {
         throw createError(401, 'Invalid token: user is not a student');
       }
-      if (student.hostelStatus === 'Inactive') {
+      if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
         throw createError(403, 'Your hostel access has been deactivated. Please contact the administration.');
       }
 
       const token = generateToken(student);
-      const enriched = await enrichStudentAcademics(student);
+      let enriched = await enrichStudentAcademics(student);
+      enriched = await overlayStudentDtoWithHostelRequest(enriched);
       return res.json({
         success: true,
         data: {

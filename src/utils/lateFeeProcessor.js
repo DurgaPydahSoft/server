@@ -20,7 +20,7 @@ export const processLateFees = async () => {
     // Get all active students
     const students = await User.find({ 
       role: 'student',
-      hostelStatus: 'Active'
+      applicationStatus: { $in: ['Active', 'Extended'] }
     }).populate('course', 'name');
 
     console.log(`📊 Found ${students.length} active students to process`);

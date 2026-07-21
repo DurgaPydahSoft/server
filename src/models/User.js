@@ -25,22 +25,6 @@ const COURSE_LABEL_TO_KEY = {
   'Degree': 'DEGREE'
 };
 
-// Define room mappings based on gender and category
-export const ROOM_MAPPINGS = {
-  Male: {
-    'A+': ['302', '309', '310', '311', '312'],
-    'A': ['303', '304', '305', '306', '308', '320', '324', '325'],
-    'B+': ['321'],
-    'B': ['314', '315', '316', '317', '322', '323']
-  },
-  Female: {
-    'A+': ['209', '211', '212', '213', '214', '215'],
-    'A': ['103', '115', '201', '202', '203', '204', '205', '206', '207', '208', '216', '217'],
-    'B': ['101', '102', '104', '105', '106', '108', '109', '111', '112', '114'],
-    'C': ['117']
-  }
-};
-
 const userSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -82,9 +66,10 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid hostel ID format! Must be BH/GH + YY + 3 digits (e.g., BH25001)`
     }
   },
+  // Optional — students authenticate against SDMS/SQL credentials when unset.
   password: {
     type: String,
-    required: true
+    required: false
   },
   role: {
     type: String,
@@ -185,21 +170,12 @@ const userSchema = new mongoose.Schema({
     enum: ['Male', 'Female'],
     required: false
   },
+  // Category name comes from the dynamic HostelCategory the student is assigned to.
+  // Validated in the controller against the selected hostel's categories.
   category: {
     type: String,
     required: function() { return this.role === 'student'; },
-    validate: {
-      validator: function(v) {
-        if (this.role !== 'student') return true;
-        const allCategories = ['A+', 'A', 'B+', 'B', 'C'];
-        if (!this.gender) return allCategories.includes(v);
-        const validCategories = this.gender === 'Male'
-          ? ['A+', 'A', 'B+', 'B']
-          : ['A+', 'A', 'B', 'C'];
-        return validCategories.includes(v);
-      },
-      message: props => `${props.value} is not a valid category for the selected gender!`
-    }
+    trim: true
   },
   mealType: {
     type: String,
@@ -212,36 +188,22 @@ const userSchema = new mongoose.Schema({
     default: true,
     required: function() { return this.role === 'student'; }
   },
+  // Legacy allocation fields — yearly allocation now lives on HostelRequest (Phase 6).
+  // Kept optional for older records; room existence/availability validated in controllers.
   roomNumber: {
     type: String,
-    required: function() { return this.role === 'student'; },
-    // Note: Room validation is handled in the controller to check against actual Room model
-    // Schema-level validation removed to allow dynamic room management
-    // The controller validates room existence and gender/category matching
+    required: false,
+    trim: true
   },
   bedNumber: {
     type: String,
-    required: false, // Optional field
-    validate: {
-      validator: function(v) {
-        if (this.role !== 'student' || !v) return true; // Allow empty for non-students or optional
-        // Format validation: "320 Bed 1", "320 Bed 2", etc.
-        return /^\d{3} Bed \d+$/.test(v);
-      },
-      message: props => `${props.value} is not a valid bed number format! Must be "RoomNumber Bed Number" (e.g., "320 Bed 1")`
-    }
+    required: false,
+    trim: true
   },
   lockerNumber: {
     type: String,
-    required: false, // Optional field
-    validate: {
-      validator: function(v) {
-        if (this.role !== 'student' || !v) return true; // Allow empty for non-students or optional
-        // Format validation: "320 Locker 1", "320 Locker 2", etc.
-        return /^\d{3} Locker \d+$/.test(v);
-      },
-      message: props => `${props.value} is not a valid locker number format! Must be "RoomNumber Locker Number" (e.g., "320 Locker 1")`
-    }
+    required: false,
+    trim: true
   },
   studentPhone: {
     type: String,
@@ -334,9 +296,10 @@ const userSchema = new mongoose.Schema({
     type: Date,
     required: false
   },
+  // Account lifecycle for the student identity (yearly allocation status lives on HostelRequest).
   applicationStatus: {
     type: String,
-    enum: ['Active', 'Expired', 'Extended'],
+    enum: ['Active', 'Expired', 'Extended', 'Withdrawn'],
     default: 'Active'
   },
   nocDate: {
@@ -352,10 +315,14 @@ const userSchema = new mongoose.Schema({
     type: Date,
     required: false
   },
+  /**
+   * @deprecated Prefer applicationStatus. Kept optional for legacy documents;
+   * new code must not read or write this field.
+   */
   hostelStatus: {
     type: String,
     enum: ['Active', 'Inactive'],
-    default: 'Active'
+    required: false
   },
   graduationStatus: {
     type: String,
@@ -622,7 +589,7 @@ const userSchema = new mongoose.Schema({
 
 // Hash password before saving
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+  if (!this.isModified('password') || !this.password) return next();
   
   try {
     const salt = await bcrypt.genSalt(10);
@@ -657,11 +624,11 @@ userSchema.index({ hostelId: 1 });
 userSchema.index({ role: 1 });
 userSchema.index({ course: 1, branch: 1 });
 userSchema.index({ role: 1, academicYear: 1 }); // For filtering students by academic year
-userSchema.index({ role: 1, hostelStatus: 1 }); // For filtering students by status
-userSchema.index({ role: 1, academicYear: 1, hostelStatus: 1 }); // Compound index for common queries
-userSchema.index({ role: 1, gender: 1 }); // For filtering by gender
-userSchema.index({ role: 1, batch: 1 }); // For filtering by batch
-userSchema.index({ createdAt: 1 }); // For sorting by creation date
+userSchema.index({ role: 1, applicationStatus: 1 });
+userSchema.index({ role: 1, academicYear: 1, applicationStatus: 1 });
+userSchema.index({ role: 1, gender: 1 });
+userSchema.index({ role: 1, batch: 1 });
+userSchema.index({ createdAt: 1 });
 
 const User = mongoose.model('User', userSchema);
 

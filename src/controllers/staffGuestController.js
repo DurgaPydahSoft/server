@@ -1,9 +1,12 @@
 import StaffGuest from '../models/StaffGuest.js';
 import Room from '../models/Room.js';
-import User from '../models/User.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
 import axios from 'axios';
+import {
+  countStudentsInRoomForAcademicYear,
+  getDefaultAcademicYear
+} from '../utils/roomOccupancyUtils.js';
 
 // Global settings for daily rates (in-memory for now, can be moved to database later)
 let dailyRateSettings = {
@@ -33,18 +36,15 @@ const fetchImageAsBase64 = async (imageUrl) => {
 };
 
 // Helper function to check room availability (using roomId)
-const checkRoomAvailability = async (roomId) => {
+const checkRoomAvailability = async (roomId, academicYear = null) => {
   const room = await Room.findById(roomId).populate('hostel', 'name').populate('category', 'name');
   if (!room) {
     throw createError(404, 'Room not found');
   }
 
-  // Count students in the room (using room reference)
-  const studentCount = await User.countDocuments({
-    room: roomId,
-    role: 'student',
-    hostelStatus: 'Active'
-  });
+  const ay = academicYear || getDefaultAcademicYear();
+  // Prefer active HostelRequest occupancy for the academic year (Phase 3)
+  const studentCount = await countStudentsInRoomForAcademicYear(room, ay);
 
   // Count staff in the room (using roomId)
   const staffCount = await StaffGuest.countDocuments({
@@ -62,7 +62,8 @@ const checkRoomAvailability = async (roomId) => {
     staffCount,
     totalOccupancy,
     availableBeds,
-    isAvailable: availableBeds > 0
+    isAvailable: availableBeds > 0,
+    academicYear: ay
   };
 };
 

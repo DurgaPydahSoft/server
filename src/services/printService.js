@@ -10,7 +10,6 @@ import QRCode from 'qrcode';
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import FeeStructure from '../models/FeeStructure.js';
-import TempStudent from '../models/TempStudent.js';
 import GlobalSettings from '../models/GlobalSettings.js';
 import StaffGuest from '../models/StaffGuest.js';
 import Course from '../models/Course.js';
@@ -463,10 +462,7 @@ export const generateHostelAdmit = async (studentId) => {
     await FeeStructure.findOne({ ...baseQueryForFee, branch: null }) ||
     await FeeStructure.findOne({ ...baseQueryForFee, branch: undefined });
 
-  // Fetch temp password
-  const tempStudent = await TempStudent.findOne({ mainStudentId: student._id });
-  const finalPassword = tempStudent?.generatedPassword || null;
-
+  // Students authenticate with SDMS credentials — no generated password on admit cards
   const printLogo = await loadPrintLogoImage();
   const printQr = await loadPrintQrImage();
 
@@ -477,7 +473,7 @@ export const generateHostelAdmit = async (studentId) => {
   const margin = 10;
   const contentWidth = pageWidth - (margin * 2);
 
-  const generateOneCopy = (startY, copyLabel, password) => {
+  const generateOneCopy = (startY, copyLabel) => {
     const studentGender = student.gender?.toLowerCase();
     const studentCourse = getCourseName(student.course)?.toLowerCase();
     const hostelName = studentGender === 'female' ? 'Girls Hostel' : 'Boys Hostel';
@@ -711,7 +707,7 @@ export const generateHostelAdmit = async (studentId) => {
   };
 
   // Generate Student Copy (top half)
-  generateOneCopy(margin, 'STUDENT COPY', finalPassword);
+  generateOneCopy(margin, 'STUDENT COPY');
 
   // Add divider line
   doc.setDrawColor(100, 100, 100);
@@ -719,7 +715,7 @@ export const generateHostelAdmit = async (studentId) => {
   doc.line(margin + 5, halfPageHeight, pageWidth - margin - 5, halfPageHeight);
 
   // Generate Warden Copy (bottom half)
-  generateOneCopy(halfPageHeight + 2, 'WARDEN COPY', null);
+  generateOneCopy(halfPageHeight + 2, 'WARDEN COPY');
 
   doc.autoPrint();
   return Buffer.from(doc.output('arraybuffer'));

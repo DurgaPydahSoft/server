@@ -45,7 +45,14 @@ const roomOccupancyHistorySchema = new mongoose.Schema({
     default: 'registration'
   },
   notes: { type: String, trim: true, default: '' },
-  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' }
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'Admin' },
+  /** Link to the yearly HostelRequest that owns allocation (preferred SOT) */
+  hostelRequestId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostelRequest',
+    required: false,
+    index: true
+  }
 }, {
   timestamps: true
 });
@@ -57,6 +64,7 @@ roomOccupancyHistorySchema.index({ academicYear: 1, status: 1 }); // For filteri
 roomOccupancyHistorySchema.index({ academicYear: 1, hostel: 1 }); // For filtering by year and hostel
 roomOccupancyHistorySchema.index({ academicYear: 1, roomNumber: 1 }); // For filtering by year and room
 roomOccupancyHistorySchema.index({ student: 1, academicYear: 1, status: 1 }); // For student history queries
+roomOccupancyHistorySchema.index({ hostelRequestId: 1 });
 
 const RoomOccupancyHistory = mongoose.model(
   'RoomOccupancyHistory',

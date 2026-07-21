@@ -19,12 +19,13 @@ import featureToggleRoutes from './featureToggleRoutes.js';
 import foundLostRoutes from './foundLostRoutes.js';
 import principalRoutes from './principalRoutes.js';
 import paymentRoutes from './paymentRoutes.js';
-import studentPreRegistrationRoutes from './studentPreRegistrationRoutes.js';
 import staffAttendanceRoutes from './staffAttendanceRoutes.js';
 import globalSettingsRoutes from './globalSettingsRoutes.js';
 import uploadPastPaymentsRoutes from './uploadPastPaymentsRoutes.js';
 import hostelRoutes from './hostelRoutes.js';
 import printRoutes from './printRoutes.js';
+import studentMasterRoutes from './studentMasterRoutes.js';
+import hostelRequestRoutes from './hostelRequestRoutes.js';
 
 const router = express.Router();
 
@@ -49,11 +50,14 @@ router.use('/feature-toggles', featureToggleRoutes);
 router.use('/foundlost', foundLostRoutes);
 router.use('/principal', principalRoutes);
 router.use('/payments', paymentRoutes);
-router.use('/student', studentPreRegistrationRoutes);
 router.use('/staff-attendance', staffAttendanceRoutes);
 router.use('/global-settings', globalSettingsRoutes);
 router.use('/upload-past-payments', uploadPastPaymentsRoutes);
 router.use('/hostels', hostelRoutes);
 router.use('/print', printRoutes);
+
+// New architecture — mounted once under /api only (via this aggregator)
+router.use('/student-masters', studentMasterRoutes);
+router.use('/hostel-requests', hostelRequestRoutes);
 
 export default router; 

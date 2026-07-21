@@ -1,5 +1,4 @@
-import User, { COURSES, BRANCHES, ROOM_MAPPINGS } from '../models/User.js';
-import TempStudent from '../models/TempStudent.js';
+import User, { COURSES } from '../models/User.js';
 import Complaint from '../models/Complaint.js';
 import Leave from '../models/Leave.js';
 import Room from '../models/Room.js';
@@ -8,19 +7,15 @@ import HostelCategory from '../models/HostelCategory.js';
 import SecuritySettings from '../models/SecuritySettings.js';
 import FeeReminder from '../models/FeeReminder.js';
 import RoomOccupancyHistory from '../models/RoomOccupancyHistory.js';
-import StudentPreRegistration from '../models/StudentPreRegistration.js';
 import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service.js';
-import { sendStudentRegistrationEmail, sendPasswordResetEmail } from '../utils/emailService.js';
-import { sendAdminCredentialsSMS } from '../utils/smsService.js';
-import xlsx from 'xlsx';
+import { sendPasswordResetEmail } from '../utils/emailService.js';
 import Branch from '../models/Branch.js';
 import Course from '../models/Course.js';
 import Counter from '../models/Counter.js';
 import axios from 'axios';
 import { fetchStudentByIdentifier, testSQLConnection } from '../utils/sqlService.js';
-import { extractSQLIds, ensureMongoDBCourse, ensureMongoDBBranch } from '../utils/courseBranchResolver.js';
 import { normalizeBatchToYear, getBatchEndYear, validateAcademicYearForBatch } from '../utils/batchUtils.js';
 import {
   enrichStudentAcademics,
@@ -30,7 +25,6 @@ import {
   repairMissingRollNumber
 } from '../utils/studentAcademicEnricher.js';
 import {
-  createOccupancyHistory,
   closeActiveOccupancyHistory,
   removeStudentEnrollmentForAcademicYear,
   attachResolvedExpiryDates,
@@ -40,7 +34,8 @@ import {
   getOccupiedBedsAndLockersForAcademicYear,
   countStudentsInRoomForAcademicYear,
   isBedOccupiedForAcademicYear,
-  isLockerOccupiedForAcademicYear
+  isLockerOccupiedForAcademicYear,
+  countActiveHostelRequestsForYear
 } from '../utils/roomOccupancyUtils.js';
 import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
 import {
@@ -48,6 +43,12 @@ import {
   deleteAllStudentHostelFeesSafely,
   resolveFeesStudentId
 } from '../services/feesSyncService.js';
+import {
+  createYearlyHostelRequest,
+  closeActiveHostelRequestForUser,
+  updateActiveRequestAllocationForAdmission
+} from '../services/hostelRequestService.js';
+import HostelRequest from '../models/HostelRequest.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -97,6 +98,87 @@ const generateHostelId = async (gender) => {
   
   // Format: BH25001, GH25002, etc.
   return hostelId;
+};
+
+/**
+ * Phase 2 dual-write: ensure StudentMaster + HostelRequest exist for this AY.
+ * Does not replace User writes yet. Safe to call after User save.
+ * skipOccupancyChecks=true because addStudent already validated via legacy utils.
+ */
+const dualWriteHostelRequest = async ({
+  student,
+  academicYear,
+  hostel,
+  hostelCategory,
+  roomDoc,
+  roomNumber,
+  bedNumber,
+  lockerNumber,
+  mealType,
+  parentPermissionForOuting,
+  concession,
+  sqlAcademics,
+  adminId
+}) => {
+  const admission = (student.admissionNumber || sqlAcademics?.admissionNumber || '')
+    .toString()
+    .trim()
+    .toUpperCase();
+  if (!admission) {
+    console.warn('⚠️ dualWriteHostelRequest skipped: missing admissionNumber');
+    return null;
+  }
+
+  const existing = await HostelRequest.findOne({ admissionNumber: admission, academicYear });
+  if (existing) {
+    console.log(`ℹ️ HostelRequest already exists for ${admission} / ${academicYear}`);
+    return existing;
+  }
+
+  const hostelDoc = await Hostel.findById(hostel).select('code name');
+  if (!hostelDoc?.code) {
+    throw createError(
+      400,
+      'Hostel code is required before registration. Set a code on the hostel (PUT /api/hostels/:id).'
+    );
+  }
+
+  const { hostelRequest } = await createYearlyHostelRequest({
+    admissionNumber: admission,
+    academicYear,
+    hostelId: hostel,
+    hostelCategoryId: hostelCategory,
+    roomId: roomDoc._id,
+    roomNumber,
+    bedNumber,
+    lockerNumber,
+    mealType,
+    parentPermissionForOuting,
+    concession,
+    sdms: sqlAcademics,
+    userId: student._id,
+    adminId,
+    skipOccupancyChecks: true,
+    // Phase 3: history is audit only, emitted from the request (not a live occupancy SOT)
+    emitHistory: true
+  });
+
+  // Link any pre-existing unlinked history rows for this student/AY
+  await RoomOccupancyHistory.updateMany(
+    {
+      student: student._id,
+      academicYear,
+      status: { $in: ['Active', 'Extended'] },
+      allocatedTo: null,
+      $or: [{ hostelRequestId: null }, { hostelRequestId: { $exists: false } }]
+    },
+    { $set: { hostelRequestId: hostelRequest._id } }
+  );
+
+  console.log(
+    `✅ Dual-wrote HostelRequest ${hostelRequest.hostelSequenceId} for ${admission} / ${academicYear}`
+  );
+  return hostelRequest;
 };
 
 const inferGenderFromHostel = async (hostelId) => {
@@ -149,15 +231,10 @@ export const addStudent = async (req, res, next) => {
       throw createError(400, 'Roll number is required');
     }
 
-    const existingStudent = await User.findOne({ rollNumber: rollUpper, role: 'student' });
-    const isRenewal = Boolean(existingStudent && existingStudent.hostelStatus === 'Inactive');
-
-    if (existingStudent && existingStudent.hostelStatus === 'Active') {
-      throw createError(
-        400,
-        `Student is already active for academic year ${existingStudent.academicYear}. Register again only after the application expires.`
-      );
-    }
+    let existingStudent = await User.findOne({ rollNumber: rollUpper, role: 'student' });
+    let isRenewal = Boolean(
+      existingStudent && ['Expired', 'Withdrawn'].includes(existingStudent.applicationStatus)
+    );
 
     // Validate student exists in SQL and load academics (source of truth)
     let sqlAcademics = null;
@@ -191,6 +268,43 @@ export const addStudent = async (req, res, next) => {
       admissionNumber?.toString().trim().toUpperCase() ||
       sqlAcademics?.admissionNumber?.toString().trim().toUpperCase() ||
       undefined;
+
+    if (resolvedAdmissionNumber && academicYear) {
+      const existingHr = await HostelRequest.findOne({
+        admissionNumber: resolvedAdmissionNumber,
+        academicYear
+      }).select('_id status');
+      if (existingHr) {
+        throw createError(
+          400,
+          `A hostel request already exists for admission ${resolvedAdmissionNumber} in ${academicYear} (status: ${existingHr.status}).`
+        );
+      }
+
+      // A User without its required HostelRequest is an interrupted registration.
+      // Remove the incomplete identity so retrying creates a fresh password and completes
+      // the canonical HostelRequest write. Successful Phase 6 registrations always have
+      // a HostelRequest for their academic year.
+      if (
+        existingStudent &&
+        ['Active', 'Extended'].includes(existingStudent.applicationStatus)
+      ) {
+        console.warn(
+          `Cleaning incomplete registration for ${existingStudent.rollNumber}: active User has no HostelRequest for ${academicYear}`
+        );
+        await User.deleteOne({ _id: existingStudent._id });
+        existingStudent = null;
+        isRenewal = false;
+      }
+    } else if (
+      existingStudent &&
+      ['Active', 'Extended'].includes(existingStudent.applicationStatus)
+    ) {
+      throw createError(
+        400,
+        `Student is already active for academic year ${existingStudent.academicYear}. Register again only after the application expires.`
+      );
+    }
 
     // Hostel / category (hostelCategory) validation under new hierarchy
     if (!hostel) {
@@ -470,6 +584,20 @@ export const addStudent = async (req, res, next) => {
 
       await closeActiveOccupancyHistory({ studentId: student._id });
 
+      // Phase 6: close prior-year HostelRequest when registering for a new AY
+      if (previousAcademicYear && previousAcademicYear !== academicYear) {
+        try {
+          await closeActiveHostelRequestForUser(student, {
+            academicYear: previousAcademicYear,
+            status: 'expired',
+            statusReason: 'new_year_registration',
+            adminId: req.admin?._id
+          });
+        } catch (hrErr) {
+          console.warn('Prior-year HostelRequest close skipped:', hrErr.message);
+        }
+      }
+
       if (previousAcademicYear && previousAcademicYear !== academicYear) {
         const hasPreviousHistory = await RoomOccupancyHistory.exists({
           student: student._id,
@@ -514,10 +642,7 @@ export const addStudent = async (req, res, next) => {
       if (parentPermissionForOuting !== undefined) {
         student.parentPermissionForOuting = Boolean(parentPermissionForOuting);
       }
-      student.roomNumber = roomNumber;
-      student.room = roomDoc._id;
-      student.bedNumber = bedNumber;
-      student.lockerNumber = lockerNumber;
+      // Phase 6: do not write yearly allocation onto User (HostelRequest is SOT)
       if (studentPhone) student.studentPhone = studentPhone;
       if (parentPhone) student.parentPhone = parentPhone;
       if (motherName) student.motherName = motherName;
@@ -526,14 +651,11 @@ export const addStudent = async (req, res, next) => {
       if (localGuardianPhone) student.localGuardianPhone = localGuardianPhone;
       student.batch = normalizeBatchToYear(sqlAcademics?.batch || batch || student.batch);
       student.academicYear = academicYear;
-      student.hostelStatus = 'Active';
       student.applicationStatus = 'Active';
       student.set('applicationExpiryDate', undefined);
       student.set('applicationExpiryExtendedAt', undefined);
       student.set('applicationExpiryExtendedBy', undefined);
       if (finalEmail) student.email = finalEmail;
-      student.hostel = hostel;
-      student.hostelCategory = hostelCategory;
       if (guardianPhoto1Url) student.guardianPhoto1 = guardianPhoto1Url;
       if (guardianPhoto2Url) student.guardianPhoto2 = guardianPhoto2Url;
       student.concession = concessionData.concession;
@@ -551,26 +673,27 @@ export const addStudent = async (req, res, next) => {
       await repairMissingRollNumber(student, sqlAcademics);
       await student.save({ validateModifiedOnly: true });
 
-      await createOccupancyHistory({
-        student,
-        academicYear,
-        courseName: sqlAcademics?.course,
-        branchName: sqlAcademics?.branch,
-        yearOfStudy: sqlAcademics?.year,
-        adminId: req.admin?._id,
-        expiryReason: 'registration'
-      });
-
+      // Phase 3: occupancy audit emitted from HostelRequest dual-write (not a live snapshot)
+      let hostelRequest = null;
       try {
-        const preRegistration = await StudentPreRegistration.findOne({
-          rollNumber: student.rollNumber,
-          status: 'pending'
+        hostelRequest = await dualWriteHostelRequest({
+          student,
+          academicYear,
+          hostel,
+          hostelCategory,
+          roomDoc,
+          roomNumber,
+          bedNumber,
+          lockerNumber,
+          mealType,
+          parentPermissionForOuting,
+          concession: concessionData.concession,
+          sqlAcademics,
+          adminId: req.admin?._id
         });
-        if (preRegistration) {
-          await StudentPreRegistration.findByIdAndDelete(preRegistration._id);
-        }
-      } catch (preregError) {
-        console.error('❌ Error deleting pre-registration record:', preregError);
+      } catch (hrErr) {
+        console.error('❌ HostelRequest dual-write failed on returning-student registration:', hrErr);
+        throw hrErr;
       }
 
       try {
@@ -587,7 +710,7 @@ export const addStudent = async (req, res, next) => {
 
       const enrichedStudent = await enrichStudentAcademics(student);
       console.log(
-        `♻️ Renewed returning student ${student.rollNumber}: ${previousAcademicYear} → ${academicYear} (password unchanged)`
+        `♻️ Registered returning student ${student.rollNumber} for academic year ${academicYear} (new HostelRequest; password unchanged)`
       );
 
       return res.json({
@@ -595,27 +718,23 @@ export const addStudent = async (req, res, next) => {
         data: {
           student: enrichedStudent,
           isRenewal: true,
-          passwordReused: true,
-          generatedPassword: null,
-          emailSent: false,
-          smsSent: false,
-          message: `Returning student renewed for ${academicYear}. They can log in with their existing password.`
-        }
+          hostelRequestId: hostelRequest?._id || null,
+          hostelSequenceId: hostelRequest?.hostelSequenceId || null
+        },
+        message: `Student registered for academic year ${academicYear}`
       });
     }
 
     const genderForHostelId =
       normalizedGender || (await inferGenderFromHostel(hostel)) || 'Male';
-    const generatedPassword = User.generateRandomPassword();
     const hostelId = await generateHostelId(genderForHostelId);
     console.log('Generated hostel ID:', hostelId);
 
-    // Create new student (no expiry date at registration — configured in Application Expiry Settings)
+    // Create new student — login uses SDMS/SQL credentials (no local password generated)
     const student = new User({
       name,
       rollNumber: rollUpper,
       admissionNumber: resolvedAdmissionNumber,
-      password: generatedPassword,
       role: 'student',
       ...(normalizedGender && { gender: normalizedGender }),
       ...(sqlCourseId && { sqlCourseId }),
@@ -624,10 +743,6 @@ export const addStudent = async (req, res, next) => {
       category: finalCategoryName,
       mealType,
       parentPermissionForOuting: parentPermissionForOuting !== undefined ? parentPermissionForOuting : true,
-      roomNumber,
-      room: roomDoc._id,
-      bedNumber,
-      lockerNumber,
       studentPhone,
       parentPhone,
       motherName,
@@ -639,8 +754,6 @@ export const addStudent = async (req, res, next) => {
       applicationStatus: 'Active',
       email: finalEmail,
       hostelId,
-      hostel,
-      hostelCategory,
       isPasswordChanged: false,
       guardianPhoto1: guardianPhoto1Url,
       guardianPhoto2: guardianPhoto2Url,
@@ -653,43 +766,31 @@ export const addStudent = async (req, res, next) => {
 
     const savedStudent = await student.save();
 
-    await createOccupancyHistory({
-      student: savedStudent,
-      academicYear,
-      courseName: sqlAcademics?.course,
-      branchName: sqlAcademics?.branch,
-      yearOfStudy: sqlAcademics?.year,
-      adminId: req.admin?._id
-    });
-
-    // Check if this student was added from a pre-registration and delete the pre-registration record
+    // Phase 3: occupancy audit emitted from HostelRequest dual-write (not a live snapshot)
+    let hostelRequest = null;
     try {
-      const preRegistration = await StudentPreRegistration.findOne({ 
-        rollNumber: savedStudent.rollNumber,
-        status: 'pending'
+      hostelRequest = await dualWriteHostelRequest({
+        student: savedStudent,
+        academicYear,
+        hostel,
+        hostelCategory,
+        roomDoc,
+        roomNumber,
+        bedNumber,
+        lockerNumber,
+        mealType,
+        parentPermissionForOuting,
+        concession: concessionData.concession,
+        sqlAcademics,
+        adminId: req.admin?._id
       });
-      
-      if (preRegistration) {
-        console.log('🗑️ Deleting pre-registration record for approved student:', savedStudent.rollNumber);
-        await StudentPreRegistration.findByIdAndDelete(preRegistration._id);
-        console.log('✅ Pre-registration record deleted successfully');
-      }
-    } catch (preregError) {
-      console.error('❌ Error deleting pre-registration record:', preregError);
-      // Don't fail the student creation if pre-registration deletion fails
+    } catch (hrErr) {
+      console.error('❌ HostelRequest dual-write failed on new-student registration:', hrErr);
+      // Do not leave an active User that is invisible to the HostelRequest-backed
+      // Students page. A retry can safely create the identity again.
+      await User.deleteOne({ _id: savedStudent._id });
+      throw hrErr;
     }
-
-    // Create TempStudent record for pending password reset
-    const tempStudent = new TempStudent({
-      name: savedStudent.name,
-      rollNumber: savedStudent.rollNumber,
-      studentPhone: savedStudent.studentPhone,
-      email: savedStudent.email || '', // Handle undefined email
-      generatedPassword: generatedPassword,
-      isFirstLogin: true,
-      mainStudentId: savedStudent._id,
-    });
-    await tempStudent.save();
 
     // Create fee reminder for the student
     try {
@@ -707,52 +808,6 @@ export const addStudent = async (req, res, next) => {
 
     await syncStudentHostelFeeSafely(savedStudent, { academicYear });
 
-    // Send email notification to student
-    let emailSent = false;
-    let emailError = null;
-    
-    if (finalEmail) {
-      try {
-        const loginUrl = `${req.protocol}://${req.get('host')}/login`;
-        await sendStudentRegistrationEmail(
-          finalEmail,
-          name,
-          rollNumber.toUpperCase(),
-          generatedPassword,
-          loginUrl
-        );
-        emailSent = true;
-        console.log('📧 Registration email sent successfully to:', finalEmail);
-      } catch (emailErr) {
-        emailError = emailErr.message;
-        console.error('📧 Failed to send registration email to:', finalEmail, emailErr);
-        // Don't fail the registration if email fails
-      }
-    }
-
-    // Send SMS notification to student
-    let smsSent = false;
-    let smsError = null;
-    
-    if (studentPhone && studentPhone.trim()) {
-      try {
-        console.log('📱 Sending student credentials via SMS to:', studentPhone);
-        const smsResult = await sendAdminCredentialsSMS(
-          studentPhone,
-          rollNumber.toUpperCase(), // Using rollNumber as username
-          generatedPassword
-        );
-        smsSent = true;
-        console.log('📱 SMS sent successfully:', smsResult);
-      } catch (smsErr) {
-        smsError = smsErr.message;
-        console.error('📱 Failed to send SMS to:', studentPhone, smsErr);
-        // Don't fail the registration if SMS fails
-      }
-    } else {
-      console.log('📱 No student phone number provided, skipping SMS');
-    }
-
     const enrichedStudent = await enrichStudentAcademics(savedStudent);
 
     res.json({
@@ -760,12 +815,8 @@ export const addStudent = async (req, res, next) => {
       data: {
         student: enrichedStudent,
         isRenewal: false,
-        passwordReused: false,
-        generatedPassword,
-        emailSent,
-        emailError,
-        smsSent,
-        smsError
+        hostelRequestId: hostelRequest?._id || null,
+        hostelSequenceId: hostelRequest?.hostelSequenceId || null
       }
     });
   } catch (error) {
@@ -873,30 +924,24 @@ function normalizeGender(gender) {
   return null; // Invalid gender
 }
 
-// Helper to normalize category with case-insensitive handling
+// Helper to normalize category names. Categories are dynamic (HostelCategory),
+// so this only cleans up common legacy spellings and passes everything else through.
 function normalizeCategory(category) {
   if (!category) return null;
-  
-  const categoryUpper = category.toUpperCase();
-  
-  // Handle various category formats
+
+  const trimmed = String(category).trim();
+  if (!trimmed) return null;
+
+  const categoryUpper = trimmed.toUpperCase();
   switch (categoryUpper) {
-    case 'A+':
     case 'A PLUS':
     case 'A_PLUS':
       return 'A+';
-    case 'A':
-      return 'A';
-    case 'B+':
     case 'B PLUS':
     case 'B_PLUS':
       return 'B+';
-    case 'B':
-      return 'B';
-    case 'C':
-      return 'C';
     default:
-      return null; // Invalid category
+      return trimmed;
   }
 }
 
@@ -1032,534 +1077,17 @@ const validateAcademicYear = (year) => {
 };
 
 // Preview bulk student upload
-export const previewBulkUpload = async (req, res, next) => {
-  if (!req.file) {
-    return next(createError(400, 'No Excel file uploaded.'));
-  }
-
-  const results = {
-    validStudents: [],
-    invalidStudents: [],
-    rawData: [], // Add raw data for debugging
-  };
-
-  try {
-    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const jsonData = xlsx.utils.sheet_to_json(worksheet);
-
-    if (!jsonData || jsonData.length === 0) {
-      return next(createError(400, 'Excel file is empty or data could not be read.'));
-    }
-
-    // Debug: Log the first row to see actual column names
-    console.log('First row from Excel:', jsonData[0]);
-    console.log('Available columns:', Object.keys(jsonData[0]));
-    console.log('Total rows:', jsonData.length);
-
-    // Import models for validation
-    const CourseModel = (await import('../models/Course.js')).default;
-    const BranchModel = (await import('../models/Branch.js')).default;
-
-    for (let i = 0; i < jsonData.length; i++) {
-      const row = jsonData[i];
-      const rowIndex = i + 2;
-      
-      // Store raw data for debugging
-      results.rawData.push({
-        row: rowIndex,
-        data: row,
-        columnNames: Object.keys(row)
-      });
-
-      // Flexible column mapping - handle different possible column names
-      const Name = row.Name || row.name || row['Student Name'] || row['STUDENT NAME'] || row['Full Name'] || row['FULL NAME'];
-      const RollNumber = row.RollNumber || row.rollNumber || row['Roll Number'] || row['ROLL NUMBER'] || row['Roll No'] || row['ROLL NO'];
-      const Gender = row.Gender || row.gender || row['Student Gender'] || row['STUDENT GENDER'];
-      const Course = row.Course || row.course || row['Program'] || row['PROGRAM'] || row['Degree'] || row['DEGREE'];
-      const Branch = row.Branch || row.branch || row['Specialization'] || row['SPECIALIZATION'] || row['Department'] || row['DEPARTMENT'];
-      const Year = row.Year || row.year || row['Year of Study'] || row['YEAR OF STUDY'] || row['Current Year'] || row['CURRENT YEAR'];
-      const Category = row.Category || row.category || row['Student Category'] || row['STUDENT CATEGORY'] || row['Fee Category'] || row['FEE CATEGORY'];
-      const RoomNumber = row.RoomNumber || row.roomNumber || row['Room Number'] || row['ROOM NUMBER'] || row['Room No'] || row['ROOM NO'];
-      const StudentPhone = row.StudentPhone || row.studentPhone || row['Student Phone'] || row['STUDENT PHONE'] || row['Phone'] || row['PHONE'];
-      const ParentPhone = row.ParentPhone || row.parentPhone || row['Parent Phone'] || row['PARENT PHONE'] || row['Guardian Phone'] || row['GUARDIAN PHONE'];
-      const Batch = row.Batch || row.batch || row['Batch Year'] || row['BATCH YEAR'] || row['Admission Batch'] || row['ADMISSION BATCH'];
-      const AcademicYear = row.AcademicYear || row.academicYear || row['Academic Year'] || row['ACADEMIC YEAR'] || row['Current Academic Year'] || row['CURRENT ACADEMIC YEAR'];
-      const Email = row.Email || row.email || row['Email'] || row['EMAIL'];
-
-      const errors = {};
-
-      // Validate required fields
-      if (!Name) errors.Name = 'Name is required.';
-      if (!RollNumber) errors.RollNumber = 'Roll number is required.';
-      if (!ParentPhone) errors.ParentPhone = 'Parent phone is required.';
-      if (!RoomNumber) errors.RoomNumber = 'Room number is required.';
-      if (!Batch) errors.Batch = 'Batch is required.';
-      if (!AcademicYear) errors.AcademicYear = 'Academic year is required.';
-
-      // Validate gender with case-insensitive handling
-      if (!Gender) {
-        errors.Gender = 'Gender is required.';
-      } else {
-        const normalizedGender = normalizeGender(String(Gender).trim());
-        if (!normalizedGender) {
-          errors.Gender = `Invalid gender "${String(Gender).trim()}". Must be Male/Female/M/F/Boy/Girl.`;
-        }
-      }
-
-      // Validate course with case-insensitive handling
-      if (!Course) {
-        errors.Course = 'Course is required.';
-      } else {
-        const normalizedCourseName = normalizeCourseName(String(Course).trim());
-        const courseDoc = await CourseModel.findOne({ 
-          name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
-          isActive: true 
-        });
-        
-        if (!courseDoc) {
-          errors.Course = `Course "${String(Course).trim()}" (normalized to "${normalizedCourseName}") not found in the database.`;
-        }
-      }
-
-      // Validate branch with case-insensitive handling
-      if (!Branch) {
-        errors.Branch = 'Branch is required.';
-      } else if (Course) {
-        const normalizedCourseName = normalizeCourseName(String(Course).trim());
-        const branchNameMapping = getBranchNameMapping(String(Course).trim(), String(Branch).trim());
-        
-        const courseDoc = await CourseModel.findOne({ 
-          name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
-          isActive: true 
-        });
-        
-        if (courseDoc) {
-          const branchDoc = await BranchModel.findOne({ 
-            name: { $regex: new RegExp(`^${branchNameMapping}$`, 'i') },
-            course: courseDoc._id,
-            isActive: true 
-          });
-          
-          if (!branchDoc) {
-            // Try alternative branch name formats
-            const alternativeBranchNames = [
-              branchNameMapping.toUpperCase(),
-              branchNameMapping.toLowerCase(),
-              branchNameMapping.charAt(0).toUpperCase() + branchNameMapping.slice(1).toLowerCase()
-            ];
-            
-            let foundBranch = false;
-            for (const altBranchName of alternativeBranchNames) {
-              const altBranchDoc = await BranchModel.findOne({ 
-                name: { $regex: new RegExp(`^${altBranchName}$`, 'i') },
-                course: courseDoc._id,
-                isActive: true 
-              });
-              if (altBranchDoc) {
-                foundBranch = true;
-                break;
-              }
-            }
-            
-            if (!foundBranch) {
-              errors.Branch = `Branch "${String(Branch).trim()}" (mapped to "${branchNameMapping}") not found for course "${normalizedCourseName}".`;
-            }
-          }
-        }
-      }
-
-      // Validate category with case-insensitive handling
-      if (!Category) {
-        errors.Category = 'Category is required.';
-      } else {
-        const normalizedCategory = normalizeCategory(String(Category).trim());
-        if (!normalizedCategory) {
-          errors.Category = `Invalid category "${String(Category).trim()}". Must be A+, A, B+, B for Male or A+, A, B, C for Female.`;
-        }
-      }
-
-      // Validate year (optional but must be valid if provided)
-      if (Year) {
-        const yearValue = parseInt(Year, 10);
-        if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
-          errors.Year = `Invalid year "${Year}". Must be a number between 1 and 10.`;
-        }
-      } else {
-        // Calculate and add the year based on batch for preview
-        if (Batch && Course) {
-          const normalizedCourseName = normalizeCourseName(String(Course).trim());
-          const courseDoc = await CourseModel.findOne({ 
-            name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
-            isActive: true 
-          });
-          
-          if (courseDoc) {
-            const courseDuration = courseDoc.duration || 4;
-            const calculatedYear = await calculateCurrentYear(Batch, courseDuration, courseDoc._id);
-            row.Year = calculatedYear;
-            console.log(`Preview: Calculated year for batch ${Batch}: ${calculatedYear} (course: ${normalizedCourseName}, duration: ${courseDuration})`);
-          }
-        }
-      }
-
-      // Validate student phone (optional but must be valid if provided)
-      if (StudentPhone && !/^[0-9]{10}$/.test(String(StudentPhone))) {
-        errors.StudentPhone = 'Must be 10 digits.';
-      }
-
-      // Validate parent phone
-      if (ParentPhone && !/^[0-9]{10}$/.test(String(ParentPhone))) {
-        errors.ParentPhone = 'Must be 10 digits.';
-      }
-
-      // Validate email (optional but must be valid if provided)
-      if (Email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(Email))) {
-        errors.Email = 'Invalid email format.';
-      }
-
-      // Validate batch format
-      if (Batch) {
-        if (/^\d{4}$/.test(String(Batch))) {
-          // Single year provided - validate it's a reasonable year
-          const startYear = parseInt(Batch, 10);
-          if (startYear < 2000 || startYear > 2100) {
-            errors.Batch = 'Starting year must be between 2000-2100.';
-          }
-        } else if (!/^\d{4}-\d{4}$/.test(String(Batch))) {
-          errors.Batch = 'Format must be YYYY-YYYY or just YYYY.';
-        }
-      }
-
-      // Validate academic year format
-      if (AcademicYear && !/^\d{4}-\d{4}$/.test(String(AcademicYear))) {
-        errors.AcademicYear = 'Format must be YYYY-YYYY.';
-      } else if (AcademicYear) {
-        const [start, end] = String(AcademicYear).split('-').map(Number);
-        if (end !== start + 1) {
-          errors.AcademicYear = 'Years must be consecutive.';
-        }
-      }
-
-      // Check if there are any errors
-      if (Object.keys(errors).length > 0) {
-        results.invalidStudents.push({
-          row: rowIndex,
-          data: row,
-          errors: errors
-        });
-      } else {
-      results.validStudents.push(row);
-      }
-    }
-
-    res.json({ 
-      success: true, 
-      data: results,
-      debug: {
-        totalRows: jsonData.length,
-        firstRowColumns: Object.keys(jsonData[0]),
-        firstRowData: jsonData[0]
-      }
-    });
-
-  } catch (error) {
-    next(error);
-  }
+export const previewBulkUpload = async (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: 'Bulk upload has been removed. Register students individually from SQL.'
+  });
 };
 
-// Bulk add new students (now for committing)
-export const bulkAddStudents = async (req, res, next) => {
-  const { students } = req.body;
-  if (!students || !Array.isArray(students)) {
-    return next(createError(400, 'A list of students is required.'));
-  }
-
-  const results = {
-    successCount: 0,
-    failureCount: 0,
-    addedStudents: [],
-    errors: [],
-    emailResults: {
-      sent: 0,
-      failed: 0,
-      errors: []
-    }
-  };
-
-  for (const studentData of students) {
-    // Flexible column mapping - handle different possible column names
-    const Name = studentData.Name || studentData.name || studentData['Student Name'] || studentData['STUDENT NAME'] || studentData['Full Name'] || studentData['FULL NAME'];
-    const RollNumber = studentData.RollNumber || studentData.rollNumber || studentData['Roll Number'] || studentData['ROLL NUMBER'] || studentData['Roll No'] || studentData['ROLL NO'];
-    const Gender = studentData.Gender || studentData.gender || studentData['Student Gender'] || studentData['STUDENT GENDER'];
-    const Course = studentData.Course || studentData.course || studentData['Program'] || studentData['PROGRAM'] || studentData['Degree'] || studentData['DEGREE'];
-    const Branch = studentData.Branch || studentData.branch || studentData['Specialization'] || studentData['SPECIALIZATION'] || studentData['Department'] || studentData['DEPARTMENT'];
-    const Year = studentData.Year || studentData.year || studentData['Year of Study'] || studentData['YEAR OF STUDY'] || studentData['Current Year'] || studentData['CURRENT YEAR'];
-    const Category = studentData.Category || studentData.category || studentData['Student Category'] || studentData['STUDENT CATEGORY'] || studentData['Fee Category'] || studentData['FEE CATEGORY'];
-    const RoomNumber = studentData.RoomNumber || studentData.roomNumber || studentData['Room Number'] || studentData['ROOM NUMBER'] || studentData['Room No'] || studentData['ROOM NO'];
-    const StudentPhone = studentData.StudentPhone || studentData.studentPhone || studentData['Student Phone'] || studentData['STUDENT PHONE'] || studentData['Phone'] || studentData['PHONE'];
-    const ParentPhone = studentData.ParentPhone || studentData.parentPhone || studentData['Parent Phone'] || studentData['PARENT PHONE'] || studentData['Guardian Phone'] || studentData['GUARDIAN PHONE'];
-    const Batch = studentData.Batch || studentData.batch || studentData['Batch Year'] || studentData['BATCH YEAR'] || studentData['Admission Batch'] || studentData['ADMISSION BATCH'];
-    const AcademicYear = studentData.AcademicYear || studentData.academicYear || studentData['Academic Year'] || studentData['ACADEMIC YEAR'] || studentData['Current Academic Year'] || studentData['CURRENT ACADEMIC YEAR'];
-    const Email = studentData.Email || studentData.email || studentData['Email'] || studentData['EMAIL'];
-
-    try {
-      const rollNumberUpper = String(RollNumber).trim().toUpperCase();
-      
-      // Check for duplicates in both User and TempStudent collections
-      const [existingStudent, existingTempStudent] = await Promise.all([
-        User.findOne({ rollNumber: rollNumberUpper }),
-        TempStudent.findOne({ rollNumber: rollNumberUpper })
-      ]);
-
-      if (existingStudent) {
-        results.failureCount++;
-        results.errors.push({ error: `Student with roll number ${rollNumberUpper} already exists in the main database.`, details: studentData });
-        continue;
-      }
-
-      if (existingTempStudent) {
-        results.failureCount++;
-        results.errors.push({ error: `Student with roll number ${rollNumberUpper} already exists in temporary records. Please clear temp students first or use a different roll number.`, details: studentData });
-        continue;
-      }
-
-      const generatedPassword = User.generateRandomPassword();
-
-      // Find course and branch ObjectIds by name with robust case handling
-      const CourseModel = (await import('../models/Course.js')).default;
-      const BranchModel = (await import('../models/Branch.js')).default;
-      
-      // Normalize course name for case-insensitive matching
-      const normalizedCourseName = normalizeCourseName(String(Course).trim());
-      console.log(`Looking for course: "${String(Course).trim()}" (normalized to "${normalizedCourseName}")`);
-      
-      let courseDoc = await CourseModel.findOne({ 
-        name: { $regex: new RegExp(`^${normalizedCourseName}$`, 'i') },
-        isActive: true 
-      });
-      
-      if (!courseDoc) {
-        results.failureCount++;
-        results.errors.push({ 
-          error: `Course "${normalizedCourseName}" not found in the database.`, 
-          details: studentData 
-        });
-        continue;
-      }
-
-      // Map short branch names to full names based on the seeded data
-      const branchNameMapping = getBranchNameMapping(String(Course).trim(), String(Branch).trim());
-      console.log(`Mapping branch: "${String(Branch).trim()}" to "${branchNameMapping}" for course "${String(Course).trim()}" (normalized to "${normalizedCourseName}")`);
-      
-      let branchDoc = await BranchModel.findOne({ 
-        name: { $regex: new RegExp(`^${branchNameMapping}$`, 'i') },
-        course: courseDoc._id,
-        isActive: true 
-      });
-
-      // Try alternative branch name formats if not found
-      if (!branchDoc) {
-        const alternativeBranchNames = [
-          branchNameMapping.toUpperCase(),
-          branchNameMapping.toLowerCase(),
-          branchNameMapping.charAt(0).toUpperCase() + branchNameMapping.slice(1).toLowerCase()
-        ];
-        
-        for (const altBranchName of alternativeBranchNames) {
-          branchDoc = await BranchModel.findOne({ 
-            name: { $regex: new RegExp(`^${altBranchName}$`, 'i') },
-            course: courseDoc._id,
-            isActive: true 
-          });
-          if (branchDoc) {
-            console.log(`Found branch with alternative name: "${altBranchName}"`);
-            break;
-          }
-        }
-      }
-
-      if (!branchDoc) {
-        results.failureCount++;
-        results.errors.push({ 
-          error: `Branch "${String(Branch).trim()}" (mapped to "${branchNameMapping}") not found for course "${normalizedCourseName}".`, 
-          details: studentData 
-        });
-        continue;
-      }
-
-      // Handle email properly - only set if provided and not empty
-      const emailValue = Email ? String(Email).trim() : '';
-      const finalEmail = emailValue === '' ? undefined : emailValue;
-
-      // Normalize gender with case-insensitive handling
-      const normalizedGender = normalizeGender(String(Gender).trim());
-      if (!normalizedGender) {
-        results.failureCount++;
-        results.errors.push({ 
-          error: `Invalid gender "${String(Gender).trim()}". Must be "Male" or "Female".`, 
-          details: studentData 
-        });
-        continue;
-      }
-
-      // Generate hostel ID for bulk students (after gender normalization)
-      const hostelId = await generateHostelId(normalizedGender);
-      console.log('Generated hostel ID for bulk student:', hostelId, 'for gender:', normalizedGender);
-
-      // Normalize category with case-insensitive handling
-      const normalizedCategory = normalizeCategory(String(Category).trim());
-      if (!normalizedCategory) {
-        results.failureCount++;
-        results.errors.push({ 
-          error: `Invalid category "${String(Category).trim()}". Must be A+, A, B+, B for Male or A+, A, B, C for Female.`, 
-          details: studentData 
-        });
-        continue;
-      }
-
-      // Store batch as admission start year (YYYY), matching SQL
-      const finalBatch = normalizeBatchToYear(Batch);
-      if (!finalBatch || !/^\d{4}$/.test(finalBatch)) {
-        results.failureCount++;
-        results.errors.push({
-          error: `Invalid batch "${Batch}". Use YYYY (e.g., 2024).`,
-          details: studentData
-        });
-        continue;
-      }
-      const batchStartYear = parseInt(finalBatch, 10);
-      if (batchStartYear < 2000 || batchStartYear > 2100) {
-        results.failureCount++;
-        results.errors.push({
-          error: `Invalid batch year "${finalBatch}". Must be between 2000-2100.`,
-          details: studentData
-        });
-        continue;
-      }
-
-      // Calculate year based on batch and current date, or use provided year if available
-      let yearValue;
-      if (Year) {
-        yearValue = parseInt(Year, 10);
-        if (isNaN(yearValue) || yearValue < 1 || yearValue > 10) {
-          results.failureCount++;
-          results.errors.push({
-            error: `Invalid year "${Year}". Must be a number between 1 and 10.`,
-            details: studentData
-          });
-          continue;
-        }
-      } else {
-        const courseDuration = courseDoc.duration || 4;
-        yearValue = await calculateCurrentYear(finalBatch, courseDuration, courseDoc._id);
-        console.log(`Calculated year for batch ${finalBatch}: ${yearValue} (course duration: ${courseDuration})`);
-      }
-
-      const newStudent = new User({
-        name: String(Name).trim(),
-        rollNumber: rollNumberUpper,
-        password: generatedPassword,
-        role: 'student',
-        gender: normalizedGender,
-        course: courseDoc._id, // Use ObjectId
-        year: yearValue,
-        branch: branchDoc._id, // Use ObjectId
-        category: normalizedCategory,
-        mealType: 'non-veg', // Default to non-veg for bulk upload
-        parentPermissionForOuting: true, // Default to true for bulk upload
-        roomNumber: String(RoomNumber).trim(),
-        studentPhone: StudentPhone ? String(StudentPhone).trim() : '',
-        parentPhone: String(ParentPhone).trim(),
-        batch: finalBatch,
-        academicYear: String(AcademicYear).trim(),
-        email: finalEmail, // Use properly handled email
-        hostelId,
-        isPasswordChanged: false,
-      });
-
-      const savedStudent = await newStudent.save();
-
-      const tempStudent = new TempStudent({
-        name: savedStudent.name,
-        rollNumber: savedStudent.rollNumber,
-        studentPhone: savedStudent.studentPhone,
-        email: savedStudent.email || '', // Handle undefined email
-        generatedPassword: generatedPassword,
-        isFirstLogin: true,
-        mainStudentId: savedStudent._id,
-      });
-      await tempStudent.save();
-
-      // Create fee reminder for the student
-      try {
-        const registrationDate = new Date();
-        await FeeReminder.createForStudent(
-          savedStudent._id,
-          registrationDate,
-          String(AcademicYear).trim()
-        );
-        console.log('✅ Fee reminder created for bulk student:', savedStudent.rollNumber);
-      } catch (feeError) {
-        console.error('❌ Error creating fee reminder for bulk student:', savedStudent.rollNumber, feeError);
-        // Don't fail the registration if fee reminder creation fails
-      }
-
-      await syncStudentHostelFeeSafely(savedStudent, {
-        academicYear: String(AcademicYear).trim()
-      });
-
-      // Send email notification to student
-      let emailSent = false;
-      let emailError = null;
-      
-      if (finalEmail) {
-        try {
-          const loginUrl = `${req.protocol}://${req.get('host')}/login`;
-          await sendStudentRegistrationEmail(
-            finalEmail,
-            String(Name).trim(),
-            rollNumberUpper,
-            generatedPassword,
-            loginUrl
-          );
-          emailSent = true;
-          results.emailResults.sent++;
-          console.log('📧 Bulk registration email sent successfully to:', finalEmail);
-        } catch (emailErr) {
-          emailError = emailErr.message;
-          results.emailResults.failed++;
-          results.emailResults.errors.push({
-            email: finalEmail,
-            student: String(Name).trim(),
-            rollNumber: rollNumberUpper,
-            error: emailErr.message
-          });
-          console.error('📧 Failed to send bulk registration email to:', finalEmail, emailErr);
-          // Don't fail the registration if email fails
-        }
-      }
-
-      results.successCount++;
-      results.addedStudents.push({
-        name: savedStudent.name,
-        rollNumber: savedStudent.rollNumber,
-        generatedPassword: generatedPassword,
-        emailSent,
-        emailError
-      });
-
-    } catch (error) {
-      results.failureCount++;
-      results.errors.push({ error: error.message, details: studentData });
-    }
-  }
-
-  res.json({
-    success: true,
-    message: 'Bulk upload process completed.',
-    data: results
+export const bulkAddStudents = async (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: 'Bulk upload has been removed. Register students individually from SQL.'
   });
 };
 
@@ -1610,17 +1138,15 @@ export const getStudents = async (req, res, next) => {
       if (hostel) query.hostel = hostel;
 
       if (hostelStatus) {
-        if (hostelStatus === 'Active') {
-          query.hostelStatus = 'Active';
-          query.applicationStatus = { $nin: ['Expired', 'Withdrawn'] };
-        } else if (hostelStatus === 'Inactive') {
-          query.$or = [
-            { hostelStatus: 'Inactive' },
-            { applicationStatus: 'Expired' },
-            { applicationStatus: 'Withdrawn' }
-          ];
+        const statusNorm = String(hostelStatus).toLowerCase();
+        if (statusNorm === 'active' || hostelStatus === 'Active') {
+          query.applicationStatus = { $in: ['Active', 'Extended'] };
+        } else if (statusNorm === 'expired' || hostelStatus === 'Inactive') {
+          query.applicationStatus = { $in: ['Expired', 'Withdrawn'] };
+        } else if (statusNorm === 'cancelled') {
+          query.applicationStatus = 'Withdrawn';
         } else {
-          query.hostelStatus = hostelStatus;
+          query.applicationStatus = hostelStatus;
         }
       }
 
@@ -1738,7 +1264,7 @@ export const updateStudent = async (req, res, next) => {
       throw createError(404, 'Student not found');
     }
 
-    const previousHostelStatus = student.hostelStatus;
+    const previousApplicationStatus = student.applicationStatus;
     const academicSnapshot = await enrichStudentAcademics(student);
 
     // Resolve hostel/category for room validation under new hierarchy
@@ -1816,9 +1342,14 @@ export const updateStudent = async (req, res, next) => {
       throw createError(400, 'Invalid email address format.');
     }
 
-    // Validate hostelStatus if present
-    if (hostelStatus && !['Active', 'Inactive'].includes(hostelStatus)) {
-      throw createError(400, 'Invalid hostel status');
+    // Validate status if present (legacy hostelStatus or applicationStatus values)
+    if (
+      hostelStatus &&
+      !['Active', 'Inactive', 'Expired', 'Extended', 'Withdrawn', 'active', 'expired', 'cancelled'].includes(
+        hostelStatus
+      )
+    ) {
+      throw createError(400, 'Invalid status');
     }
 
     // Validate bed and locker assignment if provided
@@ -1906,21 +1437,55 @@ export const updateStudent = async (req, res, next) => {
       student.parentPermissionForOuting = Boolean(parentPermissionForOuting);
       console.log('🔧 Updated student.parentPermissionForOuting to:', student.parentPermissionForOuting);
     }
-    if (roomNumber) {
-      student.roomNumber = roomNumber;
-      if (roomDoc?._id) {
-        student.room = roomDoc._id;
-      }
-    }
-    if (targetHostelId) student.hostel = targetHostelId;
-    if (targetCategoryId) student.hostelCategory = targetCategoryId;
-    if (bedNumber !== undefined) student.bedNumber = bedNumber;
-    if (lockerNumber !== undefined) student.lockerNumber = lockerNumber;
-    // studentPhone / parentPhone — read from SQL at display time (not updated in MongoDB)
+    // Phase 6: allocation lives on HostelRequest — sync there, not onto User room/hostel fields
     if (batch) student.batch = normalizeBatchToYear(batch);
     if (academicYear) student.academicYear = academicYear;
-    if (hostelStatus) student.hostelStatus = hostelStatus;
+    if (hostelStatus) {
+      const statusNorm = String(hostelStatus).toLowerCase();
+      if (statusNorm === 'inactive' || statusNorm === 'expired') {
+        student.applicationStatus = 'Expired';
+      } else if (statusNorm === 'active') {
+        student.applicationStatus = 'Active';
+      } else if (statusNorm === 'cancelled' || statusNorm === 'withdrawn') {
+        student.applicationStatus = 'Withdrawn';
+      } else if (['Active', 'Expired', 'Extended', 'Withdrawn'].includes(hostelStatus)) {
+        student.applicationStatus = hostelStatus;
+      }
+    }
     if (email) student.email = email;
+
+    const allocationTouched =
+      Boolean(roomNumber) ||
+      Boolean(targetHostelId) ||
+      Boolean(targetCategoryId) ||
+      bedNumber !== undefined ||
+      lockerNumber !== undefined ||
+      mealType ||
+      parentPermissionForOuting !== undefined ||
+      concession !== undefined;
+
+    if (allocationTouched && student.admissionNumber) {
+      try {
+        await updateActiveRequestAllocationForAdmission({
+          admissionNumber: student.admissionNumber,
+          academicYear: academicYear || student.academicYear,
+          hostelId: targetHostelId,
+          hostelCategoryId: targetCategoryId,
+          roomId: roomDoc?._id,
+          roomNumber,
+          bedNumber,
+          lockerNumber,
+          mealType,
+          parentPermissionForOuting,
+          concession,
+          adminId: req.admin?._id,
+          userId: student._id
+        });
+      } catch (hrErr) {
+        console.error('Failed to sync HostelRequest allocation on student update:', hrErr.message);
+        throw hrErr;
+      }
+    }
 
     // Handle concession update - if concession is changed, reset approval status and track who requested
     if (concession !== undefined) {
@@ -2033,43 +1598,34 @@ export const updateStudent = async (req, res, next) => {
       student.graduationStatus = 'Enrolled';
     }
 
-    if (hostelStatus === 'Inactive' && previousHostelStatus === 'Active') {
+    if (
+      student.applicationStatus === 'Expired' &&
+      ['Active', 'Extended'].includes(previousApplicationStatus)
+    ) {
       student.bedNumber = undefined;
       student.lockerNumber = undefined;
-      if (['Active', 'Extended'].includes(student.applicationStatus)) {
-        student.applicationStatus = 'Expired';
-      }
       await closeActiveOccupancyHistory({
         studentId: student._id,
         academicYear: student.academicYear,
         status: 'Withdrawn',
         expiryReason: 'admin_inactive'
       });
+      try {
+        await closeActiveHostelRequestForUser(student, {
+          academicYear: student.academicYear,
+          status: 'cancelled',
+          statusReason: 'admin_inactive',
+          adminId: req.admin?._id
+        });
+      } catch (hrErr) {
+        console.error('Failed to close HostelRequest on admin inactive:', hrErr.message);
+      }
     }
 
     await repairMissingRollNumber(student, academicSnapshot);
     await student.save({ validateModifiedOnly: true });
 
-    // Sync active/extended RoomOccupancyHistory if the student is active and room/bed details changed
-    if (student.hostelStatus === 'Active') {
-      await RoomOccupancyHistory.updateMany(
-        {
-          student: student._id,
-          academicYear: targetAcademicYear,
-          status: { $in: ['Active', 'Extended'] }
-        },
-        {
-          $set: {
-            hostel: student.hostel,
-            hostelCategory: student.hostelCategory,
-            room: student.room,
-            roomNumber: student.roomNumber,
-            bedNumber: student.bedNumber,
-            lockerNumber: student.lockerNumber
-          }
-        }
-      );
-    }
+    // Phase 6: occupancy history is updated via HostelRequest allocation sync (above)
 
     await syncStudentHostelFeeSafely(student);
 
@@ -2178,7 +1734,7 @@ export const deleteStudent = async (req, res, next) => {
       throw createError(500, 'Failed to delete student from database');
     }
 
-    await TempStudent.deleteOne({ mainStudentId: studentToRemove._id });
+    
 
     res.json({
       success: true,
@@ -2220,39 +1776,8 @@ export const getBranchesByCourse = async (req, res, next) => {
 };
 
 // Get temporary students summary for admin dashboard
-export const getTempStudentsSummary = async (req, res, next) => {
-  try {
-    // Get all students who haven't changed their password with their hostel IDs and gender
-    const studentsWithTempRecords = await User.find({ 
-      role: 'student',
-      isPasswordChanged: false 
-    }).select('_id hostelId gender');
-
-    // Get temp student records only for students who haven't changed their password
-    const tempStudents = await TempStudent.find({
-      mainStudentId: { $in: studentsWithTempRecords.map(s => s._id) }
-    })
-    .select('name rollNumber studentPhone generatedPassword createdAt mainStudentId')
-    .sort({ createdAt: -1 });
-
-    // Combine temp student data with hostel IDs and gender from main student records
-    const tempStudentsWithHostelId = tempStudents.map(tempStudent => {
-      const mainStudent = studentsWithTempRecords.find(s => s._id.toString() === tempStudent.mainStudentId.toString());
-      return {
-        ...tempStudent.toObject(),
-        hostelId: mainStudent ? mainStudent.hostelId : null,
-        gender: mainStudent ? mainStudent.gender : null
-      };
-    });
-
-    res.status(200).json({
-      success: true,
-      data: tempStudentsWithHostelId,
-    });
-  } catch (error) {
-    console.error('Error fetching temporary students summary:', error);
-    next(createError(500, 'Failed to fetch temporary student summary.'));
-  }
+export const getTempStudentsSummary = async (req, res) => {
+  return res.json({ success: true, data: { count: 0, students: [] }, message: 'Temp students feature removed' });
 };
 
 // Get total student count for admin dashboard
@@ -2289,9 +1814,16 @@ export const getStudentsCount = async (req, res, next) => {
       role: 'student'
     };
     if (hostelStatus) {
-      query.hostelStatus = hostelStatus;
+      const statusNorm = String(hostelStatus).toLowerCase();
+      if (statusNorm === 'active') {
+        query.applicationStatus = { $in: ['Active', 'Extended'] };
+      } else if (statusNorm === 'inactive' || statusNorm === 'expired') {
+        query.applicationStatus = { $in: ['Expired', 'Withdrawn'] };
+      } else {
+        query.applicationStatus = hostelStatus;
+      }
     } else {
-      query.hostelStatus = 'Active';
+      query.applicationStatus = { $in: ['Active', 'Extended'] };
     }
 
     if (course) query.course = course;
@@ -2308,9 +1840,16 @@ export const getStudentsCount = async (req, res, next) => {
       createdAt: { $gte: oneWeekAgo }
     };
     if (hostelStatus) {
-      newStudentsQuery.hostelStatus = hostelStatus;
+      const statusNorm = String(hostelStatus).toLowerCase();
+      if (statusNorm === 'active') {
+        newStudentsQuery.applicationStatus = { $in: ['Active', 'Extended'] };
+      } else if (statusNorm === 'inactive' || statusNorm === 'expired') {
+        newStudentsQuery.applicationStatus = { $in: ['Expired', 'Withdrawn'] };
+      } else {
+        newStudentsQuery.applicationStatus = hostelStatus;
+      }
     } else {
-      newStudentsQuery.hostelStatus = 'Active';
+      newStudentsQuery.applicationStatus = { $in: ['Active', 'Extended'] };
     }
     if (gender) newStudentsQuery.gender = gender;
     
@@ -2356,7 +1895,16 @@ export const getCourseCounts = async (req, res, next) => {
       if (branch) query.branch = branch;
       if (category) query.category = category;
       if (roomNumber) query.roomNumber = roomNumber;
-      if (hostelStatus) query.hostelStatus = hostelStatus;
+      if (hostelStatus) {
+        const statusNorm = String(hostelStatus).toLowerCase();
+        if (statusNorm === 'active') {
+          query.applicationStatus = { $in: ['Active', 'Extended'] };
+        } else if (statusNorm === 'inactive' || statusNorm === 'expired') {
+          query.applicationStatus = { $in: ['Expired', 'Withdrawn'] };
+        } else {
+          query.applicationStatus = hostelStatus;
+        }
+      }
       if (hostel) query.hostel = hostel;
 
       enriched = await User.find(query).select('course').lean();
@@ -2406,7 +1954,7 @@ export const getDashboardSummary = async (req, res, next) => {
       const [activeAyResult, allAyResult] = await Promise.all([
         fetchStudentsForAcademicYear({
           academicYear,
-          filters: { hostelStatus: 'Active' },
+          filters: { hostelStatus: 'active' },
           page: 1,
           limit: 100000,
           skipEnrichment: true,
@@ -2439,7 +1987,7 @@ export const getDashboardSummary = async (req, res, next) => {
         .map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count);
     } else {
-      const activeFilter = { role: 'student', hostelStatus: 'Active', applicationStatus: { $nin: ['Expired', 'Withdrawn'] } };
+      const activeFilter = { role: 'student', applicationStatus: { $in: ['Active', 'Extended'] }, applicationStatus: { $nin: ['Expired', 'Withdrawn'] } };
       const [activeCount, totalCount, newCount, studentsByCourseRaw] = await Promise.all([
         User.countDocuments(activeFilter),
         User.countDocuments({ role: 'student' }),
@@ -2465,7 +2013,8 @@ export const getDashboardSummary = async (req, res, next) => {
     const [
       complaintStats,
       leaveStats,
-      roomStatsRaw
+      roomStatsRaw,
+      ayRequestOccupied
     ] = await Promise.all([
       Complaint.aggregate([
         { $group: { _id: '$status', count: { $sum: 1 } } }
@@ -2482,7 +2031,8 @@ export const getDashboardSummary = async (req, res, next) => {
             totalOccupied: { $sum: '$occupiedBeds' }
           }
         }
-      ])
+      ]),
+      academicYear ? countActiveHostelRequestsForYear(academicYear) : Promise.resolve(null)
     ]);
 
     const complaintsMap = (complaintStats || []).reduce((acc, curr) => {
@@ -2497,7 +2047,13 @@ export const getDashboardSummary = async (req, res, next) => {
     }, {});
 
     const rStats = roomStatsRaw[0] || { totalRooms: 0, totalCapacity: 0, totalOccupied: 0 };
-    const roomOccupancyRate = rStats.totalCapacity > 0 ? Math.round((rStats.totalOccupied / rStats.totalCapacity) * 100) : 0;
+    // Prefer HostelRequest occupancy when academic year filter is set
+    const occupiedBeds =
+      ayRequestOccupied !== null ? ayRequestOccupied : rStats.totalOccupied;
+    const roomOccupancyRate =
+      rStats.totalCapacity > 0
+        ? Math.round((occupiedBeds / rStats.totalCapacity) * 100)
+        : 0;
 
     const responsePayload = {
       success: true,
@@ -2522,8 +2078,8 @@ export const getDashboardSummary = async (req, res, next) => {
         },
         rooms: {
           total: rStats.totalRooms,
-          occupied: rStats.totalOccupied,
-          available: Math.max(0, rStats.totalCapacity - rStats.totalOccupied),
+          occupied: occupiedBeds,
+          available: Math.max(0, rStats.totalCapacity - occupiedBeds),
           occupancyRate: roomOccupancyRate
         }
       }
@@ -2583,7 +2139,7 @@ export const addElectricityBill = async (req, res, next) => {
     const studentsInRoom = await User.find({ 
       roomNumber: room.roomNumber, 
       role: 'student',
-      hostelStatus: 'Active'
+      applicationStatus: { $in: ['Active', 'Extended'] }
     });
 
     if (studentsInRoom.length === 0) {
@@ -2773,18 +2329,8 @@ export const renewBatches = async (req, res, next) => {
 };
 
 // Clear all temporary students
-export const clearTempStudents = async (req, res, next) => {
-  try {
-    const result = await TempStudent.deleteMany({});
-    
-    res.json({
-      success: true,
-      message: `Cleared ${result.deletedCount} temporary student records.`,
-      data: { deletedCount: result.deletedCount }
-    });
-  } catch (error) {
-    next(error);
-  }
+export const clearTempStudents = async (req, res) => {
+  return res.json({ success: true, message: 'Temp students feature removed', data: { deletedCount: 0 } });
 };
 
 // Search student by Roll Number for Security
@@ -2856,14 +2402,6 @@ export const resetStudentPassword = async (req, res, next) => {
 
     await repairMissingRollNumber(student);
     await student.save({ validateModifiedOnly: true });
-
-    // Attempt to delete TempStudent record if exists
-    try {
-      await TempStudent.deleteOne({ mainStudentId: student._id });
-      console.log(`TempStudent record processed for student ID: ${student._id}`);
-    } catch (tempStudentError) {
-      console.error(`Error deleting TempStudent for student ID ${student._id}:`, tempStudentError);
-    }
 
     // Send email notification to student
     let emailSent = false;
@@ -3015,7 +2553,16 @@ export const getStudentsByPrincipalCourse = async (req, res, next) => {
     if (roomNumber) baseQuery.roomNumber = roomNumber;
     if (batch) baseQuery.batch = batch;
     if (academicYear) baseQuery.academicYear = academicYear;
-    if (hostelStatus) baseQuery.hostelStatus = hostelStatus;
+    if (hostelStatus) {
+      const statusNorm = String(hostelStatus).toLowerCase();
+      if (statusNorm === 'active') {
+        baseQuery.applicationStatus = { $in: ['Active', 'Extended'] };
+      } else if (statusNorm === 'inactive' || statusNorm === 'expired') {
+        baseQuery.applicationStatus = { $in: ['Expired', 'Withdrawn'] };
+      } else {
+        baseQuery.applicationStatus = hostelStatus;
+      }
+    }
 
     // Add search filter if provided
     if (search) {
@@ -3080,7 +2627,7 @@ export const updateStudentYearsFromAcademicCalendar = async (req, res, next) => 
     // Get all active students
     const students = await User.find({ 
       role: 'student',
-      hostelStatus: 'Active'
+      applicationStatus: { $in: ['Active', 'Extended'] }
     }).populate('course', 'name duration');
     
     console.log(`📊 Processing ${students.length} active students...`);
@@ -3578,138 +3125,20 @@ export const getRoomBedLockerAvailability = async (req, res, next) => {
   }
 };
 
-// Get student password for admit card generation
+// Generated passwords / TempStudent removed — students use SDMS credentials
 export const getStudentTempPassword = async (req, res) => {
-  try {
-    const { id } = req.params;
-    console.log('🔍 Backend: Fetching password for student ID:', id);
-    
-    // Only fetch from TempStudent collection (stores plain text passwords)
-    const tempStudent = await TempStudent.findOne({ mainStudentId: id });
-    console.log('🔍 Backend: TempStudent found:', tempStudent ? 'Yes' : 'No');
-    
-    if (tempStudent) {
-      console.log('🔍 Backend: Generated password:', tempStudent.generatedPassword);
-    }
-    
-    if (tempStudent && tempStudent.generatedPassword) {
-      return res.json({
-        success: true,
-        data: {
-          password: tempStudent.generatedPassword
-        }
-      });
-    }
-    
-    // If no password found in TempStudent collection
-    console.log('❌ Backend: No TempStudent record found for student ID:', id);
-    return res.status(404).json({
-      success: false,
-      message: 'Student password not found'
-    });
-  } catch (error) {
-    console.error('❌ Backend: Error fetching student temp password:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch student password',
-      error: error.message
-    });
-  }
+  return res.status(410).json({
+    success: false,
+    message: 'Generated passwords removed. Students use student database credentials.'
+  });
 };
 
 // Share student credentials via SMS
 export const shareStudentCredentials = async (req, res) => {
-  try {
-    const { studentId, studentPhone, customMessage } = req.body;
-
-    if (!studentId || !studentPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Student ID and phone number are required'
-      });
-    }
-
-    // Find the student
-    const student = await User.findById(studentId);
-    if (!student) {
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found'
-      });
-    }
-
-    // Verify the phone number matches the student's phone
-    if (student.studentPhone !== studentPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Phone number does not match student record'
-      });
-    }
-
-    // Get the student's credentials
-    const username = student.rollNumber || student.hostelId;
-
-    if (!username) {
-      return res.status(400).json({
-        success: false,
-        message: 'Student username not found'
-      });
-    }
-
-    // Get the original password from TempStudent collection (stored in plain text)
-    const TempStudent = (await import('../models/TempStudent.js')).default;
-    const tempStudent = await TempStudent.findOne({ mainStudentId: studentId });
-    
-    let password = 'changeme'; // Default fallback
-    if (tempStudent && tempStudent.generatedPassword) {
-      password = tempStudent.generatedPassword;
-      console.log('📱 Using original password from TempStudent:', password);
-    } else {
-      console.log('📱 No TempStudent record found for student:', student.name, 'using default password');
-      // For students without TempStudent records, we can't retrieve the original password
-      // The default 'changeme' will be sent, and they'll need to reset their password
-    }
-
-    console.log('📱 Sharing credentials for student:', {
-      name: student.name,
-      rollNumber: student.rollNumber,
-      hostelId: student.hostelId,
-      studentPhone: student.studentPhone,
-      username: username,
-      password: password
-    });
-
-    // Send SMS using the existing template
-    const smsResult = await sendAdminCredentialsSMS(
-      studentPhone,
-      username,
-      password
-    );
-
-    console.log('📱 Credentials shared successfully:', smsResult);
-
-    res.json({
-      success: true,
-      message: 'Credentials sent successfully via SMS',
-      data: {
-        smsResult,
-        student: {
-          name: student.name,
-          rollNumber: student.rollNumber,
-          hostelId: student.hostelId,
-          studentPhone: student.studentPhone
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error sharing student credentials:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to share credentials',
-      error: error.message
-    });
-  }
+  return res.status(410).json({
+    success: false,
+    message: 'Credential sharing removed. Students log in with student database credentials.'
+  });
 };
 
 // Get students with pending concession approvals

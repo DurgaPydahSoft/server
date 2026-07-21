@@ -27,7 +27,7 @@ export const createBulkOuting = async (req, res, next) => {
     const students = await User.find({
       _id: { $in: selectedStudentIds },
       role: 'student',
-      hostelStatus: 'Active'
+      applicationStatus: { $in: ['Active', 'Extended'] }
     });
 
     if (students.length !== selectedStudentIds.length) {

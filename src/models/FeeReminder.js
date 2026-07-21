@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import '../models/HostelRequest.js';
 
 const feeReminderSchema = new mongoose.Schema({
   student: {
@@ -103,6 +104,20 @@ const feeReminderSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  /** Phase 4: link fee cycle to yearly hostel request (admission + AY) */
+  hostelRequestId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'HostelRequest',
+    index: true,
+    sparse: true
+  },
+  admissionNumber: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    index: true,
+    sparse: true
+  },
   // Status
   isActive: {
     type: Boolean,
@@ -117,6 +132,8 @@ feeReminderSchema.index({ student: 1 });
 feeReminderSchema.index({ academicYear: 1 });
 feeReminderSchema.index({ currentReminder: 1 });
 feeReminderSchema.index({ 'feeStatus.term1': 1, 'feeStatus.term2': 1, 'feeStatus.term3': 1 });
+feeReminderSchema.index({ admissionNumber: 1, academicYear: 1 });
+feeReminderSchema.index({ hostelRequestId: 1, academicYear: 1 });
 
 // Method to calculate reminder dates based on academic calendar and configurable term due dates
 feeReminderSchema.methods.calculateReminderDates = async function() {
@@ -331,6 +348,7 @@ feeReminderSchema.statics.createForStudent = async function(studentId, registrat
   // Get student details to determine category
   const User = mongoose.model('User');
   const FeeStructure = mongoose.model('FeeStructure');
+  const HostelRequest = mongoose.model('HostelRequest');
   
   const student = await User.findById(studentId);
   if (!student) {
@@ -339,11 +357,25 @@ feeReminderSchema.statics.createForStudent = async function(studentId, registrat
 
   // Get fee structure for the student's category
   const feeStructure = await FeeStructure.getFeeStructure(academicYear, student.course, student.branch, student.year, student.category);
+
+  const admissionNumber = (student.admissionNumber || '').toString().trim().toUpperCase() || undefined;
+  let hostelRequestId;
+  if (admissionNumber && academicYear) {
+    const request = await HostelRequest.findOne({
+      admissionNumber,
+      academicYear
+    })
+      .select('_id')
+      .lean();
+    hostelRequestId = request?._id;
+  }
   
   const feeReminder = new this({
     student: studentId,
     registrationDate: registrationDate,
     academicYear: academicYear,
+    admissionNumber,
+    hostelRequestId,
     feeAmounts: {
       term1: feeStructure ? feeStructure.term1Fee : 15000,
       term2: feeStructure ? feeStructure.term2Fee : 15000,

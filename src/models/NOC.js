@@ -1,5 +1,9 @@
 import mongoose from 'mongoose';
 import { closeActiveOccupancyHistory } from '../utils/applicationExpiryService.js';
+import {
+  closeActiveHostelRequestForUser,
+  reopenHostelRequestForYear
+} from '../services/hostelRequestService.js';
 
 const nocSchema = new mongoose.Schema({
   student: {
@@ -257,13 +261,25 @@ nocSchema.methods.deactivateStudent = async function() {
   }
   
   await User.findByIdAndUpdate(this.student, { 
-    hostelStatus: 'Inactive',
+    applicationStatus: 'Expired',
     roomNumber: null,
     bedNumber: null,
     lockerNumber: null,
-    applicationStatus: 'Expired',
     nocDate: this.vacatingDate || this.approvedAt || new Date()
   });
+
+  // Phase 4: close HostelRequest allocation for this academic year
+  if (student) {
+    try {
+      await closeActiveHostelRequestForUser(student, {
+        academicYear: this.academicYear || student.academicYear,
+        status: 'cancelled',
+        statusReason: 'noc'
+      });
+    } catch (hrErr) {
+      console.error('Failed to close HostelRequest on NOC deactivation:', hrErr.message);
+    }
+  }
 
   return this.save();
 };
@@ -303,7 +319,6 @@ const revertStudentDeactivation = async (nocDoc) => {
 
   // 3. Restore User fields
   await User.findByIdAndUpdate(nocDoc.student, {
-    hostelStatus: 'Active',
     applicationStatus: 'Active',
     room,
     roomNumber,
@@ -312,6 +327,19 @@ const revertStudentDeactivation = async (nocDoc) => {
     nocDate: null
   });
   console.log(`👤 Reactivated student ${nocDoc.studentName} and restored room: ${roomNumber}`);
+
+  // Phase 4: reopen HostelRequest closed by NOC
+  try {
+    const student = await User.findById(nocDoc.student).select('admissionNumber academicYear').lean();
+    await reopenHostelRequestForYear({
+      admissionNumber: student?.admissionNumber,
+      academicYear: nocDoc.academicYear || student?.academicYear,
+      userId: nocDoc.student,
+      statusReason: 'noc_reverted'
+    });
+  } catch (hrErr) {
+    console.error('Failed to reopen HostelRequest on NOC revert:', hrErr.message);
+  }
 };
 
 // Middleware to detect document deletion and revert deactivation if approved

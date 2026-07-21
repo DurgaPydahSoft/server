@@ -145,7 +145,7 @@ export const addStudent = async (req, res) => {
       password: 'changeme', 
       role: 'student', 
       isRegistered: false,
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       graduationStatus: 'Enrolled'
     };
     
@@ -210,9 +210,18 @@ export const editStudent = async (req, res) => {
     console.log('Update payload:', update); // Debug log
     delete update.password;
     delete update.hostelId; // Prevent hostel ID from being modified
-    // Validate hostelStatus if present
-    if (update.hostelStatus && !['Active', 'Inactive'].includes(update.hostelStatus)) {
-      return res.status(400).json({ message: 'Invalid hostel status' });
+    // Map legacy hostelStatus updates onto applicationStatus
+    if (update.hostelStatus) {
+      const statusNorm = String(update.hostelStatus).toLowerCase();
+      if (statusNorm === 'inactive') update.applicationStatus = 'Expired';
+      else if (statusNorm === 'active') update.applicationStatus = 'Active';
+      delete update.hostelStatus;
+    }
+    if (
+      update.applicationStatus &&
+      !['Active', 'Expired', 'Extended', 'Withdrawn'].includes(update.applicationStatus)
+    ) {
+      return res.status(400).json({ message: 'Invalid application status' });
     }
     const student = await User.findByIdAndUpdate(id, update, { new: true }).select('-password');
     if (!student) return res.status(404).json({ message: 'Student not found' });
@@ -305,7 +314,9 @@ export const getProfile = async (req, res) => {
     }
 
     const { enrichStudentAcademics } = await import('../utils/studentAcademicEnricher.js');
-    const enriched = await enrichStudentAcademics(student);
+    const { overlayStudentDtoWithHostelRequest } = await import('../services/hostelRequestService.js');
+    let enriched = await enrichStudentAcademics(student);
+    enriched = await overlayStudentDtoWithHostelRequest(enriched);
 
     res.json({
       success: true,
@@ -435,7 +446,16 @@ export const getStudentCountReport = async (req, res) => {
       enrichedStudents = result.students;
     } else {
       const query = { role: 'student' };
-      if (hostelStatus) query.hostelStatus = hostelStatus;
+      if (hostelStatus) {
+      const statusNorm = String(hostelStatus).toLowerCase();
+      if (statusNorm === 'active') {
+        query.applicationStatus = { $in: ['Active', 'Extended'] };
+      } else if (statusNorm === 'inactive' || statusNorm === 'expired') {
+        query.applicationStatus = { $in: ['Expired', 'Withdrawn'] };
+      } else {
+        query.applicationStatus = hostelStatus;
+      }
+    }
 
       enrichedStudents = await User.find(query)
         .populate('hostel', 'name')

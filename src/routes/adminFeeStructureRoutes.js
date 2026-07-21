@@ -2,6 +2,7 @@ import express from 'express';
 import {
   listAdminFeeStructures,
   createAdminFeeStructure,
+  bulkUpsertAdminFeeStructures,
   updateAdminFeeStructure,
   deleteAdminFeeStructure,
   getAdditionalFees,
@@ -52,6 +53,7 @@ const feeManagementWriteAuth = [adminAuth, (req, res, next) => {
 }];
 
 router.get('/', feeManagementAuth, listAdminFeeStructures);
+router.post('/bulk', feeManagementWriteAuth, bulkUpsertAdminFeeStructures);
 router.post('/', feeManagementWriteAuth, createAdminFeeStructure);
 router.put('/:id', feeManagementWriteAuth, updateAdminFeeStructure);
 router.delete('/:id', feeManagementWriteAuth, deleteAdminFeeStructure);

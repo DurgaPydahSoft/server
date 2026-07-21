@@ -89,7 +89,7 @@ export const deactivateStudentApplication = async (req, res, next) => {
       return next(createError(404, 'Student not found'));
     }
 
-    if (student.hostelStatus !== 'Active') {
+    if ((student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
       return next(createError(400, 'Student is already inactive'));
     }
 
@@ -232,8 +232,8 @@ export const getRoomOccupancyHistory = async (req, res, next) => {
         bedNumber: student.bedNumber,
         lockerNumber: student.lockerNumber,
         allocatedFrom: student.createdAt,
-        allocatedTo: student.hostelStatus === 'Active' ? null : student.updatedAt,
-        status: student.hostelStatus === 'Active' ? 'Active' : 'Expired',
+        allocatedTo: (student.applicationStatus === 'Active' || student.applicationStatus === 'Extended') ? null : student.updatedAt,
+        status: (student.applicationStatus === 'Active' || student.applicationStatus === 'Extended') ? 'Active' : 'Expired',
         expiryReason: 'registration',
         isLiveSnapshot: true
       });

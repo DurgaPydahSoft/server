@@ -92,7 +92,7 @@ export const createNOCRequest = async (req, res, next) => {
     }
 
     // Check if student is already deactivated
-    if (student.hostelStatus === 'Inactive') {
+    if (student.applicationStatus === 'Expired') {
       return next(createError(400, 'Your account is already deactivated'));
     }
 
@@ -275,7 +275,7 @@ export const createNOCForStudent = async (req, res, next) => {
     }
 
     // Check if student is already deactivated
-    if (student.hostelStatus === 'Inactive') {
+    if (student.applicationStatus === 'Expired') {
       return next(createError(400, 'Student account is already deactivated'));
     }
 
@@ -381,7 +381,7 @@ export const createNOCByAdmin = async (req, res, next) => {
     }
 
     // Check if student is already deactivated
-    if (student.hostelStatus === 'Inactive') {
+    if (student.applicationStatus === 'Expired') {
       return next(createError(400, 'Student account is already deactivated'));
     }
 
@@ -444,7 +444,7 @@ export const getStudentsForNOC = async (req, res, next) => {
 
     // Build query - only active students
     let query = { 
-      hostelStatus: 'Active',
+      applicationStatus: { $in: ['Active', 'Extended'] },
       role: 'student'
     };
 

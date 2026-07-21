@@ -128,7 +128,7 @@ export const initiatePayment = async (req, res) => {
         gender: room.gender,
         category: room.category,
         role: 'student',
-        hostelStatus: 'Active'
+        applicationStatus: { $in: ['Active', 'Extended'] }
       });
       
       if (studentsInRoom === 0) {
@@ -634,7 +634,7 @@ export const processPayment = async (req, res) => {
           gender: room.gender,
           category: room.category,
           role: 'student',
-          hostelStatus: 'Active'
+          applicationStatus: { $in: ['Active', 'Extended'] }
         });
 
         const studentAmount = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : bill.total;
@@ -765,7 +765,7 @@ export const getPaymentStatus = async (req, res) => {
       gender: student.gender,
       category: student.category,
       role: 'student',
-      hostelStatus: 'Active'
+      applicationStatus: { $in: ['Active', 'Extended'] }
     });
 
     const studentAmount = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : bill.total;
@@ -1443,7 +1443,7 @@ export const recordElectricityPayment = async (req, res) => {
         gender: room.gender,
         category: room.category,
         role: 'student',
-        hostelStatus: 'Active'
+        applicationStatus: { $in: ['Active', 'Extended'] }
       });
       
       if (studentsInRoom === 0) {
@@ -1602,7 +1602,7 @@ export const recordAdditionalFeePayment = async (req, res) => {
     }
 
     // Validate student status
-    if (student.hostelStatus !== 'Active') {
+    if ((student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
       return res.status(400).json({
         success: false,
         message: 'Student is not active in hostel'
@@ -1860,7 +1860,7 @@ export const recordHostelFeePayment = async (req, res) => {
     }
 
     // Validate student status
-    if (student.hostelStatus !== 'Active') {
+    if ((student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
       return res.status(400).json({
         success: false,
         message: 'Student is not active in hostel'
