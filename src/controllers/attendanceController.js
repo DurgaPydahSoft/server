@@ -47,6 +47,14 @@ const buildActiveStudentsQuery = ({ gender, category, roomNumber, hostel }) => {
   return query;
 };
 
+export const getEffectiveJoiningDate = (student) => {
+  if (!student) return null;
+  if (student.joiningDate) return new Date(student.joiningDate);
+  if (student.admitDate) return new Date(student.admitDate);
+  if (student.createdAt) return new Date(student.createdAt);
+  return null;
+};
+
 const filterStudentsByCourseBranch = async (students, course, branch) => {
   const { course: resolvedCourse, branch: resolvedBranch } = await resolveCourseBranchFilterParams(course, branch);
   if (!resolvedCourse && !resolvedBranch) return students;
@@ -165,7 +173,7 @@ export const getStudentsForAttendance = async (req, res, next) => {
       console.log('🔍 getStudentsForAttendance - Query:', query);
 
       students = await User.find(query)
-        .select('name rollNumber admissionNumber course branch year gender roomNumber hostel')
+        .select('name rollNumber admissionNumber course branch year gender roomNumber hostel admitDate joiningDate leftDate createdAt')
         .sort({ name: 1 })
         .lean();
 
@@ -173,7 +181,20 @@ export const getStudentsForAttendance = async (req, res, next) => {
       students = await filterStudentsByCourseBranch(students, course, branch);
     }
 
-    console.log('🔍 getStudentsForAttendance - Found students:', students.length);
+    // Attendance opens strictly from effective joining date (joiningDate -> admitDate -> createdAt)
+    if (normalizedDate && students.length > 0) {
+      console.log('🔍 getStudentsForAttendance - Filtering by effective joining date. Initial count:', students.length);
+      students = students.filter(student => {
+        const effectiveJoining = getEffectiveJoiningDate(student);
+        if (!effectiveJoining) return true;
+        const joiningStart = normalizeToISTStartOfDay(effectiveJoining);
+        const isEligible = normalizedDate >= joiningStart;
+        console.log(`🔍 Attendance Joining Filter - ${student.name} (${student.rollNumber}): joiningDate=${student.joiningDate}, admitDate=${student.admitDate}, createdAt=${student.createdAt} => effectiveJoining=${effectiveJoining.toISOString()}, targetDate=${normalizedDate.toISOString()} => eligible=${isEligible}`);
+        return isEligible;
+      });
+    }
+
+    console.log('🔍 getStudentsForAttendance - Found students after date filter:', students.length);
 
     // Get existing attendance for the date
     const existingAttendance = await Attendance.find({
@@ -304,7 +325,7 @@ export const takeAttendance = async (req, res, next) => {
       _id: { $in: studentIds }, 
       role: 'student', 
       applicationStatus: { $in: ['Active', 'Extended'] } 
-    }).select('_id name');
+    }).select('_id name joiningDate admitDate createdAt');
 
     const validStudentIds = new Set(validStudents.map(student => student._id.toString()));
     const studentMap = new Map(validStudents.map(student => [student._id.toString(), student]));
@@ -324,6 +345,19 @@ export const takeAttendance = async (req, res, next) => {
       if (!validStudentIds.has(studentId)) {
         errors.push({ studentId, error: 'Student not found or inactive' });
         continue;
+      }
+
+      const studentObj = studentMap.get(studentId);
+      const effectiveJoining = getEffectiveJoiningDate(studentObj);
+      if (effectiveJoining) {
+        const joiningStart = normalizeToISTStartOfDay(effectiveJoining);
+        if (normalizedDate < joiningStart) {
+          errors.push({
+            studentId,
+            error: `Attendance for ${studentObj.name || 'student'} opens only from joining date (${effectiveJoining.toLocaleDateString()})`
+          });
+          continue;
+        }
       }
 
       // Prepare upsert operation
@@ -458,12 +492,22 @@ export const getAttendanceForDate = async (req, res, next) => {
       });
 
       students = await User.find(studentQuery)
-        .select('name rollNumber admissionNumber course branch year gender roomNumber category hostel')
+        .select('name rollNumber admissionNumber course branch year gender roomNumber category hostel admitDate joiningDate leftDate createdAt')
         .sort({ name: 1 })
         .lean();
 
       students = await enrichStudentsAcademics(students, { skipFeesAndConcessions: true });
       students = await filterStudentsByCourseBranch(students, course, branch);
+    }
+
+    // Attendance opens strictly from effective joining date (joiningDate -> admitDate -> createdAt)
+    if (normalizedDate && students.length > 0) {
+      students = students.filter(student => {
+        const effectiveJoining = getEffectiveJoiningDate(student);
+        if (!effectiveJoining) return true;
+        const joiningStart = normalizeToISTStartOfDay(effectiveJoining);
+        return normalizedDate >= joiningStart;
+      });
     }
 
     const studentIds = students.map(s => s._id);

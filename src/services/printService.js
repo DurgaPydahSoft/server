@@ -13,6 +13,7 @@ import FeeStructure from '../models/FeeStructure.js';
 import GlobalSettings from '../models/GlobalSettings.js';
 import StaffGuest from '../models/StaffGuest.js';
 import Course from '../models/Course.js';
+import HostelRequest from '../models/HostelRequest.js';
 
 import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
 import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
@@ -432,6 +433,21 @@ export const generateHostelAdmit = async (studentId) => {
   }
 
   const studentObj = studentDoc.toObject();
+
+  if (!studentObj.roomNumber && !studentObj.room && (studentObj.admissionNumber || studentObj.rollNumber)) {
+    const activeReq = await HostelRequest.findOne({
+      $or: [
+        ...(studentObj.admissionNumber ? [{ admissionNumber: studentObj.admissionNumber }] : []),
+        ...(studentObj.rollNumber ? [{ sdmsRollNumber: studentObj.rollNumber }] : [])
+      ],
+      status: 'active'
+    }).populate('roomId').select('roomNumber roomId').lean();
+    if (activeReq) {
+      studentObj.roomNumber = activeReq.roomNumber;
+      if (activeReq.roomId) studentObj.room = activeReq.roomId;
+    }
+  }
+
   const student = await enrichStudentAcademics(studentObj);
 
   if (student.studentPhoto) {
@@ -615,7 +631,6 @@ export const generateHostelAdmit = async (studentId) => {
       ['Hostel:', String(hostelName)],
       ['Mobile No:', String(student.studentPhone || '')],
       ['Parent No:', String(student.parentPhone || '')],
-      ['Address:', String(student.address || '')],
       ['Hostel ID:', String(student.hostelId || '')],
       ['Category:', String(student.category || '')],
       ['Room:', String(student.room?.roomNumber || student.roomNumber || '')]

@@ -292,6 +292,18 @@ const userSchema = new mongoose.Schema({
       message: props => `${props.value} is not a valid academic year format! Use format YYYY-YYYY with a 1-year difference (e.g., 2022-2023)`
     }
   },
+  admitDate: {
+    type: Date,
+    default: Date.now
+  },
+  joiningDate: {
+    type: Date,
+    default: Date.now
+  },
+  leftDate: {
+    type: Date,
+    default: null
+  },
   applicationExpiryDate: {
     type: Date,
     required: false

@@ -2377,8 +2377,6 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     // Build applicationType filter
     if (applicationType) {
       query.applicationType = applicationType;
-    } else {
-      query.applicationType = { $ne: 'Stay in Hostel' };
     }
 
     // Exclude bulk outing leave records
@@ -2387,9 +2385,6 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
     // Status filter
     if (status) {
       query.status = status;
-    } else {
-      // Default statuses for Principal view - include both verified and pending
-      query.status = { $in: ['Warden Verified', 'Pending Principal Approval', 'Approved', 'Rejected'] };
     }
 
     // Date filtering (overlapping ranges)
@@ -2414,6 +2409,12 @@ export const getPrincipalLeaveRequests = async (req, res, next) => {
             ...(start && end ? {
               permissionDate: { $gte: start, $lte: end }
             } : start ? { permissionDate: { $gte: start } } : { permissionDate: { $lte: end } })
+          },
+          {
+            applicationType: 'Stay in Hostel',
+            ...(start && end ? {
+              stayDate: { $gte: start, $lte: end }
+            } : start ? { stayDate: { $gte: start } } : { stayDate: { $lte: end } })
           }
         ]
       };

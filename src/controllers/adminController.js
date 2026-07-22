@@ -221,8 +221,15 @@ export const addStudent = async (req, res, next) => {
       academicYear,
       email,
       concession = 0,
-      college
+      college,
+      admitDate,
+      joiningDate,
+      leftDate
     } = req.body;
+
+    const parsedAdmitDate = admitDate ? new Date(admitDate) : new Date();
+    const parsedJoiningDate = joiningDate ? new Date(joiningDate) : parsedAdmitDate;
+    const parsedLeftDate = leftDate ? new Date(leftDate) : null;
 
     const normalizedGender = normalizeGender(gender);
 
@@ -642,7 +649,16 @@ export const addStudent = async (req, res, next) => {
       if (parentPermissionForOuting !== undefined) {
         student.parentPermissionForOuting = Boolean(parentPermissionForOuting);
       }
-      // Phase 6: do not write yearly allocation onto User (HostelRequest is SOT)
+      // Save yearly allocation onto User for quick reference and backwards compatibility
+      if (hostel) student.hostel = hostel;
+      if (hostelCategory) student.hostelCategory = hostelCategory;
+      if (roomDoc?._id) student.room = roomDoc._id;
+      if (roomNumber) student.roomNumber = roomNumber;
+      if (bedNumber) student.bedNumber = bedNumber;
+      if (lockerNumber) student.lockerNumber = lockerNumber;
+      if (admitDate) student.admitDate = parsedAdmitDate;
+      if (joiningDate) student.joiningDate = parsedJoiningDate;
+      if (leftDate !== undefined) student.leftDate = parsedLeftDate;
       if (studentPhone) student.studentPhone = studentPhone;
       if (parentPhone) student.parentPhone = parentPhone;
       if (motherName) student.motherName = motherName;
@@ -753,8 +769,17 @@ export const addStudent = async (req, res, next) => {
       academicYear,
       applicationStatus: 'Active',
       email: finalEmail,
+      hostel,
+      hostelCategory,
+      ...(roomDoc?._id && { room: roomDoc._id }),
+      ...(roomNumber && { roomNumber }),
+      ...(bedNumber && { bedNumber }),
+      ...(lockerNumber && { lockerNumber }),
       hostelId,
       isPasswordChanged: false,
+      admitDate: parsedAdmitDate,
+      joiningDate: parsedJoiningDate,
+      leftDate: parsedLeftDate,
       guardianPhoto1: guardianPhoto1Url,
       guardianPhoto2: guardianPhoto2Url,
       ...concessionData,
@@ -1255,7 +1280,10 @@ export const updateStudent = async (req, res, next) => {
       academicYear,
       hostelStatus,
       email,
-      concession
+      concession,
+      admitDate,
+      joiningDate,
+      leftDate
     } = req.body;
     
     console.log('Update payload (adminController):', req.body); // Debug log
@@ -1268,30 +1296,51 @@ export const updateStudent = async (req, res, next) => {
     const academicSnapshot = await enrichStudentAcademics(student);
 
     // Resolve hostel/category for room validation under new hierarchy
-    const targetHostelId = hostel || student.hostel;
+    let targetHostelId = hostel || req.body.hostelId || student.hostel;
+
+    // If student.hostel is not set directly on User, fallback to active HostelRequest
+    if (!targetHostelId && (student.admissionNumber || student.rollNumber)) {
+      const activeReq = await HostelRequest.findOne({
+        $or: [
+          ...(student.admissionNumber ? [{ admissionNumber: student.admissionNumber.toUpperCase() }] : []),
+          ...(student.rollNumber ? [{ sdmsRollNumber: student.rollNumber.toUpperCase() }] : [])
+        ],
+        status: { $in: ['active', 'allocated', 'approved'] }
+      }).lean();
+      if (activeReq?.hostelId) {
+        targetHostelId = activeReq.hostelId;
+      }
+    }
+
     let targetCategoryId = hostelCategory;
     let targetCategoryName = category;
 
     // If category name is provided in payload, resolve its ID to ensure consistency
     if (category) {
-      if (!targetHostelId) {
-        throw createError(400, 'Hostel is required to resolve category.');
+      let categoryDoc = null;
+      if (targetHostelId) {
+        categoryDoc = await HostelCategory.findOne({ hostel: targetHostelId, name: category.trim() });
       }
-      const categoryDoc = await HostelCategory.findOne({ hostel: targetHostelId, name: category.trim() });
       if (!categoryDoc) {
-        throw createError(400, `Category "${category}" not found for the selected hostel.`);
+        categoryDoc = await HostelCategory.findOne({ name: category.trim() });
       }
-      targetCategoryId = categoryDoc._id;
-      targetCategoryName = categoryDoc.name;
-    } 
-    // If category name wasn't provided but hostelCategory ID was, use it
-    else if (hostelCategory) {
+      if (categoryDoc) {
+        targetCategoryId = categoryDoc._id;
+        targetCategoryName = categoryDoc.name;
+        if (!targetHostelId) {
+          targetHostelId = categoryDoc.hostel;
+        }
+      } else {
+        throw createError(400, `Category "${category}" not found.`);
+      }
+    } else if (hostelCategory) {
       targetCategoryId = hostelCategory;
     }
 
     // Fallback to existing student values if not provided in request
     if (!targetCategoryId) targetCategoryId = student.hostelCategory;
     if (!targetCategoryName) targetCategoryName = student.category;
+    if (!targetHostelId) targetHostelId = student.hostel;
 
     // Validate hostel exists if provided
     if (targetHostelId) {
@@ -1317,6 +1366,12 @@ export const updateStudent = async (req, res, next) => {
       if (targetCategoryId) roomQuery.category = targetCategoryId;
 
       roomDoc = await Room.findOne(roomQuery);
+      if (!roomDoc && targetHostelId) {
+        roomDoc = await Room.findOne({ roomNumber, hostel: targetHostelId });
+      }
+      if (!roomDoc) {
+        roomDoc = await Room.findOne({ roomNumber });
+      }
       if (!roomDoc) {
         throw createError(400, 'Invalid room number for the selected hostel/category.');
       }
@@ -1453,6 +1508,9 @@ export const updateStudent = async (req, res, next) => {
       }
     }
     if (email) student.email = email;
+    if (admitDate) student.admitDate = new Date(admitDate);
+    if (joiningDate) student.joiningDate = new Date(joiningDate);
+    if (leftDate !== undefined) student.leftDate = leftDate ? new Date(leftDate) : null;
 
     const allocationTouched =
       Boolean(roomNumber) ||
@@ -1665,7 +1723,7 @@ export const updateStudent = async (req, res, next) => {
   }
 };
 
-// Delete student (per academic year, or full account if last enrollment)
+// Cancel student registration (retains student data & attendance history in database)
 export const deleteStudent = async (req, res, next) => {
   try {
     const student = await User.findOne({ _id: req.params.id, role: 'student' });
@@ -1675,73 +1733,49 @@ export const deleteStudent = async (req, res, next) => {
     }
 
     const academicYear = req.query.academicYear || student.academicYear;
-    if (!academicYear || !validateAcademicYear(academicYear)) {
-      throw createError(400, 'Valid academicYear is required (YYYY-YYYY)');
-    }
 
-    const removal = await removeStudentEnrollmentForAcademicYear({
-      studentId: student._id,
-      academicYear
-    });
+    // Update application status to Withdrawn (Cancelled) and free bed/locker
+    student.applicationStatus = 'Withdrawn';
+    student.bedNumber = undefined;
+    student.lockerNumber = undefined;
+    await student.save({ validateModifiedOnly: true });
 
-    if (!removal.ok) {
-      const status = removal.code === 'NOT_CURRENT_YEAR' ? 400 : 404;
-      throw createError(status, removal.message);
-    }
+    // Cancel active HostelRequest records for this student
+    if (student.admissionNumber || student.rollNumber) {
+      const orConditions = [];
+      if (student.admissionNumber) {
+        orConditions.push({ admissionNumber: student.admissionNumber.toUpperCase() });
+      }
+      if (student.rollNumber) {
+        orConditions.push({ sdmsRollNumber: student.rollNumber.toUpperCase() });
+      }
 
-    if (removal.action === 'year_removed') {
-      return res.json({
-        success: true,
-        message: `Removed enrollment for ${academicYear}. Student account kept for other academic years.`,
-        data: {
-          deletedCompletely: false,
-          academicYear,
-          remainingEnrollments: removal.remainingEnrollments,
-          studentId: student._id
-        }
-      });
-    }
-
-    const studentToRemove = removal.student;
-
-    const enrichedRemoved = await enrichStudentAcademics(studentToRemove.toObject());
-    const feesStudentId = resolveFeesStudentId(studentToRemove, enrichedRemoved);
-    if (feesStudentId) {
-      await deleteAllStudentHostelFeesSafely(feesStudentId);
-    }
-
-    const photosToDelete = [
-      studentToRemove.studentPhoto,
-      studentToRemove.guardianPhoto1,
-      studentToRemove.guardianPhoto2
-    ].filter(Boolean);
-
-    for (const photoUrl of photosToDelete) {
-      try {
-        await deleteFromS3(photoUrl);
-      } catch (error) {
-        console.error('Error deleting photo from S3:', error);
+      if (orConditions.length > 0) {
+        const query = { $or: orConditions };
+        if (academicYear) query.academicYear = academicYear;
+        await HostelRequest.updateMany(query, {
+          $set: {
+            status: 'cancelled',
+            cancelledAt: new Date(),
+            statusReason: 'admin_cancelled'
+          }
+        });
       }
     }
 
-    await Complaint.deleteMany({ student: studentToRemove._id });
-    await Leave.deleteMany({ student: studentToRemove._id });
-    await RoomOccupancyHistory.deleteMany({ student: studentToRemove._id });
-    await FeeReminder.deleteMany({ student: studentToRemove._id });
-
-    const deleteResult = await User.findByIdAndDelete(studentToRemove._id);
-    if (!deleteResult) {
-      throw createError(500, 'Failed to delete student from database');
-    }
-
-    
+    await closeActiveOccupancyHistory({
+      studentId: student._id,
+      academicYear: academicYear || student.academicYear,
+      status: 'Withdrawn',
+      expiryReason: 'admin_cancelled'
+    });
 
     res.json({
       success: true,
-      message: `Student removed completely (no remaining enrollments for ${academicYear}).`,
+      message: `Registration for ${student.name} cancelled successfully. Student data remains preserved for attendance and history.`,
       data: {
-        deletedCompletely: true,
-        academicYear
+        cancelled: true,
+        studentId: student._id
       }
     });
   } catch (error) {
@@ -2863,6 +2897,35 @@ export const getStudentsForAdmitCards = async (req, res, next) => {
 
     const enrichedStudents = await enrichStudentsAcademics(students.map((s) => s.toObject()));
 
+    // Fallback: resolve missing roomNumbers from active HostelRequests
+    const missingRoomAdmissions = enrichedStudents
+      .filter(s => !s.roomNumber && (s.admissionNumber || s.rollNumber))
+      .map(s => s.admissionNumber || s.rollNumber);
+
+    if (missingRoomAdmissions.length > 0) {
+      const activeRequests = await HostelRequest.find({
+        $or: [
+          { admissionNumber: { $in: missingRoomAdmissions } },
+          { sdmsRollNumber: { $in: missingRoomAdmissions } }
+        ],
+        status: 'active'
+      }).select('admissionNumber sdmsRollNumber roomNumber').lean();
+
+      const requestMap = new Map();
+      activeRequests.forEach(r => {
+        if (r.admissionNumber) requestMap.set(r.admissionNumber.toUpperCase(), r.roomNumber);
+        if (r.sdmsRollNumber) requestMap.set(r.sdmsRollNumber.toUpperCase(), r.roomNumber);
+      });
+
+      enrichedStudents.forEach(student => {
+        if (!student.roomNumber) {
+          const admKey = student.admissionNumber ? student.admissionNumber.toUpperCase() : null;
+          const rollKey = student.rollNumber ? student.rollNumber.toUpperCase() : null;
+          student.roomNumber = (admKey && requestMap.get(admKey)) || (rollKey && requestMap.get(rollKey)) || student.roomNumber;
+        }
+      });
+    }
+
     const transformedStudents = enrichedStudents.map((student) => ({
       ...student,
       courseId: student.course?._id || student.courseId,
@@ -2923,6 +2986,20 @@ export const generateAdmitCard = async (req, res, next) => {
       throw createError(400, 'Failed to load student photo from SDMS');
     }
 
+    let finalRoomNumber = student.roomNumber;
+    if (!finalRoomNumber && (student.admissionNumber || student.rollNumber)) {
+      const activeReq = await HostelRequest.findOne({
+        $or: [
+          ...(student.admissionNumber ? [{ admissionNumber: student.admissionNumber }] : []),
+          ...(student.rollNumber ? [{ sdmsRollNumber: student.rollNumber }] : [])
+        ],
+        status: 'active'
+      }).select('roomNumber').lean();
+      if (activeReq?.roomNumber) {
+        finalRoomNumber = activeReq.roomNumber;
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -2936,7 +3013,7 @@ export const generateAdmitCard = async (req, res, next) => {
           branch: enriched.branch?.name || enriched.branch || student.branch?.name || student.branch,
           gender: student.gender,
           category: student.category,
-          roomNumber: student.roomNumber,
+          roomNumber: finalRoomNumber,
           studentPhone: enriched.studentPhone || student.studentPhone,
           parentPhone: enriched.parentPhone || student.parentPhone,
           email: student.email,

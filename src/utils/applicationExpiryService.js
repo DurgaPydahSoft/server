@@ -718,7 +718,7 @@ export const fetchStudentsForAcademicYear = async ({
   if (!skipEnrichment) {
     userQueryBuilder = userQueryBuilder.select('-password').populate(populateOpts);
   } else {
-    userQueryBuilder = userQueryBuilder.select('name rollNumber admissionNumber course branch year gender roomNumber hostel hostelCategory hostelStatus currentAcademicYear createdAt applicationStatus');
+    userQueryBuilder = userQueryBuilder.select('name rollNumber admissionNumber course branch year gender roomNumber hostel hostelCategory hostelStatus currentAcademicYear createdAt admitDate joiningDate leftDate applicationStatus');
   }
 
   const users = await userQueryBuilder

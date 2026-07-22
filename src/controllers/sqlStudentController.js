@@ -3,6 +3,8 @@ import { matchCourseAndBranch } from '../utils/courseBranchMatcher.js';
 import { normalizeBatchToYear } from '../utils/batchUtils.js';
 import { createError } from '../utils/error.js';
 import { formatSqlStudentPhoto } from '../utils/studentPhotoService.js';
+import User from '../models/User.js';
+import HostelRequest from '../models/HostelRequest.js';
 
 /**
  * Map SQL gender to MongoDB gender format
@@ -117,6 +119,45 @@ export const fetchStudentFromSQL = async (req, res, next) => {
         mappedData.courseSuggestions = courseMatch.courseSuggestions;
         mappedData.branchSuggestions = courseMatch.branchSuggestions;
       }
+    }
+    
+    // Check if student already has an existing active request or registration in HMS
+    const identifiers = [...new Set([
+      mappedData.rollNumber,
+      mappedData.admissionNumber,
+      identifier
+    ].map(id => id ? String(id).trim().toUpperCase() : null).filter(Boolean))];
+
+    const [existingUser, existingHostelRequest] = await Promise.all([
+      User.findOne({
+        $or: [
+          { rollNumber: { $in: identifiers } },
+          { admissionNumber: { $in: identifiers } }
+        ],
+        role: 'student'
+      }).select('name rollNumber admissionNumber applicationStatus academicYear roomNumber hostelId').lean(),
+      HostelRequest.findOne({
+        $or: [
+          { admissionNumber: { $in: identifiers } },
+          { sdmsRollNumber: { $in: identifiers } }
+        ],
+        status: 'active'
+      }).select('admissionNumber sdmsRollNumber academicYear roomNumber hostelSequenceId status').lean()
+    ]);
+
+    const hasExistingRequest = Boolean(
+      existingHostelRequest || (existingUser && ['Active', 'Extended'].includes(existingUser.applicationStatus))
+    );
+
+    mappedData.hasExistingRequest = hasExistingRequest;
+    if (hasExistingRequest) {
+      mappedData.existingRequest = {
+        academicYear: existingHostelRequest?.academicYear || existingUser?.academicYear || 'N/A',
+        roomNumber: existingHostelRequest?.roomNumber || existingUser?.roomNumber || 'N/A',
+        status: existingHostelRequest?.status || existingUser?.applicationStatus || 'Active',
+        hostelSequenceId: existingHostelRequest?.hostelSequenceId || null,
+        message: 'Request for this student already exist'
+      };
     }
     
     res.json({

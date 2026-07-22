@@ -274,7 +274,7 @@ export const closeActiveHostelRequest = async ({
   } else {
     item.cancelledAt = new Date();
   }
-  await item.save();
+  await item.save({ validateModifiedOnly: true });
 
   const historyStatus = status === 'cancelled' ? 'Withdrawn' : 'Expired';
   await RoomOccupancyHistory.updateMany(
@@ -350,7 +350,7 @@ export const reopenHostelRequestForYear = async ({
   item.expiredAt = undefined;
   item.cancelledAt = undefined;
   item.updatedBy = adminId || item.updatedBy;
-  await item.save();
+  await item.save({ validateModifiedOnly: true });
 
   await RoomOccupancyHistory.updateMany(
     {
@@ -434,23 +434,47 @@ export const updateActiveRequestAllocationForAdmission = async ({
 
   const nextHostelId = hostelId || item.hostelId;
   const nextCategoryId = hostelCategoryId || item.hostelCategoryId;
-  const nextRoomId = roomId || item.roomId;
+  let nextRoomId = roomId || item.roomId;
   const nextRoomNumber = roomNumber || item.roomNumber;
 
   const hostel = await Hostel.findById(nextHostelId);
   if (!hostel) throw createError(400, 'Invalid hostel');
 
-  const category = await HostelCategory.findOne({ _id: nextCategoryId, hostel: nextHostelId });
-  if (!category) throw createError(400, 'Invalid category for the selected hostel');
+  let category = null;
+  if (nextCategoryId) {
+    category = await HostelCategory.findOne({ _id: nextCategoryId, hostel: nextHostelId });
+    if (!category) {
+      category = await HostelCategory.findById(nextCategoryId);
+    }
+  }
+  if (!category && item.hostelCategoryId) {
+    category = await HostelCategory.findById(item.hostelCategoryId);
+  }
 
-  const room = await Room.findOne({ _id: nextRoomId, hostel: nextHostelId, category: nextCategoryId });
-  if (!room) throw createError(400, 'Invalid room for the selected hostel/category');
+  let room = null;
+  if (nextRoomId) {
+    room = await Room.findOne({ _id: nextRoomId });
+  }
+  if (!room && nextRoomNumber) {
+    if (nextHostelId && nextCategoryId) {
+      room = await Room.findOne({ roomNumber: nextRoomNumber, hostel: nextHostelId, category: nextCategoryId });
+    }
+    if (!room && nextHostelId) {
+      room = await Room.findOne({ roomNumber: nextRoomNumber, hostel: nextHostelId });
+    }
+    if (!room) {
+      room = await Room.findOne({ roomNumber: nextRoomNumber });
+    }
+  }
+  if (room) {
+    nextRoomId = room._id;
+  }
 
-  if (bedNumber) {
+  if (bedNumber && room) {
     const bedTaken = await isBedOccupiedByActiveRequest(room, bedNumber, academicYear, item._id);
     if (bedTaken) throw createError(400, 'Selected bed is already occupied for this academic year');
   }
-  if (lockerNumber) {
+  if (lockerNumber && room) {
     const lockerTaken = await isLockerOccupiedByActiveRequest(
       room,
       lockerNumber,
@@ -488,7 +512,7 @@ export const updateActiveRequestAllocationForAdmission = async ({
   if (concession !== undefined) item.concession = Number(concession) || 0;
   if (notes !== undefined) item.notes = notes;
   item.updatedBy = adminId || item.updatedBy;
-  await item.save();
+  await item.save({ validateModifiedOnly: true });
 
   if (allocationChanged) {
     try {
