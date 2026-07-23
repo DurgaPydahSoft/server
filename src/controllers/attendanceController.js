@@ -299,16 +299,32 @@ export const takeAttendance = async (req, res, next) => {
   try {
     const { date, attendanceData } = req.body;
     const markedBy = req.admin ? req.admin._id : req.user._id;
+
+    console.log('📌 [takeAttendance] Received POST request.');
+    console.log('📌 [takeAttendance] date:', date);
+    console.log('📌 [takeAttendance] markedBy:', markedBy);
+    console.log('📌 [takeAttendance] attendanceData type:', typeof attendanceData);
+    console.log('📌 [takeAttendance] attendanceData isArray:', Array.isArray(attendanceData));
+    if (attendanceData && Array.isArray(attendanceData)) {
+      console.log('📌 [takeAttendance] attendanceData length:', attendanceData.length);
+      if (attendanceData.length > 0) {
+        console.log('📌 [takeAttendance] First record sample:', JSON.stringify(attendanceData[0]));
+      }
+    }
     
     if (!date || !attendanceData || !Array.isArray(attendanceData)) {
+      console.error('📌 [takeAttendance] Validation failed: missing date or attendanceData is not an array.');
       throw createError(400, 'Date and attendance data are required');
     }
 
     const normalizedDate = normalizeToISTStartOfDay(date);
     const today = normalizeToISTStartOfDay(new Date());
+    console.log('📌 [takeAttendance] normalizedDate:', normalizedDate.toISOString());
+    console.log('📌 [takeAttendance] today:', today.toISOString());
     
     // Only allow taking attendance for today or past dates
     if (normalizedDate > today) {
+      console.error('📌 [takeAttendance] Error: Cannot take attendance for future dates. normalizedDate > today.');
       throw createError(400, 'Cannot take attendance for future dates');
     }
 
@@ -317,15 +333,31 @@ export const takeAttendance = async (req, res, next) => {
 
     // Extract all student IDs for batch validation
     const studentIds = attendanceData
-      .filter(record => record.studentId)
+      .filter(record => {
+        if (!record.studentId) {
+          console.warn('📌 [takeAttendance] Record is missing studentId:', JSON.stringify(record));
+        }
+        return record.studentId;
+      })
       .map(record => record.studentId);
+
+    console.log('📌 [takeAttendance] Extracted studentIds count:', studentIds.length);
+    console.log('📌 [takeAttendance] Sample studentIds:', studentIds.slice(0, 5));
 
     // Batch validate all students at once
     const validStudents = await User.find({ 
       _id: { $in: studentIds }, 
-      role: 'student', 
-      applicationStatus: { $in: ['Active', 'Extended'] } 
-    }).select('_id name joiningDate admitDate createdAt');
+      role: 'student'
+    }).select('_id name joiningDate admitDate createdAt applicationStatus');
+
+    console.log('📌 [takeAttendance] DB query matched students count:', validStudents.length);
+    if (validStudents.length > 0) {
+      console.log('📌 [takeAttendance] Sample valid students from DB:', validStudents.slice(0, 3).map(s => ({
+        id: s._id,
+        name: s.name,
+        status: s.applicationStatus
+      })));
+    }
 
     const validStudentIds = new Set(validStudents.map(student => student._id.toString()));
     const studentMap = new Map(validStudents.map(student => [student._id.toString(), student]));
@@ -342,16 +374,19 @@ export const takeAttendance = async (req, res, next) => {
         continue;
       }
 
-      if (!validStudentIds.has(studentId)) {
+      const hasId = validStudentIds.has(studentId.toString());
+      if (!hasId) {
+        console.warn(`📌 [takeAttendance] Student ID ${studentId} not in validStudentIds. Set contains:`, Array.from(validStudentIds).slice(0, 5));
         errors.push({ studentId, error: 'Student not found or inactive' });
         continue;
       }
 
-      const studentObj = studentMap.get(studentId);
+      const studentObj = studentMap.get(studentId.toString());
       const effectiveJoining = getEffectiveJoiningDate(studentObj);
       if (effectiveJoining) {
         const joiningStart = normalizeToISTStartOfDay(effectiveJoining);
         if (normalizedDate < joiningStart) {
+          console.warn(`📌 [takeAttendance] Skipping student ${studentObj.name} (${studentId}): normalizedDate ${normalizedDate.toISOString()} < joiningStart ${joiningStart.toISOString()}`);
           errors.push({
             studentId,
             error: `Attendance for ${studentObj.name || 'student'} opens only from joining date (${effectiveJoining.toLocaleDateString()})`
@@ -378,13 +413,20 @@ export const takeAttendance = async (req, res, next) => {
         }
       });
 
-      validRecords.push({ studentId, student: studentMap.get(studentId) });
+      validRecords.push({ studentId, student: studentObj });
+    }
+
+    console.log('📌 [takeAttendance] bulkOps prepared count:', bulkOps.length);
+    console.log('📌 [takeAttendance] errors count:', errors.length);
+    if (errors.length > 0) {
+      console.log('📌 [takeAttendance] Detailed errors:', JSON.stringify(errors.slice(0, 10)));
     }
 
     // Execute bulk operations
     if (bulkOps.length > 0) {
       const bulkResult = await Attendance.bulkWrite(bulkOps);
       console.log(`📊 Bulk attendance operation completed: ${bulkResult.upsertedCount} inserted, ${bulkResult.modifiedCount} updated`);
+      console.log('📌 [takeAttendance] bulkResult:', JSON.stringify(bulkResult));
       
       // Fetch the created/updated attendance records
       const attendanceIds = [];
@@ -396,13 +438,17 @@ export const takeAttendance = async (req, res, next) => {
         if (attendance) {
           results.push(attendance);
           attendanceIds.push(attendance._id);
+        } else {
+          console.warn(`📌 [takeAttendance] Could not find attendance record after bulkWrite for studentId: ${record.studentId}`);
         }
       }
+      console.log('📌 [takeAttendance] Fetched saved records count:', results.length);
     }
 
     // Send notifications to students about attendance being taken (batch processing)
     if (validRecords.length > 0) {
       try {
+        console.log(`📌 [takeAttendance] Sending notifications for ${validRecords.length} records...`);
         // Send notifications in batches to avoid overwhelming the system
         const batchSize = 10;
         for (let i = 0; i < validRecords.length; i += batchSize) {
@@ -428,12 +474,13 @@ export const takeAttendance = async (req, res, next) => {
           await Promise.all(notificationPromises);
         }
 
-        // Attendance notifications sent to students in batches
+        console.log('📌 [takeAttendance] Notifications sent.');
       } catch (notificationError) {
         console.error('Error sending attendance notification:', notificationError);
       }
     }
 
+    console.log(`📌 [takeAttendance] Success. Returning successful: ${results.length}, errors: ${errors.length}`);
     res.json({
       success: true,
       message: `Attendance taken for ${results.length} students`,
@@ -444,6 +491,7 @@ export const takeAttendance = async (req, res, next) => {
       }
     });
   } catch (error) {
+    console.error('📌 [takeAttendance] Uncaught error:', error);
     next(error);
   }
 };
