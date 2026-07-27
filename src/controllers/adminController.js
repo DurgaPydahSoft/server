@@ -28,14 +28,18 @@ import {
   closeActiveOccupancyHistory,
   removeStudentEnrollmentForAcademicYear,
   attachResolvedExpiryDates,
-  fetchStudentsForAcademicYear
+  fetchStudentsForAcademicYear,
+  isLeftDateDue,
+  expireHostelRequestByLeftDate
 } from '../utils/applicationExpiryService.js';
 import {
   getOccupiedBedsAndLockersForAcademicYear,
   countStudentsInRoomForAcademicYear,
   isBedOccupiedForAcademicYear,
   isLockerOccupiedForAcademicYear,
-  countActiveHostelRequestsForYear
+  countActiveHostelRequestsForYear,
+  countAllLiveActiveHostelRequests,
+  countAllHostelRequestsForYear
 } from '../utils/roomOccupancyUtils.js';
 import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
 import {
@@ -46,7 +50,8 @@ import {
 import {
   createYearlyHostelRequest,
   closeActiveHostelRequestForUser,
-  updateActiveRequestAllocationForAdmission
+  updateActiveRequestAllocationForAdmission,
+  updateStayDatesForAdmission
 } from '../services/hostelRequestService.js';
 import HostelRequest from '../models/HostelRequest.js';
 
@@ -148,7 +153,7 @@ const dualWriteHostelRequest = async ({
     academicYear,
     hostelId: hostel,
     hostelCategoryId: hostelCategory,
-    roomId: roomDoc._id,
+    roomId: roomDoc?._id,
     roomNumber,
     bedNumber,
     lockerNumber,
@@ -160,7 +165,10 @@ const dualWriteHostelRequest = async ({
     adminId,
     skipOccupancyChecks: true,
     // Phase 3: history is audit only, emitted from the request (not a live occupancy SOT)
-    emitHistory: true
+    emitHistory: Boolean(roomDoc?._id && roomNumber),
+    admitDate: student.admitDate || new Date(),
+    joiningDate: student.joiningDate || null,
+    leftDate: student.leftDate || null
   });
 
   // Link any pre-existing unlinked history rows for this student/AY
@@ -228,7 +236,8 @@ export const addStudent = async (req, res, next) => {
     } = req.body;
 
     const parsedAdmitDate = admitDate ? new Date(admitDate) : new Date();
-    const parsedJoiningDate = joiningDate ? new Date(joiningDate) : parsedAdmitDate;
+    // Joining date is set by warden after registration (AY-wise on HostelRequest)
+    const parsedJoiningDate = joiningDate ? new Date(joiningDate) : null;
     const parsedLeftDate = leftDate ? new Date(leftDate) : null;
 
     const normalizedGender = normalizeGender(gender);
@@ -344,53 +353,54 @@ export const addStudent = async (req, res, next) => {
     }
     const finalCategoryName = category?.trim() || hostelCategoryDoc.name;
 
-    // Validate room using hostel + hostelCategory + roomNumber
-    const roomQuery = { hostel, category: hostelCategory, roomNumber };
-    const roomDoc = await Room.findOne(roomQuery);
-    if (!roomDoc) {
-      throw createError(400, 'Invalid room number for the selected hostel/category.');
-    }
+    // Room is optional at registration (warden assigns later). Validate only when provided.
+    let roomDoc = null;
+    if (roomNumber) {
+      const roomQuery = { hostel, category: hostelCategory, roomNumber };
+      roomDoc = await Room.findOne(roomQuery);
+      if (!roomDoc) {
+        throw createError(400, 'Invalid room number for the selected hostel/category.');
+      }
 
-     // Check bed count limit
-     const studentCount = await countStudentsInRoomForAcademicYear(roomDoc, academicYear);
-     if (studentCount >= roomDoc.bedCount) {
-       throw createError(400, 'Room is full. Cannot register more students.');
-     }
- 
-     const excludeStudentId = isRenewal ? existingStudent._id : null;
- 
-     // Validate bed and locker assignment if provided
-     if (bedNumber) {
-       const bedOccupied = await isBedOccupiedForAcademicYear(
-         roomDoc,
-         bedNumber,
-         academicYear,
-         excludeStudentId
-       );
-       if (bedOccupied) {
-         throw createError(400, 'Selected bed is already occupied');
-       }
- 
-       const expectedBedFormat = `${roomNumber} Bed `;
-       if (!bedNumber.startsWith(expectedBedFormat)) {
-         throw createError(400, 'Invalid bed number format for this room');
-       }
-     }
- 
-     if (lockerNumber) {
-       const lockerOccupied = await isLockerOccupiedForAcademicYear(
-         roomDoc,
-         lockerNumber,
-         academicYear,
-         excludeStudentId
-       );
-       if (lockerOccupied) {
-         throw createError(400, 'Selected locker is already occupied');
-       }
+      const studentCount = await countStudentsInRoomForAcademicYear(roomDoc, academicYear);
+      if (studentCount >= roomDoc.bedCount) {
+        throw createError(400, 'Room is full. Cannot register more students.');
+      }
 
-      const expectedLockerFormat = `${roomNumber} Locker `;
-      if (!lockerNumber.startsWith(expectedLockerFormat)) {
-        throw createError(400, 'Invalid locker number format for this room');
+      const excludeStudentId = isRenewal ? existingStudent._id : null;
+
+      if (bedNumber) {
+        const bedOccupied = await isBedOccupiedForAcademicYear(
+          roomDoc,
+          bedNumber,
+          academicYear,
+          excludeStudentId
+        );
+        if (bedOccupied) {
+          throw createError(400, 'Selected bed is already occupied');
+        }
+
+        const expectedBedFormat = `${roomNumber} Bed `;
+        if (!bedNumber.startsWith(expectedBedFormat)) {
+          throw createError(400, 'Invalid bed number format for this room');
+        }
+      }
+
+      if (lockerNumber) {
+        const lockerOccupied = await isLockerOccupiedForAcademicYear(
+          roomDoc,
+          lockerNumber,
+          academicYear,
+          excludeStudentId
+        );
+        if (lockerOccupied) {
+          throw createError(400, 'Selected locker is already occupied');
+        }
+
+        const expectedLockerFormat = `${roomNumber} Locker `;
+        if (!lockerNumber.startsWith(expectedLockerFormat)) {
+          throw createError(400, 'Invalid locker number format for this room');
+        }
       }
     }
 
@@ -656,9 +666,9 @@ export const addStudent = async (req, res, next) => {
       if (roomNumber) student.roomNumber = roomNumber;
       if (bedNumber) student.bedNumber = bedNumber;
       if (lockerNumber) student.lockerNumber = lockerNumber;
-      if (admitDate) student.admitDate = parsedAdmitDate;
-      if (joiningDate) student.joiningDate = parsedJoiningDate;
-      if (leftDate !== undefined) student.leftDate = parsedLeftDate;
+      student.admitDate = parsedAdmitDate;
+      student.joiningDate = parsedJoiningDate;
+      student.leftDate = parsedLeftDate;
       if (studentPhone) student.studentPhone = studentPhone;
       if (parentPhone) student.parentPhone = parentPhone;
       if (motherName) student.motherName = motherName;
@@ -1292,6 +1302,192 @@ export const updateStudent = async (req, res, next) => {
       throw createError(404, 'Student not found');
     }
 
+    // Fast path: date + optional room assignment (warden home / attendance modals).
+    // Skip SQL enrichment, fee recalculation. `academicYear` scopes HostelRequest updates.
+    const hasFiles = Boolean(req.files && Object.keys(req.files).length);
+    const isQuickWardenUpdate =
+      !hasFiles &&
+      (admitDate || joiningDate || leftDate !== undefined || roomNumber) &&
+      !name &&
+      !rollNumber &&
+      !admissionNumber &&
+      !course &&
+      !year &&
+      !branch &&
+      !gender &&
+      !mealType &&
+      parentPermissionForOuting === undefined &&
+      !studentPhone &&
+      !parentPhone &&
+      !batch &&
+      !hostelStatus &&
+      !email &&
+      concession === undefined;
+
+    if (isQuickWardenUpdate) {
+      const targetYear = academicYear || student.academicYear;
+      let expiredRequest = null;
+      let allocatedRoom = null;
+      let stayDates = null;
+
+      // Canonical AY-wise stay dates on HostelRequest
+      if (admitDate || joiningDate || leftDate !== undefined) {
+        stayDates = await updateStayDatesForAdmission({
+          admissionNumber: student.admissionNumber,
+          academicYear: targetYear,
+          ...(admitDate ? { admitDate } : {}),
+          ...(joiningDate !== undefined ? { joiningDate: joiningDate || null } : {}),
+          ...(leftDate !== undefined ? { leftDate: leftDate || null } : {}),
+          adminId: req.admin?._id
+        });
+
+        if (!stayDates) {
+          throw createError(
+            404,
+            `No hostel request found for this student in academic year ${targetYear}`
+          );
+        }
+
+        // Mirror onto User only when editing the student's current academic year (legacy cache)
+        if (String(targetYear) === String(student.academicYear)) {
+          if (stayDates.admitDate) student.admitDate = stayDates.admitDate;
+          if (joiningDate !== undefined) student.joiningDate = stayDates.joiningDate;
+          if (leftDate !== undefined) student.leftDate = stayDates.leftDate;
+        }
+      }
+
+      if (leftDate) {
+        // Schedule expiry for leftDate. Expire immediately only if date is today or earlier.
+        if (stayDates && isLeftDateDue(stayDates.leftDate || leftDate)) {
+          expiredRequest = await expireHostelRequestByLeftDate(stayDates, {
+            adminId: req.admin?._id
+          });
+          if (expiredRequest && String(targetYear) === String(student.academicYear)) {
+            student.bedNumber = undefined;
+            student.lockerNumber = undefined;
+            student.roomNumber = undefined;
+            student.room = undefined;
+            student.applicationStatus = 'Expired';
+            student.hostelStatus = 'Inactive';
+          }
+        }
+      }
+
+      // Assign / change room for this academic year (when request is still active).
+      if (roomNumber && !expiredRequest) {
+        let targetHostelId = hostel || req.body.hostelId || student.hostel;
+        let targetCategoryId = hostelCategory || student.hostelCategory;
+
+        if (category && !targetCategoryId) {
+          const categoryDoc = await HostelCategory.findOne({
+            ...(targetHostelId ? { hostel: targetHostelId } : {}),
+            name: String(category).trim()
+          });
+          if (categoryDoc) {
+            targetCategoryId = categoryDoc._id;
+            if (!targetHostelId) targetHostelId = categoryDoc.hostel;
+          }
+        }
+
+        if (!targetHostelId && student.admissionNumber) {
+          const activeReq = await HostelRequest.findOne({
+            admissionNumber: String(student.admissionNumber).toUpperCase(),
+            academicYear: targetYear,
+            status: 'active'
+          }).lean();
+          if (activeReq) {
+            targetHostelId = activeReq.hostelId;
+            targetCategoryId = targetCategoryId || activeReq.hostelCategoryId;
+          }
+        }
+
+        const roomQuery = { roomNumber };
+        if (targetHostelId) roomQuery.hostel = targetHostelId;
+        if (targetCategoryId) roomQuery.category = targetCategoryId;
+
+        let roomDoc = await Room.findOne(roomQuery);
+        if (!roomDoc && targetHostelId) {
+          roomDoc = await Room.findOne({ roomNumber, hostel: targetHostelId });
+        }
+        if (!roomDoc) {
+          throw createError(400, 'Invalid room number for the selected hostel/category.');
+        }
+
+        let nextBed = bedNumber;
+        let nextLocker = lockerNumber;
+        if (!nextBed || !nextLocker) {
+          const { occupiedBeds, occupiedLockers } = await getOccupiedBedsAndLockersForAcademicYear(
+            roomDoc,
+            targetYear
+          );
+          const occupiedBedSet = new Set(occupiedBeds);
+          const occupiedLockerSet = new Set(occupiedLockers);
+          if (!nextBed) {
+            for (let i = 1; i <= (roomDoc.bedCount || 0); i++) {
+              const candidate = `${roomNumber} Bed ${i}`;
+              if (!occupiedBedSet.has(candidate)) {
+                nextBed = candidate;
+                break;
+              }
+            }
+          }
+          if (!nextLocker) {
+            for (let i = 1; i <= (roomDoc.bedCount || 0); i++) {
+              const candidate = `${roomNumber} Locker ${i}`;
+              if (!occupiedLockerSet.has(candidate)) {
+                nextLocker = candidate;
+                break;
+              }
+            }
+          }
+        }
+
+        await updateActiveRequestAllocationForAdmission({
+          admissionNumber: student.admissionNumber,
+          academicYear: targetYear,
+          hostelId: targetHostelId || roomDoc.hostel,
+          hostelCategoryId: targetCategoryId || roomDoc.category,
+          roomId: roomDoc._id,
+          roomNumber,
+          bedNumber: nextBed,
+          lockerNumber: nextLocker,
+          adminId: req.admin?._id,
+          userId: student._id
+        });
+
+        student.hostel = targetHostelId || roomDoc.hostel;
+        student.hostelCategory = targetCategoryId || roomDoc.category;
+        student.room = roomDoc._id;
+        student.roomNumber = roomNumber;
+        if (nextBed) student.bedNumber = nextBed;
+        if (nextLocker) student.lockerNumber = nextLocker;
+        allocatedRoom = roomNumber;
+      }
+
+      await student.save({ validateModifiedOnly: true });
+
+      return res.json({
+        success: true,
+        data: {
+          student: {
+            id: student._id,
+            admitDate: stayDates?.admitDate ?? student.admitDate,
+            joiningDate: stayDates?.joiningDate ?? student.joiningDate,
+            leftDate: stayDates?.leftDate ?? student.leftDate,
+            roomNumber: student.roomNumber,
+            bedNumber: student.bedNumber,
+            lockerNumber: student.lockerNumber,
+            category: student.category,
+            hostelCategory: student.hostelCategory,
+            academicYear: targetYear
+          },
+          hostelRequestExpired: Boolean(expiredRequest),
+          leftDateScheduled: Boolean(leftDate && !expiredRequest),
+          roomAllocated: allocatedRoom
+        }
+      });
+    }
+
     const previousApplicationStatus = student.applicationStatus;
     const academicSnapshot = await enrichStudentAcademics(student);
 
@@ -1508,17 +1704,50 @@ export const updateStudent = async (req, res, next) => {
       }
     }
     if (email) student.email = email;
-    if (admitDate) student.admitDate = new Date(admitDate);
-    if (joiningDate) student.joiningDate = new Date(joiningDate);
-    if (leftDate !== undefined) student.leftDate = leftDate ? new Date(leftDate) : null;
 
+    // AY-wise stay dates → HostelRequest (User kept as current-year cache only)
+    const stayYear = academicYear || student.academicYear;
+    if (admitDate || joiningDate || leftDate !== undefined) {
+      const stayDates = await updateStayDatesForAdmission({
+        admissionNumber: student.admissionNumber,
+        academicYear: stayYear,
+        ...(admitDate ? { admitDate } : {}),
+        ...(joiningDate !== undefined ? { joiningDate: joiningDate || null } : {}),
+        ...(leftDate !== undefined ? { leftDate: leftDate || null } : {}),
+        adminId: req.admin?._id
+      });
+
+      if (stayDates && String(stayYear) === String(student.academicYear || academicYear)) {
+        if (stayDates.admitDate) student.admitDate = stayDates.admitDate;
+        if (joiningDate !== undefined) student.joiningDate = stayDates.joiningDate;
+        if (leftDate !== undefined) student.leftDate = stayDates.leftDate;
+      }
+
+      if (leftDate) {
+        // Schedule expiry; apply immediately only if leftDate is today or earlier.
+        if (stayDates && isLeftDateDue(stayDates.leftDate || leftDate)) {
+          await expireHostelRequestByLeftDate(stayDates, { adminId: req.admin?._id });
+          if (String(stayYear) === String(student.academicYear || academicYear)) {
+            student.bedNumber = undefined;
+            student.lockerNumber = undefined;
+            student.roomNumber = undefined;
+            student.room = undefined;
+            student.applicationStatus = 'Expired';
+            student.hostelStatus = 'Inactive';
+          }
+        }
+      }
+    }
+
+    // Only sync HostelRequest when allocation-related fields are actually sent in this request.
+    // Do NOT treat existing student.hostel/category fallbacks as "touched".
     const allocationTouched =
       Boolean(roomNumber) ||
-      Boolean(targetHostelId) ||
-      Boolean(targetCategoryId) ||
+      Boolean(hostel || req.body.hostelId) ||
+      Boolean(hostelCategory || category) ||
       bedNumber !== undefined ||
       lockerNumber !== undefined ||
-      mealType ||
+      Boolean(mealType) ||
       parentPermissionForOuting !== undefined ||
       concession !== undefined;
 
@@ -1539,6 +1768,21 @@ export const updateStudent = async (req, res, next) => {
           adminId: req.admin?._id,
           userId: student._id
         });
+
+        // Denormalized cache on User for legacy readers (principal attendance, edit response).
+        // HostelRequest remains the source of truth for allocation.
+        if (targetHostelId) student.hostel = targetHostelId;
+        if (targetCategoryId) student.hostelCategory = targetCategoryId;
+        if (roomDoc?._id) student.room = roomDoc._id;
+        if (roomNumber !== undefined && roomNumber !== null && roomNumber !== '') {
+          student.roomNumber = roomNumber;
+        }
+        if (bedNumber !== undefined) {
+          student.bedNumber = bedNumber || undefined;
+        }
+        if (lockerNumber !== undefined) {
+          student.lockerNumber = lockerNumber || undefined;
+        }
       } catch (hrErr) {
         console.error('Failed to sync HostelRequest allocation on student update:', hrErr.message);
         throw hrErr;
@@ -2048,7 +2292,8 @@ export const getDashboardSummary = async (req, res, next) => {
       complaintStats,
       leaveStats,
       roomStatsRaw,
-      ayRequestOccupied
+      requestOccupied,
+      ayActiveOccupied
     ] = await Promise.all([
       Complaint.aggregate([
         { $group: { _id: '$status', count: { $sum: 1 } } }
@@ -2061,11 +2306,14 @@ export const getDashboardSummary = async (req, res, next) => {
           $group: {
             _id: null,
             totalRooms: { $sum: 1 },
-            totalCapacity: { $sum: '$capacity' },
-            totalOccupied: { $sum: '$occupiedBeds' }
+            totalCapacity: { $sum: '$bedCount' }
           }
         }
       ]),
+      // Live: all-AY active requests. AY Wise: all statuses for that year (display filled).
+      academicYear
+        ? countAllHostelRequestsForYear(academicYear)
+        : countAllLiveActiveHostelRequests(),
       academicYear ? countActiveHostelRequestsForYear(academicYear) : Promise.resolve(null)
     ]);
 
@@ -2080,13 +2328,13 @@ export const getDashboardSummary = async (req, res, next) => {
       return acc;
     }, {});
 
-    const rStats = roomStatsRaw[0] || { totalRooms: 0, totalCapacity: 0, totalOccupied: 0 };
-    // Prefer HostelRequest occupancy when academic year filter is set
-    const occupiedBeds =
-      ayRequestOccupied !== null ? ayRequestOccupied : rStats.totalOccupied;
+    const rStats = roomStatsRaw[0] || { totalRooms: 0, totalCapacity: 0 };
+    const occupiedBeds = requestOccupied || 0;
+    // Available beds use active occupancy only (true vacancy).
+    const vacancyOccupied = academicYear ? (ayActiveOccupied || 0) : occupiedBeds;
     const roomOccupancyRate =
       rStats.totalCapacity > 0
-        ? Math.round((occupiedBeds / rStats.totalCapacity) * 100)
+        ? Math.round((vacancyOccupied / rStats.totalCapacity) * 100)
         : 0;
 
     const responsePayload = {
@@ -2113,7 +2361,7 @@ export const getDashboardSummary = async (req, res, next) => {
         rooms: {
           total: rStats.totalRooms,
           occupied: occupiedBeds,
-          available: Math.max(0, rStats.totalCapacity - occupiedBeds),
+          available: Math.max(0, rStats.totalCapacity - vacancyOccupied),
           occupancyRate: roomOccupancyRate
         }
       }

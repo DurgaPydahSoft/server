@@ -97,8 +97,11 @@ router.get('/stats', adminAuth, getRoomStats);
 // Get all distinct categories - public (for fee management)
 router.get('/categories', getCategories);
 
-// Get rooms with bed availability for student registration - admin only
+// Get rooms with bed availability for student registration - admin/warden
 router.get('/bed-availability', adminAuth, getRoomsWithBedAvailability);
+
+// Warden shortcut (same handler; auto-scoped by assigned hostel)
+router.get('/warden/bed-availability', wardenAuth, getRoomsWithBedAvailability);
 
 // Get rooms for warden - warden only
 router.get('/warden', wardenAuth, getWardenRooms);

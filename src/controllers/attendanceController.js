@@ -15,6 +15,10 @@ import { normalizeToISTStartOfDay, getISTStartOfDay, getISTEndOfDay } from '../u
 import notificationService from '../utils/notificationService.js';
 import { fetchStudentsForAcademicYear } from '../utils/applicationExpiryService.js';
 
+// Backwards-compat alias: several range/report endpoints reference `normalizeDate`
+// but the codebase primarily provides `normalizeToISTStartOfDay`.
+const normalizeDate = (date) => normalizeToISTStartOfDay(date);
+
 /** Resolve hostel/gender scope for wardens from Admin assignment */
 const resolveWardenStudentScope = (admin, queryGender, queryHostel) => {
   let gender = queryGender;
@@ -182,7 +186,9 @@ export const getStudentsForAttendance = async (req, res, next) => {
     }
 
     // Attendance opens strictly from effective joining date (joiningDate -> admitDate -> createdAt)
-    if (normalizedDate && students.length > 0) {
+    // For academic-year based attendance, the roster is already academic-year scoped; we should not
+    // hide students only because `joiningDate` is missing.
+    if (!academicYear && normalizedDate && students.length > 0) {
       console.log('🔍 getStudentsForAttendance - Filtering by effective joining date. Initial count:', students.length);
       students = students.filter(student => {
         const effectiveJoining = getEffectiveJoiningDate(student);

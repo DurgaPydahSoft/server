@@ -1,14 +1,20 @@
 /**
- * Room occupancy reads — Phase 6: active HostelRequest only (AY-scoped).
- * Legacy User / RoomOccupancyHistory dual-read removed.
- * getDefaultAcademicYear kept here for shared import convenience.
+ * Room occupancy reads — Phase 6: HostelRequest based.
+ * Vacancy / bed checks stay active-only + AY-scoped.
+ * Room Management Live = active across all AYs; AY Wise = all statuses for that year.
  */
 import {
   countActiveRequestsInRoom,
+  countLiveActiveRequestsInRoom,
+  countAllRequestsInRoomForAcademicYear,
   getActiveRequestsInRoom,
+  getLiveActiveRequestsInRoom,
+  getAllRequestsInRoomForAcademicYear,
   getOccupiedBedsAndLockersFromRequests,
   isBedOccupiedByActiveRequest,
-  isLockerOccupiedByActiveRequest
+  isLockerOccupiedByActiveRequest,
+  countAllLiveActiveHostelRequests,
+  countAllHostelRequestsForYear
 } from './hostelRequestOccupancyUtils.js';
 import HostelRequest from '../models/HostelRequest.js';
 import StudentMaster from '../models/StudentMaster.js';
@@ -46,18 +52,36 @@ const resolveExcludeRequestId = async (excludeStudentId, academicYear) => {
   return request?._id || null;
 };
 
+/**
+ * Vacancy / capacity check: ACTIVE requests only for an academic year.
+ * Defaults to current AY when omitted (legacy callers).
+ */
 export const countStudentsInRoomForAcademicYear = async (room, academicYear) => {
   if (!room?._id) return 0;
   const ay = academicYear || getDefaultAcademicYear();
   return countActiveRequestsInRoom(room, ay);
 };
 
-export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
-  if (!room?._id) return [];
+/**
+ * Room Management display count.
+ * - academicYear set: ALL statuses for that AY
+ * - academicYear omitted (Live): active requests across all AYs
+ */
+export const countRoomOccupancyForDisplay = async (room, academicYear) => {
+  if (!room?._id) return 0;
+  if (academicYear) {
+    return countAllRequestsInRoomForAcademicYear(room, academicYear);
+  }
+  return countLiveActiveRequestsInRoom(room);
+};
 
-  const ay = academicYear || getDefaultAcademicYear();
-  const requests = await getActiveRequestsInRoom(room, ay);
+/** Active-only occupancy used for available-beds math when AY is selected. */
+export const countActiveStudentsInRoomForAcademicYear = async (room, academicYear) => {
+  if (!room?._id || !academicYear) return 0;
+  return countActiveRequestsInRoom(room, academicYear);
+};
 
+const mapRequestsToStudentDtos = async (requests) => {
   const masterIds = requests
     .map((r) => r.studentMasterId?._id || r.studentMasterId)
     .filter(Boolean);
@@ -77,6 +101,15 @@ export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
       masterById.get(String(masterId)) ||
       {};
 
+    const statusLabel =
+      req.status === 'active'
+        ? 'Active'
+        : req.status === 'expired'
+          ? 'Expired'
+          : req.status === 'cancelled'
+            ? 'Cancelled'
+            : req.status || 'Unknown';
+
     return {
       _id: master.userId || req._id,
       name: master.name || req.sdmsName || '',
@@ -87,7 +120,7 @@ export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
       year: req.sdmsYearOfStudy || null,
       bedNumber: req.bedNumber,
       lockerNumber: req.lockerNumber,
-      enrollmentStatus: 'Active',
+      enrollmentStatus: statusLabel,
       academicYear: req.academicYear,
       hostelRequestId: req._id,
       hostelRequestStatus: req.status,
@@ -95,6 +128,21 @@ export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
       studentPhone: master.studentPhone || null
     };
   });
+};
+
+/**
+ * Students list for room detail.
+ * - With AY: all statuses for that year
+ * - Live (no AY): active across all years
+ */
+export const getStudentsInRoomForAcademicYear = async (room, academicYear) => {
+  if (!room?._id) return [];
+
+  const requests = academicYear
+    ? await getAllRequestsInRoomForAcademicYear(room, academicYear)
+    : await getLiveActiveRequestsInRoom(room);
+
+  return mapRequestsToStudentDtos(requests);
 };
 
 export const getOccupiedBedsAndLockersForAcademicYear = async (room, academicYear) => {
@@ -132,4 +180,12 @@ export const countActiveHostelRequestsForYear = async (academicYear) => {
     academicYear,
     status: 'active'
   });
+};
+
+export {
+  countLiveActiveRequestsInRoom,
+  countAllRequestsInRoomForAcademicYear,
+  countAllLiveActiveHostelRequests,
+  countAllHostelRequestsForYear,
+  getActiveRequestsInRoom
 };

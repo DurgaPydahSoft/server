@@ -48,7 +48,10 @@ export const createHostelRequest = async (req, res, next) => {
       mealType,
       parentPermissionForOuting,
       concession,
-      notes
+      notes,
+      admitDate,
+      joiningDate,
+      leftDate
     } = req.body;
 
     const admission = normalizeAdmission(admissionNumber);
@@ -109,7 +112,10 @@ export const createHostelRequest = async (req, res, next) => {
       courseCode: bodyCourseCode,
       sdms,
       adminId: req.admin?._id,
-      emitHistory: true
+      emitHistory: true,
+      admitDate: admitDate || new Date(),
+      joiningDate: joiningDate || null,
+      leftDate: leftDate || null
     });
 
     const populated = await HostelRequest.findById(hostelRequest._id)

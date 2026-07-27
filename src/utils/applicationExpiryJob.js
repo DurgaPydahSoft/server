@@ -22,7 +22,9 @@ export const runApplicationExpiryJob = async () => {
   try {
     console.log('📅 Running application expiry job...');
     const result = await processDueApplicationExpiries();
-    console.log(`📅 Application expiry job done: ${result.expired}/${result.processed} expired, ${result.nocDeactivated || 0} NOCs processed`);
+    console.log(
+      `📅 Application expiry job done: left-date=${result.leftDateExpired ?? result.expired}/${result.processed} expired, ${result.nocDeactivated || 0} NOCs processed`
+    );
     return result;
   } catch (error) {
     console.error('📅 Application expiry job failed:', error);

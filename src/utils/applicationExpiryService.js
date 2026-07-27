@@ -18,6 +18,7 @@ import {
 } from '../services/feesSyncService.js';
 import {
   closeActiveHostelRequestForUser,
+  closeActiveHostelRequest,
   reopenHostelRequestForYear
 } from '../services/hostelRequestService.js';
 import { fetchSemesterEndDateFromSQL } from './sqlService.js';
@@ -403,7 +404,129 @@ export const processDueNOCDeactivations = async () => {
   return deactivatedCount;
 };
 
+const endOfToday = () => {
+  const today = new Date();
+  today.setHours(23, 59, 59, 999);
+  return today;
+};
+
+export const isLeftDateDue = (leftDate, asOf = endOfToday()) => {
+  if (!leftDate) return false;
+  const d = new Date(leftDate);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() <= asOf.getTime();
+};
+
+/**
+ * Expire one active HostelRequest because its leftDate is due.
+ * Vacates room on User when the request AY matches the student's current year.
+ */
+export const expireHostelRequestByLeftDate = async (hostelRequest, { adminId = null } = {}) => {
+  if (!hostelRequest || hostelRequest.status !== 'active') return null;
+  if (!isLeftDateDue(hostelRequest.leftDate)) return null;
+
+  const admission = normalizeAdmissionNumber(hostelRequest.admissionNumber);
+  let student = null;
+
+  if (hostelRequest.studentMasterId) {
+    const master = await StudentMaster.findById(hostelRequest.studentMasterId).select('userId').lean();
+    if (master?.userId) {
+      student = await User.findById(master.userId);
+    }
+  }
+  if (!student && admission) {
+    student = await User.findOne({ role: 'student', admissionNumber: admission });
+  }
+
+  const closed = await closeActiveHostelRequest({
+    admissionNumber: admission,
+    academicYear: hostelRequest.academicYear,
+    userId: student?._id || null,
+    status: 'expired',
+    statusReason: 'left_date',
+    adminId
+  });
+
+  if (!closed) return null;
+
+  if (student) {
+    if (String(student.academicYear) === String(hostelRequest.academicYear)) {
+      student.bedNumber = undefined;
+      student.lockerNumber = undefined;
+      student.roomNumber = undefined;
+      student.room = undefined;
+      student.applicationStatus = 'Expired';
+      student.hostelStatus = 'Inactive';
+      student.leftDate = hostelRequest.leftDate;
+      await student.save({ validateModifiedOnly: true });
+    }
+
+    await closeActiveOccupancyHistory({
+      studentId: student._id,
+      academicYear: hostelRequest.academicYear,
+      status: 'Expired',
+      expiryReason: 'left_date'
+    });
+  }
+
+  return closed;
+};
+
+/**
+ * Daily: expire active HostelRequests whose leftDate is today or earlier.
+ * This runs even when academic-year auto-expiry is paused.
+ */
+export const processDueLeftDateExpiries = async () => {
+  const today = endOfToday();
+
+  const dueRequests = await HostelRequest.find({
+    status: 'active',
+    leftDate: { $ne: null, $lte: today }
+  });
+
+  let expired = 0;
+  for (const req of dueRequests) {
+    try {
+      const result = await expireHostelRequestByLeftDate(req);
+      if (result) {
+        expired += 1;
+        console.log(
+          `📅 Left-date expiry: ${req.admissionNumber} / ${req.academicYear} (leftDate: ${req.leftDate?.toISOString?.() || req.leftDate})`
+        );
+      }
+    } catch (err) {
+      console.error(
+        `📅 Failed left-date expiry for ${req.admissionNumber}/${req.academicYear}:`,
+        err.message
+      );
+    }
+  }
+
+  return expired;
+};
+
 export const processDueApplicationExpiries = async () => {
+  // Always process left-date based expiries (and NOC vacating), even when AY auto-expiry is paused.
+  const leftDateExpired = await processDueLeftDateExpiries();
+  const nocDeactivated = await processDueNOCDeactivations();
+
+  // Academic-year auto-expiry is paused: hostel requests expire via left-date schedule (or NOC).
+  const AUTO_APPLICATION_EXPIRY_ENABLED = false;
+  if (!AUTO_APPLICATION_EXPIRY_ENABLED) {
+    console.log(
+      `📅 Auto AY expiry paused — left-date expiries: ${leftDateExpired}, NOC: ${nocDeactivated}`
+    );
+    return {
+      processed: leftDateExpired,
+      expired: leftDateExpired,
+      leftDateExpired,
+      skippedNoConfig: 0,
+      reactivated: 0,
+      nocDeactivated,
+      paused: true
+    };
+  }
+
   const today = new Date();
   today.setHours(23, 59, 59, 999);
 
@@ -467,12 +590,11 @@ export const processDueApplicationExpiries = async () => {
   }
   */
 
-  // 3. Process NOC deactivations whose vacating date has arrived
-  const nocDeactivated = await processDueNOCDeactivations();
-
+  // 3. NOC deactivations already processed at start of this job
   return {
     processed: activeStudents.length,
-    expired,
+    expired: expired + leftDateExpired,
+    leftDateExpired,
     skippedNoConfig,
     reactivated,
     nocDeactivated
@@ -494,10 +616,13 @@ export const overlayStudentWithEnrollmentHistory = (student, history, requestedY
       // Student completed this year successfully and was renewed
       resolvedStatus = 'Active';
       resolvedAppStatus = 'Expired';  // Show as Expired for historical years
+    } else if (history.status === 'Transferred') {
+      // Left this room for another — not current occupancy for this history row
+      resolvedStatus = 'Inactive';
+      resolvedAppStatus = student.applicationStatus || 'Active';
     } else if (
       history.status === 'Active' ||
-      history.status === 'Extended' ||
-      history.status === 'Transferred'
+      history.status === 'Extended'
     ) {
       resolvedStatus = 'Active';
       resolvedAppStatus = 'Active';
@@ -567,6 +692,18 @@ const dedupeHistoryByStudent = (rows) => {
   return byStudent;
 };
 
+/** Newest registered / hostel-request students first for list views. */
+const getStudentAddedAtMs = (student) => {
+  const userCreated = student.createdAt ? new Date(student.createdAt).getTime() : 0;
+  const requestCreated = student.hostelRequestCreatedAt
+    ? new Date(student.hostelRequestCreatedAt).getTime()
+    : 0;
+  return Math.max(userCreated, requestCreated);
+};
+
+const sortStudentsNewestFirst = (students) =>
+  [...students].sort((a, b) => getStudentAddedAtMs(b) - getStudentAddedAtMs(a));
+
 /**
  * List students enrolled in a given academic year.
  * Phase 2 dual-read: prefer HostelRequest allocation/status when present;
@@ -602,27 +739,45 @@ export const fetchStudentsForAcademicYear = async ({
     categoryIds = categoryDocs.map((c) => c._id);
   }
 
-  // --- HostelRequest pool (preferred SOT when rows exist) ---
-  const requestQuery = { academicYear };
-  if (roomNumber) requestQuery.roomNumber = roomNumber;
-  if (hostel) requestQuery.hostelId = hostel;
-  if (categoryIds) requestQuery.hostelCategoryId = { $in: categoryIds };
-
-  const hostelRequests = await HostelRequest.find(requestQuery)
+  // --- HostelRequest: full AY map for overlay (SoT), filtered set for pool expansion ---
+  const allHostelRequests = await HostelRequest.find({ academicYear })
     .populate('hostelId', '_id name')
     .populate('hostelCategoryId', '_id name')
     .lean();
 
   const requestByAdmission = new Map();
-  for (const request of hostelRequests) {
+  const matchingRequestAdmissions = [];
+  const roomFilter = roomNumber ? String(roomNumber).trim() : '';
+  const hostelFilter = hostel ? String(hostel) : '';
+
+  for (const request of allHostelRequests) {
     const key = normalizeAdmissionNumber(request.admissionNumber);
-    if (key) requestByAdmission.set(key, request);
+    if (!key) continue;
+    requestByAdmission.set(key, request);
+
+    let matchesPool = true;
+    if (roomFilter && String(request.roomNumber || '').trim() !== roomFilter) {
+      matchesPool = false;
+    }
+    if (matchesPool && hostelFilter) {
+      const hid = request.hostelId?._id || request.hostelId;
+      if (String(hid) !== hostelFilter) matchesPool = false;
+    }
+    if (matchesPool && categoryIds) {
+      const cid = request.hostelCategoryId?._id || request.hostelCategoryId;
+      if (!categoryIds.some((id) => String(id) === String(cid))) matchesPool = false;
+    }
+    if (matchesPool) matchingRequestAdmissions.push(key);
   }
 
+  // History pool: never treat Transferred rows as current occupancy for room/hostel filters
   const historyQuery = { academicYear };
-  if (roomNumber) historyQuery.roomNumber = roomNumber;
+  if (roomFilter) historyQuery.roomNumber = roomFilter;
   if (hostel) historyQuery.hostel = hostel;
   if (categoryIds) historyQuery.hostelCategory = { $in: categoryIds };
+  if (roomFilter || hostel) {
+    historyQuery.status = { $nin: ['Transferred'] };
+  }
 
   let histories = await RoomOccupancyHistory.find(historyQuery)
     .populate('hostel', '_id name')
@@ -647,7 +802,7 @@ export const fetchStudentsForAcademicYear = async ({
   };
   if (gender) liveQuery.gender = gender;
   if (batch) liveQuery.batch = batch;
-  if (roomNumber) liveQuery.roomNumber = roomNumber;
+  if (roomFilter) liveQuery.roomNumber = roomFilter;
   if (hostel) liveQuery.hostel = hostel;
   if (category) liveQuery.category = category;
   // Note: hostelStatus is not restricted in MongoDB queries here to allow mapping currently inactive students who were active back then.
@@ -665,12 +820,11 @@ export const fetchStudentsForAcademicYear = async ({
     studentIdSet.add(row._id.toString());
   }
 
-  // Expand pool with users linked to HostelRequests for this AY
-  const requestAdmissions = [...requestByAdmission.keys()];
-  if (requestAdmissions.length > 0) {
+  // Expand pool with users linked to HostelRequests that match room/hostel/category filters
+  if (matchingRequestAdmissions.length > 0) {
     const usersFromRequests = await User.find({
       role: 'student',
-      admissionNumber: { $in: requestAdmissions }
+      admissionNumber: { $in: matchingRequestAdmissions }
     })
       .select('_id')
       .lean();
@@ -679,7 +833,7 @@ export const fetchStudentsForAcademicYear = async ({
     }
 
     const masters = await StudentMaster.find({
-      admissionNumber: { $in: requestAdmissions },
+      admissionNumber: { $in: matchingRequestAdmissions },
       userId: { $ne: null }
     })
       .select('userId')
@@ -749,6 +903,20 @@ export const fetchStudentsForAcademicYear = async ({
     return true;
   });
 
+  // After overlay, drop students whose final allocation no longer matches room/hostel filters
+  // (stale User.roomNumber / Transferred history can inflate the pool)
+  if (roomFilter) {
+    students = students.filter(
+      (s) => String(s.roomNumber || '').trim() === roomFilter
+    );
+  }
+  if (hostelFilter) {
+    students = students.filter((s) => {
+      const hid = s.hostel?._id || s.hostel;
+      return String(hid) === hostelFilter;
+    });
+  }
+
   if (hostelStatus) {
     if (hostelStatus === 'Active') {
       students = students.filter((s) => {
@@ -757,7 +925,8 @@ export const fetchStudentsForAcademicYear = async ({
         }
         return (
           s.applicationStatus === 'Active' &&
-          s.enrollmentHistoryStatus !== 'Withdrawn'
+          s.enrollmentHistoryStatus !== 'Withdrawn' &&
+          s.enrollmentHistoryStatus !== 'Transferred'
         );
       });
     } else if (hostelStatus === 'Inactive') {
@@ -767,7 +936,8 @@ export const fetchStudentsForAcademicYear = async ({
         }
         return (
           s.applicationStatus === 'Expired' ||
-          s.applicationStatus === 'Withdrawn'
+          s.applicationStatus === 'Withdrawn' ||
+          s.enrollmentHistoryStatus === 'Transferred'
         );
       });
     } else if (['active', 'expired', 'cancelled'].includes(String(hostelStatus).toLowerCase())) {
@@ -779,7 +949,8 @@ export const fetchStudentsForAcademicYear = async ({
         if (wanted === 'active') {
           return (
             ['Active', 'Extended'].includes(s.applicationStatus) &&
-            s.enrollmentHistoryStatus !== 'Withdrawn'
+            s.enrollmentHistoryStatus !== 'Withdrawn' &&
+            s.enrollmentHistoryStatus !== 'Transferred'
           );
         }
         if (wanted === 'expired') {
@@ -801,6 +972,8 @@ export const fetchStudentsForAcademicYear = async ({
     }
     students = students.filter((s) => matchesAcademicFilters(s, academicFilters));
   }
+
+  students = sortStudentsNewestFirst(students);
 
   const count = students.length;
   const pageNum = parseInt(page, 10);

@@ -72,6 +72,7 @@ import {
 } from '../controllers/leaveController.js';
 import { getSMSBalance } from '../controllers/smsController.js';
 import { adminAuth, wardenAuth, superAdminAuth, checkPermission } from '../middleware/authMiddleware.js';
+import { getRoomsWithBedAvailability } from '../controllers/roomController.js';
 
 // Middleware for concession management permission
 const concessionManagementAuth = [adminAuth, (req, res, next) => {
@@ -316,6 +317,7 @@ router.post('/rooms/:roomId/electricity', addElectricityBill);
 router.get('/rooms/:roomId/electricity', getElectricityBills);
 
 // Room bed/locker availability route
+router.get('/rooms/bed-availability', getRoomsWithBedAvailability);
 router.get('/rooms/:roomNumber/bed-locker-availability', getRoomBedLockerAvailability);
 
 // Staff/Guests management routes

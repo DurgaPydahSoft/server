@@ -296,6 +296,7 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  // Legacy cache of current-year stay dates. Canonical AY-wise dates live on HostelRequest.
   joiningDate: {
     type: Date,
     default: Date.now

@@ -9,6 +9,8 @@ import NOC from '../models/NOC.js';
 import { createError } from '../utils/error.js';
 import {
   countStudentsInRoomForAcademicYear,
+  countRoomOccupancyForDisplay,
+  countActiveStudentsInRoomForAcademicYear,
   getStudentsInRoomForAcademicYear,
   getOccupiedBedsAndLockersForAcademicYear
 } from '../utils/roomOccupancyUtils.js';
@@ -41,7 +43,12 @@ export const getRooms = async (req, res, next) => {
     
     // Get student count and staff count for each room and optionally the last bill
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
-      const studentCount = await countStudentsInRoomForAcademicYear(room, academicYear);
+      // Live (no AY): active across all years. AY: all statuses for that year.
+      const studentCount = await countRoomOccupancyForDisplay(room, academicYear);
+      // Available beds always based on active occupancy for the selected AY (or live active).
+      const activeForVacancy = academicYear
+        ? await countActiveStudentsInRoomForAcademicYear(room, academicYear)
+        : studentCount;
 
       const staffCount = academicYear
         ? 0
@@ -61,13 +68,15 @@ export const getRooms = async (req, res, next) => {
       return {
         ...roomObject,
         studentCount,
+        activeStudentCount: activeForVacancy,
         staffCount,
         totalOccupancy: studentCount + staffCount,
-        availableBeds: Math.max(0, (room.bedCount || 0) - studentCount - staffCount),
+        availableBeds: Math.max(0, (room.bedCount || 0) - activeForVacancy - staffCount),
         occupancyRate: room.bedCount
-          ? Math.round(((studentCount + staffCount) / room.bedCount) * 100)
+          ? Math.round(((activeForVacancy + staffCount) / room.bedCount) * 100)
           : 0,
-        academicYear: academicYear || null
+        academicYear: academicYear || null,
+        occupancyMode: academicYear ? 'ay' : 'live'
       };
     }));
 
@@ -282,8 +291,11 @@ export const getRoomStats = async (req, res, next) => {
       const categoryId = room.category?._id?.toString() || 'uncategorized';
       const categoryName = room.category?.name || 'Uncategorized';
 
-      // Get occupancy
-      const studentCount = await countStudentsInRoomForAcademicYear(room, academicYear);
+      // Get occupancy for display + vacancy
+      const studentCount = await countRoomOccupancyForDisplay(room, academicYear);
+      const activeForVacancy = academicYear
+        ? await countActiveStudentsInRoomForAcademicYear(room, academicYear)
+        : studentCount;
       const staffCount = academicYear
         ? 0
         : await StaffGuest.countDocuments({
@@ -292,6 +304,7 @@ export const getRoomStats = async (req, res, next) => {
             isActive: true
           });
       const filledBeds = studentCount + staffCount;
+      const vacancyFilled = activeForVacancy + staffCount;
 
       if (!statsByHostel.has(hostelId)) {
         statsByHostel.set(hostelId, {
@@ -301,6 +314,7 @@ export const getRoomStats = async (req, res, next) => {
           activeRooms: 0,
           totalBeds: 0,
           filledBeds: 0,
+          vacancyFilled: 0,
           categories: new Map()
         });
       }
@@ -309,6 +323,7 @@ export const getRoomStats = async (req, res, next) => {
       hostelEntry.activeRooms += room.isActive ? 1 : 0;
       hostelEntry.totalBeds += room.bedCount || 0;
       hostelEntry.filledBeds += filledBeds;
+      hostelEntry.vacancyFilled += vacancyFilled;
 
       if (!hostelEntry.categories.has(categoryId)) {
         hostelEntry.categories.set(categoryId, {
@@ -317,7 +332,8 @@ export const getRoomStats = async (req, res, next) => {
           totalRooms: 0,
           activeRooms: 0,
           totalBeds: 0,
-          filledBeds: 0
+          filledBeds: 0,
+          vacancyFilled: 0
         });
       }
       const catEntry = hostelEntry.categories.get(categoryId);
@@ -325,6 +341,7 @@ export const getRoomStats = async (req, res, next) => {
       catEntry.activeRooms += room.isActive ? 1 : 0;
       catEntry.totalBeds += room.bedCount || 0;
       catEntry.filledBeds += filledBeds;
+      catEntry.vacancyFilled += vacancyFilled;
     }
 
     const combinedStats = Array.from(statsByHostel.values()).map(h => ({
@@ -334,10 +351,10 @@ export const getRoomStats = async (req, res, next) => {
       activeRooms: h.activeRooms,
       totalBeds: h.totalBeds,
       filledBeds: h.filledBeds,
-      availableBeds: h.totalBeds - h.filledBeds,
+      availableBeds: Math.max(0, h.totalBeds - h.vacancyFilled),
       categories: Array.from(h.categories.values()).map(c => ({
         ...c,
-        availableBeds: c.totalBeds - c.filledBeds
+        availableBeds: Math.max(0, c.totalBeds - c.vacancyFilled)
       }))
     }));
 
@@ -358,7 +375,8 @@ export const getRoomStats = async (req, res, next) => {
       data: {
         overall: overallStats,
         byHostel: combinedStats,
-        academicYear: academicYear || null
+        academicYear: academicYear || null,
+        occupancyMode: academicYear ? 'ay' : 'live'
       }
     });
   } catch (error) {
@@ -1203,7 +1221,13 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
     const { hostel, category, academicYear } = req.query;
     const query = {};
 
-    if (hostel) {
+    const admin = req.admin || req.warden || req.user;
+    const assignedHostelId = admin?.assignedHostelId?._id || admin?.assignedHostelId;
+
+    // Wardens are always scoped to their assigned hostel
+    if (admin?.role === 'warden' && assignedHostelId) {
+      query.hostel = assignedHostelId;
+    } else if (hostel) {
       if (!isValidObjectId(hostel)) {
         return res.status(400).json({ success: false, message: 'Invalid hostel id' });
       }

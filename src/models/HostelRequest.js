@@ -52,10 +52,11 @@ const hostelRequestSchema = new mongoose.Schema({
   roomId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Room',
-    required: true,
+    required: false,
     index: true
   },
-  roomNumber: { type: String, required: true, trim: true },
+  // Optional until warden assigns a room (registration is category-only)
+  roomNumber: { type: String, required: false, trim: true },
   bedNumber: { type: String, trim: true },
   lockerNumber: { type: String, trim: true },
   /** Codes used for academic-year sequence generation */
@@ -94,6 +95,10 @@ const hostelRequestSchema = new mongoose.Schema({
     default: true
   },
   concession: { type: Number, default: 0, min: 0 },
+  /** Stay dates for THIS academic year (SoT — not on User) */
+  admitDate: { type: Date, default: Date.now },
+  joiningDate: { type: Date, default: null },
+  leftDate: { type: Date, default: null },
   allocatedAt: { type: Date, default: Date.now },
   expiredAt: { type: Date },
   cancelledAt: { type: Date },

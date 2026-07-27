@@ -47,6 +47,8 @@ export const emitOccupancyHistoryForRequest = async (
   expiryReason = 'registration'
 ) => {
   if (!userId) return null;
+  // No room yet (category-only registration) — nothing to audit for occupancy
+  if (!hostelRequest.roomId || !hostelRequest.roomNumber) return null;
 
   return RoomOccupancyHistory.create({
     student: userId,
@@ -94,7 +96,10 @@ export const createYearlyHostelRequest = async ({
   userId = null,
   adminId = null,
   skipOccupancyChecks = false,
-  emitHistory = true
+  emitHistory = true,
+  admitDate = null,
+  joiningDate = null,
+  leftDate = null
 }) => {
   const admission = normalizeAdmission(admissionNumber);
   if (!admission) throw createError(400, 'Admission number is required');
@@ -122,25 +127,29 @@ export const createYearlyHostelRequest = async ({
   const category = await HostelCategory.findOne({ _id: hostelCategoryId, hostel: hostelId });
   if (!category) throw createError(400, 'Invalid category for the selected hostel');
 
-  const room = await Room.findOne({ _id: roomId, hostel: hostelId, category: hostelCategoryId });
-  if (!room) throw createError(400, 'Invalid room for the selected hostel/category');
-  if (String(room.roomNumber) !== String(roomNumber)) {
-    throw createError(400, 'Room number does not match the selected room');
-  }
+  let room = null;
+  const hasRoom = Boolean(roomId && roomNumber);
+  if (hasRoom) {
+    room = await Room.findOne({ _id: roomId, hostel: hostelId, category: hostelCategoryId });
+    if (!room) throw createError(400, 'Invalid room for the selected hostel/category');
+    if (String(room.roomNumber) !== String(roomNumber)) {
+      throw createError(400, 'Room number does not match the selected room');
+    }
 
-  if (!skipOccupancyChecks) {
-    const activeCount = await countActiveRequestsInRoom(room, academicYear);
-    if (activeCount >= room.bedCount) {
-      throw createError(400, 'Room is full for this academic year');
-    }
-    if (bedNumber) {
-      const bedTaken = await isBedOccupiedByActiveRequest(room, bedNumber, academicYear);
-      if (bedTaken) throw createError(400, 'Selected bed is already occupied for this academic year');
-    }
-    if (lockerNumber) {
-      const lockerTaken = await isLockerOccupiedByActiveRequest(room, lockerNumber, academicYear);
-      if (lockerTaken) {
-        throw createError(400, 'Selected locker is already occupied for this academic year');
+    if (!skipOccupancyChecks) {
+      const activeCount = await countActiveRequestsInRoom(room, academicYear);
+      if (activeCount >= room.bedCount) {
+        throw createError(400, 'Room is full for this academic year');
+      }
+      if (bedNumber) {
+        const bedTaken = await isBedOccupiedByActiveRequest(room, bedNumber, academicYear);
+        if (bedTaken) throw createError(400, 'Selected bed is already occupied for this academic year');
+      }
+      if (lockerNumber) {
+        const lockerTaken = await isLockerOccupiedByActiveRequest(room, lockerNumber, academicYear);
+        if (lockerTaken) {
+          throw createError(400, 'Selected locker is already occupied for this academic year');
+        }
       }
     }
   }
@@ -196,10 +205,10 @@ export const createYearlyHostelRequest = async ({
       status: 'active',
       hostelId,
       hostelCategoryId,
-      roomId,
-      roomNumber,
-      bedNumber: bedNumber || undefined,
-      lockerNumber: lockerNumber || undefined,
+      roomId: hasRoom ? roomId : undefined,
+      roomNumber: hasRoom ? roomNumber : undefined,
+      bedNumber: hasRoom ? (bedNumber || undefined) : undefined,
+      lockerNumber: hasRoom ? (lockerNumber || undefined) : undefined,
       collegeCode: sequence.collegeCode,
       courseCode: sequence.courseCode,
       hostelCode: sequence.hostelCode,
@@ -217,6 +226,9 @@ export const createYearlyHostelRequest = async ({
       mealType: mealType || 'veg',
       parentPermissionForOuting: Boolean(parentPermissionForOuting),
       concession: Number(concession) || 0,
+      admitDate: admitDate ? new Date(admitDate) : new Date(),
+      joiningDate: joiningDate ? new Date(joiningDate) : null,
+      leftDate: leftDate ? new Date(leftDate) : null,
       allocatedAt: new Date(),
       createdBy: adminId || undefined,
       notes: notes || ''
@@ -322,6 +334,46 @@ export const closeActiveHostelRequestForUser = async (user, options = {}) => {
     statusReason: options.statusReason || options.reason || '',
     adminId: options.adminId || null
   });
+};
+
+/**
+ * Update AY-scoped stay dates on HostelRequest (admit / joining / left).
+ * Prefers the active request; falls back to any request for that admission + year.
+ */
+export const updateStayDatesForAdmission = async ({
+  admissionNumber,
+  academicYear,
+  admitDate,
+  joiningDate,
+  leftDate,
+  adminId = null
+}) => {
+  const admission = normalizeAdmission(admissionNumber);
+  if (!admission || !academicYear) return null;
+
+  let item = await HostelRequest.findOne({
+    admissionNumber: admission,
+    academicYear,
+    status: 'active'
+  });
+  if (!item) {
+    item = await HostelRequest.findOne({ admissionNumber: admission, academicYear });
+  }
+  if (!item) return null;
+
+  if (admitDate !== undefined && admitDate !== null && admitDate !== '') {
+    item.admitDate = new Date(admitDate);
+  }
+  if (joiningDate !== undefined) {
+    item.joiningDate = joiningDate ? new Date(joiningDate) : null;
+  }
+  if (leftDate !== undefined) {
+    item.leftDate = leftDate ? new Date(leftDate) : null;
+  }
+  if (adminId) item.updatedBy = adminId;
+
+  await item.save({ validateModifiedOnly: true });
+  return item;
 };
 
 /**

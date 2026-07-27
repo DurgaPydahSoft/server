@@ -44,10 +44,11 @@ export const overlayStudentWithHostelRequest = (student, request, requestedYear)
     ...student,
     academicYear: requestYear || student.academicYear,
     currentAcademicYear,
-    roomNumber: request.roomNumber ?? student.roomNumber,
-    bedNumber: request.bedNumber ?? student.bedNumber,
-    lockerNumber: request.lockerNumber ?? student.lockerNumber,
-    room: request.roomId ?? student.room,
+    // When HostelRequest exists it owns allocation — do not fall back to stale User fields
+    roomNumber: request.roomNumber ?? '',
+    bedNumber: request.bedNumber ?? '',
+    lockerNumber: request.lockerNumber ?? '',
+    room: request.roomId ?? null,
     hostel,
     hostelCategory,
     category:
@@ -66,7 +67,16 @@ export const overlayStudentWithHostelRequest = (student, request, requestedYear)
         : 'Inactive',
     hostelRequestId: request._id,
     hostelRequestStatus: request.status,
+    hostelRequestCreatedAt: request.createdAt,
     hostelSequenceId: request.hostelSequenceId,
+    // AY-wise stay dates from HostelRequest (fallback to User for pre-migration rows)
+    admitDate:
+      request.admitDate !== undefined && request.admitDate !== null
+        ? request.admitDate
+        : student.admitDate ?? request.createdAt ?? null,
+    joiningDate:
+      request.joiningDate !== undefined ? request.joiningDate : student.joiningDate ?? null,
+    leftDate: request.leftDate !== undefined ? request.leftDate : student.leftDate ?? null,
     allocatedFrom: request.allocatedAt || student.allocatedFrom,
     allocatedTo: request.expiredAt || request.cancelledAt || student.allocatedTo,
     actualExpiredAt: request.expiredAt || student.actualExpiredAt,
