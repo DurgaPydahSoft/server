@@ -16,8 +16,15 @@ import {
   getStudentRoomBills,
   getDefaultElectricityRate,
   setDefaultElectricityRate,
+  getElectricitySettings,
+  saveElectricitySettings,
+  getGeneratorBillForMonth,
+  saveGeneratorBillForMonth,
+  getFeeHeadsForElectricity,
   addBulkElectricityBills,
   clearElectricityBillsForMonth,
+  syncElectricityBillDemands,
+  getElectricityRoomOccupants,
   getRoomsWithBedAvailability,
   getCategories
 } from '../controllers/roomController.js';
@@ -118,19 +125,32 @@ router.put('/:id', adminAuth, updateRoom);
 // Delete a room - admin only
 router.delete('/:id', adminAuth, deleteRoom);
 
+// Admin electricity settings + fee heads (static paths before :roomId)
+router.get('/electricity-default-rate', adminAuth, getDefaultElectricityRate);
+router.post('/electricity-default-rate', adminAuth, setDefaultElectricityRate);
+router.get('/electricity-settings', adminAuth, getElectricitySettings);
+router.post('/electricity-settings', adminAuth, saveElectricitySettings);
+router.get('/generator-bill', adminAuth, getGeneratorBillForMonth);
+router.post('/generator-bill', adminAuth, saveGeneratorBillForMonth);
+router.get('/fee-heads', adminAuth, getFeeHeadsForElectricity);
+
 // Admin electricity bill routes - admin only
 router.post('/bulk-electricity-bills', adminAuth, addBulkElectricityBills);
 router.post('/clear-electricity-bills-for-month', adminAuth, clearElectricityBillsForMonth);
+router.post('/:roomId/electricity-bill/sync-demands', adminAuth, syncElectricityBillDemands);
+router.get('/:roomId/electricity-occupants', adminAuth, getElectricityRoomOccupants);
 router.post('/:roomId/electricity-bill', adminAuth, addOrUpdateElectricityBill);
 router.get('/:roomId/electricity-bill', adminAuth, getElectricityBills);
-router.get('/electricity-default-rate', adminAuth, getDefaultElectricityRate);
-router.post('/electricity-default-rate', adminAuth, setDefaultElectricityRate);
 
 // Warden electricity bill routes - warden only
 router.post('/warden/bulk-electricity-bills', wardenAuth, addBulkElectricityBills);
+router.post('/warden/:roomId/electricity-bill/sync-demands', wardenAuth, syncElectricityBillDemands);
+router.get('/warden/:roomId/electricity-occupants', wardenAuth, getElectricityRoomOccupants);
 router.post('/warden/:roomId/electricity-bill', wardenAuth, addOrUpdateElectricityBill);
 router.get('/warden/:roomId/electricity-bill', wardenAuth, getElectricityBills);
 router.get('/warden/electricity-default-rate', wardenAuth, getDefaultElectricityRate);
+router.get('/warden/generator-bill', wardenAuth, getGeneratorBillForMonth);
+router.post('/warden/generator-bill', wardenAuth, saveGeneratorBillForMonth);
 
 // Student electricity bill route - student only
 router.get('/student/electricity-bills', authenticateStudent, getStudentRoomBills);

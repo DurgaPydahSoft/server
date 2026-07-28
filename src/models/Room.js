@@ -45,139 +45,8 @@ const roomSchema = new mongoose.Schema({
     type: String,
     enum: ['single', 'dual'],
     default: 'single'
-  },
-  electricityBills: [
-    {
-      month: {
-        type: String,
-        required: true,
-        match: [/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format']
-      },
-      // Single meter fields (for backward compatibility)
-      startUnits: {
-        type: Number,
-        min: 0
-      },
-      endUnits: {
-        type: Number,
-        min: 0
-      },
-      // Dual meter fields
-      meter1StartUnits: {
-        type: Number,
-        min: 0
-      },
-      meter1EndUnits: {
-        type: Number,
-        min: 0
-      },
-      meter1Consumption: {
-        type: Number,
-        min: 0
-      },
-      meter2StartUnits: {
-        type: Number,
-        min: 0
-      },
-      meter2EndUnits: {
-        type: Number,
-        min: 0
-      },
-      meter2Consumption: {
-        type: Number,
-        min: 0
-      },
-      consumption: {
-        type: Number,
-        required: true,
-        min: 0
-      },
-      rate: {
-        type: Number,
-        required: true,
-        min: 0
-      },
-      total: {
-        type: Number,
-        required: true,
-        min: 0
-      },
-      totalNOCAdjustment: {
-        type: Number,
-        min: 0,
-        default: 0
-      },
-      remainingAmount: {
-        type: Number,
-        min: 0
-      },
-      paymentStatus: {
-        type: String,
-        enum: ['unpaid', 'paid', 'pending'],
-        default: 'unpaid'
-      },
-      paymentId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Payment'
-      },
-      paidAt: {
-        type: Date
-      },
-      cashfreeOrderId: {
-        type: String,
-        default: null
-      },
-      payingStudentId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        default: null
-      },
-      // Student-specific bill breakdown
-      studentBills: [
-        {
-          studentId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User',
-            required: true
-          },
-          studentName: {
-            type: String,
-            required: true
-          },
-          studentRollNumber: {
-            type: String,
-            required: true
-          },
-          amount: {
-            type: Number,
-            required: true,
-            min: 0
-          },
-          nocAdjustment: {
-            type: Number,
-            min: 0,
-            default: 0
-          },
-          paymentStatus: {
-            type: String,
-            enum: ['unpaid', 'paid', 'pending'],
-            default: 'unpaid'
-          },
-          paymentId: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'Payment'
-          },
-          paidAt: {
-            type: Date
-          }
-        }
-      ],
-      createdAt: {
-        type: Date,
-        default: Date.now
-      }
-    }
-  ]
+  }
+  // Electricity bills live in ElectricityBill collection (room + month)
 }, {
   timestamps: true
 });
@@ -198,12 +67,11 @@ roomSchema.virtual('availableBeds').get(function() {
 
 const Room = mongoose.model('Room', roomSchema);
 
-// Static property for default electricity rate
+// Static property for default electricity rate (persisted in ElectricitySettings)
 Room.defaultElectricityRate = 5;
 
-// Static method to update the default rate
 Room.setDefaultElectricityRate = function(newRate) {
   Room.defaultElectricityRate = newRate;
 };
 
-export default Room; 
+export default Room;

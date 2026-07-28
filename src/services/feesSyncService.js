@@ -121,7 +121,14 @@ export const resolveFeesStudentId = (student, enriched = {}) => {
   return String(admission || '').trim();
 };
 
-const buildStudentFeePayload = (student, enriched, feeHeadId, academicYear, customAmount) => {
+export const buildStudentFeePayload = (
+  student,
+  enriched,
+  feeHeadId,
+  academicYear,
+  customAmount,
+  extraFields = {}
+) => {
   const feesAcademicYear = toFeesAcademicYear(academicYear);
   const studentId = resolveFeesStudentId(student, enriched);
   const concession = Number(enriched.concession ?? student.concession ?? 0);
@@ -130,17 +137,23 @@ const buildStudentFeePayload = (student, enriched, feeHeadId, academicYear, cust
   return {
     academicYear: feesAcademicYear,
     feeHead: feeHeadId,
+    structureId: null,
     semester: null,
+    termNumber: null,
     studentId,
     studentYear: Number(enriched.year ?? student.year ?? 1),
     amount: finalAmount,
     branch: String(enriched.branch || student.branch || '').trim(),
     college: resolveCollegeName(enriched) || resolveCollegeName(student),
     course: String(enriched.course || student.course || '').trim(),
+    isActive: true,
+    remarks: '',
     isScholarshipApplicable: concession > 0,
+    isTermsDivided: true,
     stud_type: String(enriched.studType || enriched.stud_type || 'CONV').trim() || 'CONV',
     studentName: String(enriched.name || student.name || '').trim(),
-    updatedAt: new Date()
+    updatedAt: new Date(),
+    ...extraFields
   };
 };
 

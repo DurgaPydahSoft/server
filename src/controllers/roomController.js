@@ -6,6 +6,9 @@ import User from '../models/User.js';
 import Payment from '../models/Payment.js';
 import StaffGuest from '../models/StaffGuest.js';
 import NOC from '../models/NOC.js';
+import ElectricitySettings from '../models/ElectricitySettings.js';
+import ElectricityBill from '../models/ElectricityBill.js';
+import GeneratorBill, { ensureGeneratorBillIndexes } from '../models/GeneratorBill.js';
 import { createError } from '../utils/error.js';
 import {
   countStudentsInRoomForAcademicYear,
@@ -14,8 +17,87 @@ import {
   getStudentsInRoomForAcademicYear,
   getOccupiedBedsAndLockersForAcademicYear
 } from '../utils/roomOccupancyUtils.js';
+import {
+  applyOccupantsAndSyncDemands,
+  getActiveOccupantsForRoomMonth,
+  getLiveOccupantsWithAttendance,
+  listFeeHeadsFromFeesDb,
+  loadElectricitySettings,
+  syncExistingBillFeeDemands,
+  clearMonthBillsAndReverseDemands,
+  MIN_ATTENDANCE_DAYS_FOR_ELECTRICITY_DEMAND
+} from '../services/electricityBillingService.js';
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+const buildBillRoomMeta = (room) => ({
+  room: room._id,
+  hostel: room.hostel?._id || room.hostel,
+  category: room.category?._id || room.category,
+  roomNumber: room.roomNumber,
+  meterType: room.meterType || 'single'
+});
+
+const resolveGeneratorHostelId = (req) => {
+  if (req.warden?.assignedHostelId || req.admin?.role === 'warden') {
+    return req.warden?.assignedHostelId?._id || req.warden?.assignedHostelId || req.admin?.assignedHostelId?._id || req.admin?.assignedHostelId || null;
+  }
+  return req.query.hostel || req.body.hostel || null;
+};
+
+const normalizeGeneratorBill = (generatorBill, month, hostel) => ({
+  hostel: generatorBill?.hostel?._id || generatorBill?.hostel || hostel || null,
+  month: generatorBill?.month || month || null,
+  amount: Number(generatorBill?.amount) || 0,
+  updatedAt: generatorBill?.updatedAt || null,
+  createdAt: generatorBill?.createdAt || null
+});
+
+/** Upsert ElectricityBill for a room+month and sync occupant demands */
+const upsertRoomElectricityBill = async (room, month, billFields) => {
+  const existing = await ElectricityBill.findOne({ room: room._id, month }).lean();
+  const previousStudentBills = existing?.studentBills || [];
+
+  const occupancy = await applyOccupantsAndSyncDemands({
+    room,
+    month,
+    total: billFields.total,
+    previousStudentBills
+  });
+
+  const setPayload = {
+    ...buildBillRoomMeta(room),
+    ...billFields,
+    studentBills: occupancy.studentBills
+  };
+
+  // Preserve payment fields on update unless explicitly overwritten
+  if (existing) {
+    if (setPayload.paymentStatus === undefined) setPayload.paymentStatus = existing.paymentStatus;
+    if (setPayload.paymentId === undefined && existing.paymentId) setPayload.paymentId = existing.paymentId;
+    if (setPayload.paidAt === undefined && existing.paidAt) setPayload.paidAt = existing.paidAt;
+    if (setPayload.cashfreeOrderId === undefined && existing.cashfreeOrderId) {
+      setPayload.cashfreeOrderId = existing.cashfreeOrderId;
+    }
+    if (setPayload.payingStudentId === undefined && existing.payingStudentId) {
+      setPayload.payingStudentId = existing.payingStudentId;
+    }
+    if (setPayload.totalNOCAdjustment === undefined && existing.totalNOCAdjustment != null) {
+      setPayload.totalNOCAdjustment = existing.totalNOCAdjustment;
+    }
+    if (setPayload.remainingAmount === undefined && existing.remainingAmount != null) {
+      setPayload.remainingAmount = existing.remainingAmount;
+    }
+  }
+
+  const bill = await ElectricityBill.findOneAndUpdate(
+    { room: room._id, month },
+    { $set: setPayload },
+    { upsert: true, new: true, setDefaultsOnInsert: true, runValidators: true }
+  );
+
+  return { bill, occupancy };
+};
 
 // Get all rooms with optional filtering
 export const getRooms = async (req, res, next) => {
@@ -37,7 +119,7 @@ export const getRooms = async (req, res, next) => {
     }
 
     const rooms = await Room.find(query)
-      .populate('hostel', 'name')
+      .populate('hostel', 'name code')
       .populate('category', 'name hostel')
       .sort({ roomNumber: 1 });
     
@@ -59,11 +141,8 @@ export const getRooms = async (req, res, next) => {
           });
       
       const roomObject = room.toObject();
-
-      if (includeLastBill === 'true' && roomObject.electricityBills?.length > 0) {
-        // Sort by month to find the latest bill
-        roomObject.lastBill = [...roomObject.electricityBills].sort((a, b) => b.month.localeCompare(a.month))[0];
-      }
+      // Bills live in ElectricityBill collection — attach for API compatibility
+      roomObject.electricityBills = [];
 
       return {
         ...roomObject,
@@ -80,10 +159,15 @@ export const getRooms = async (req, res, next) => {
       };
     }));
 
+    const roomsWithBills = await ElectricityBill.attachBillsToRooms(roomsWithDetails, {
+      includeLastBill: includeLastBill === 'true',
+      includeAllBills: true
+    });
+
     res.json({
       success: true,
       data: {
-        rooms: roomsWithDetails
+        rooms: roomsWithBills
       }
     });
   } catch (error) {
@@ -116,7 +200,7 @@ export const getWardenRooms = async (req, res, next) => {
     }
 
     const rooms = await Room.find(query)
-      .populate('hostel', 'name')
+      .populate('hostel', 'name code')
       .populate('category', 'name hostel')
       .sort({ roomNumber: 1 });
     
@@ -136,11 +220,7 @@ export const getWardenRooms = async (req, res, next) => {
       });
       
       const roomObject = room.toObject();
-
-      if (includeLastBill === 'true' && roomObject.electricityBills?.length > 0) {
-        // Sort by month to find the latest bill
-        roomObject.lastBill = [...roomObject.electricityBills].sort((a, b) => b.month.localeCompare(a.month))[0];
-      }
+      roomObject.electricityBills = [];
 
       return {
         ...roomObject,
@@ -150,10 +230,15 @@ export const getWardenRooms = async (req, res, next) => {
       };
     }));
 
+    const roomsWithBills = await ElectricityBill.attachBillsToRooms(roomsWithDetails, {
+      includeLastBill: includeLastBill === 'true',
+      includeAllBills: true
+    });
+
     res.json({
       success: true,
       data: {
-        rooms: roomsWithDetails
+        rooms: roomsWithBills
       }
     });
   } catch (error) {
@@ -279,7 +364,7 @@ export const getRoomStats = async (req, res, next) => {
   try {
     const { academicYear } = req.query;
     const rooms = await Room.find({})
-      .populate('hostel', 'name')
+      .populate('hostel', 'name code')
       .populate('category', 'name hostel');
 
     // Map stats by hostel
@@ -437,7 +522,6 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
       startUnits, 
       endUnits, 
       rate,
-      // Dual meter fields
       meter1StartUnits,
       meter1EndUnits,
       meter2StartUnits,
@@ -454,22 +538,18 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
     }
 
     const isDualMeter = room.meterType === 'dual';
-    let consumption, total, billData;
+    let billData;
 
-    // Parse rate as number if provided
-    let billRate = Room.defaultElectricityRate;
+    const settings = await ElectricitySettings.getOrCreate();
+    let billRate = Number(settings.defaultRate) || Room.defaultElectricityRate || 5;
     if (rate !== undefined && rate !== null && rate !== '') {
       const parsedRate = Number(rate);
       if (!isNaN(parsedRate)) {
         billRate = parsedRate;
-        if (parsedRate !== Room.defaultElectricityRate) {
-          Room.setDefaultElectricityRate(parsedRate);
-        }
       }
     }
 
     if (isDualMeter) {
-      // Dual meter mode
       if (typeof meter1StartUnits !== 'number' || typeof meter1EndUnits !== 'number' ||
           typeof meter2StartUnits !== 'number' || typeof meter2EndUnits !== 'number') {
         return res.status(400).json({ 
@@ -494,8 +574,8 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
 
       const meter1Consumption = meter1EndUnits - meter1StartUnits;
       const meter2Consumption = meter2EndUnits - meter2StartUnits;
-      consumption = meter1Consumption + meter2Consumption;
-      total = consumption * billRate;
+      const consumption = meter1Consumption + meter2Consumption;
+      const total = consumption * billRate;
 
       billData = {
         month,
@@ -505,12 +585,14 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
         meter2StartUnits,
         meter2EndUnits,
         meter2Consumption,
+        // Clear single-meter fields on dual bills
+        startUnits: undefined,
+        endUnits: undefined,
         consumption,
         rate: billRate,
         total
       };
     } else {
-      // Single meter mode (backward compatible)
       if (typeof startUnits !== 'number' || typeof endUnits !== 'number') {
         return res.status(400).json({ success: false, message: 'Month, startUnits, and endUnits are required' });
       }
@@ -519,8 +601,8 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Ending units must be greater than or equal to starting units' });
       }
 
-      consumption = endUnits - startUnits;
-      total = consumption * billRate;
+      const consumption = endUnits - startUnits;
+      const total = consumption * billRate;
 
       billData = {
         month,
@@ -532,33 +614,22 @@ export const addOrUpdateElectricityBill = async (req, res, next) => {
       };
     }
 
-    // Check if bill for this month exists
-    const existingIndex = room.electricityBills.findIndex(bill => bill.month === month);
-    if (existingIndex !== -1) {
-      // Update existing bill - preserve other fields like studentBills, paymentStatus, etc.
-      const existingBill = room.electricityBills[existingIndex];
-      room.electricityBills[existingIndex] = {
-        ...existingBill.toObject(),
-        ...billData
-      };
-    } else {
-      // Add new bill
-      room.electricityBills.push(billData);
-    }
+    const { bill, occupancy } = await upsertRoomElectricityBill(room, month, billData);
+    const allBills = await ElectricityBill.find({ room: room._id }).sort({ month: -1 });
 
-    // Data migration: Ensure all bills have a consumption value before saving
-    room.electricityBills.forEach(bill => {
-      if (bill.consumption === undefined || bill.consumption === null) {
-        if (bill.meter1Consumption !== undefined && bill.meter2Consumption !== undefined) {
-          bill.consumption = bill.meter1Consumption + bill.meter2Consumption;
-        } else if (bill.endUnits !== undefined && bill.startUnits !== undefined) {
-          bill.consumption = bill.endUnits - bill.startUnits;
-        }
+    res.json({
+      success: true,
+      data: allBills,
+      bill,
+      occupancy: {
+        occupantCount: occupancy.occupantCount,
+        eligibleCount: occupancy.eligibleCount,
+        sharePerStudent: occupancy.sharePerStudent,
+        academicYear: occupancy.academicYear,
+        feeHeadConfigured: occupancy.feeHeadConfigured,
+        demandsSynced: occupancy.demandResults?.filter((d) => d.ok).length || 0
       }
     });
-    
-    await room.save();
-    res.json({ success: true, data: room.electricityBills });
   } catch (error) {
     next(error);
   }
@@ -577,8 +648,10 @@ export const addBulkElectricityBills = async (req, res, next) => {
       throw createError(400, 'A non-empty array of bills is required.');
     }
 
-    const bulkOps = [];
-    const defaultRate = Room.defaultElectricityRate;
+    const settings = await ElectricitySettings.getOrCreate();
+    const defaultRate = Number(settings.defaultRate) || Room.defaultElectricityRate || 5;
+    let processed = 0;
+    let demandsSynced = 0;
 
     for (const billData of bills) {
       const { 
@@ -586,18 +659,14 @@ export const addBulkElectricityBills = async (req, res, next) => {
         startUnits, 
         endUnits, 
         rate,
-        // Dual meter fields
         meter1StartUnits,
         meter1EndUnits,
         meter2StartUnits,
         meter2EndUnits
       } = billData;
 
-      if (!roomId) {
-        continue; // Skip entries without roomId
-      }
+      if (!roomId) continue;
 
-      // Fetch room to check meter type
       const room = await Room.findById(roomId);
       if (!room) {
         console.warn(`Room ${roomId} not found, skipping`);
@@ -605,15 +674,20 @@ export const addBulkElectricityBills = async (req, res, next) => {
       }
 
       const isDualMeter = room.meterType === 'dual';
-      let consumption, total, newBillPayload;
-
-      const billRate = (rate !== undefined && rate !== null && !isNaN(Number(rate))) ? Number(rate) : defaultRate;
+      let newBillPayload;
+      const billRate =
+        rate !== undefined && rate !== null && !isNaN(Number(rate))
+          ? Number(rate)
+          : defaultRate;
 
       if (isDualMeter) {
-        // Dual meter mode
-        if (meter1StartUnits === undefined || meter1EndUnits === undefined ||
-            meter2StartUnits === undefined || meter2EndUnits === undefined) {
-          continue; // Skip entries that are not fully filled
+        if (
+          meter1StartUnits === undefined ||
+          meter1EndUnits === undefined ||
+          meter2StartUnits === undefined ||
+          meter2EndUnits === undefined
+        ) {
+          continue;
         }
 
         const m1Start = Number(meter1StartUnits);
@@ -621,16 +695,22 @@ export const addBulkElectricityBills = async (req, res, next) => {
         const m2Start = Number(meter2StartUnits);
         const m2End = Number(meter2EndUnits);
 
-        if (isNaN(m1Start) || isNaN(m1End) || isNaN(m2Start) || isNaN(m2End) ||
-            m1End < m1Start || m2End < m2Start) {
+        if (
+          isNaN(m1Start) ||
+          isNaN(m1End) ||
+          isNaN(m2Start) ||
+          isNaN(m2End) ||
+          m1End < m1Start ||
+          m2End < m2Start
+        ) {
           console.warn(`Skipping invalid dual meter bill data for room ${roomId}`);
           continue;
         }
 
         const meter1Consumption = m1End - m1Start;
         const meter2Consumption = m2End - m2Start;
-        consumption = meter1Consumption + meter2Consumption;
-        total = consumption * billRate;
+        const consumption = meter1Consumption + meter2Consumption;
+        const total = consumption * billRate;
 
         newBillPayload = {
           month,
@@ -642,14 +722,10 @@ export const addBulkElectricityBills = async (req, res, next) => {
           meter2Consumption,
           consumption,
           rate: billRate,
-          total,
-          createdAt: new Date()
+          total
         };
       } else {
-        // Single meter mode (backward compatible)
-        if (startUnits === undefined || endUnits === undefined) {
-          continue; // Skip entries that are not fully filled
-        }
+        if (startUnits === undefined || endUnits === undefined) continue;
 
         const start = Number(startUnits);
         const end = Number(endUnits);
@@ -659,8 +735,8 @@ export const addBulkElectricityBills = async (req, res, next) => {
           continue;
         }
 
-        consumption = end - start;
-        total = consumption * billRate;
+        const consumption = end - start;
+        const total = consumption * billRate;
 
         newBillPayload = {
           month,
@@ -668,35 +744,20 @@ export const addBulkElectricityBills = async (req, res, next) => {
           endUnits: end,
           consumption,
           rate: billRate,
-          total,
-          createdAt: new Date()
+          total
         };
       }
-      
-      // Upsert logic: Pull the old bill for the month and push the new one
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: roomId },
-          update: { $pull: { electricityBills: { month: month } } }
-        }
-      });
-      bulkOps.push({
-        updateOne: {
-          filter: { _id: roomId },
-          update: { $push: { electricityBills: newBillPayload } }
-        }
-      });
-    }
 
-    if (bulkOps.length > 0) {
-      await Room.bulkWrite(bulkOps);
+      const { occupancy } = await upsertRoomElectricityBill(room, month, newBillPayload);
+      demandsSynced += occupancy.demandResults?.filter((d) => d.ok).length || 0;
+      processed += 1;
     }
 
     res.status(200).json({
       success: true,
-      message: `Processed ${bulkOps.length / 2} bills successfully.`,
+      message: `Processed ${processed} bills successfully.`,
+      demandsSynced
     });
-
   } catch (error) {
     next(error);
   }
@@ -706,11 +767,12 @@ export const addBulkElectricityBills = async (req, res, next) => {
 export const getElectricityBills = async (req, res, next) => {
   try {
     const { roomId } = req.params;
-    const room = await Room.findById(roomId);
+    const room = await Room.findById(roomId).select('_id');
     if (!room) {
       return res.status(404).json({ success: false, message: 'Room not found' });
     }
-    res.json({ success: true, data: room.electricityBills });
+    const bills = await ElectricityBill.find({ room: roomId }).sort({ month: -1 });
+    res.json({ success: true, data: bills });
   } catch (error) {
     next(error);
   }
@@ -728,24 +790,37 @@ export const clearElectricityBillsForMonth = async (req, res, next) => {
       });
     }
 
-    const filter = { 'electricityBills.month': month };
-    if (hostel && isValidObjectId(hostel)) {
-      filter.hostel = hostel;
-    }
-    if (category && isValidObjectId(category)) {
-      filter.category = category;
+    const hostelId = hostel && isValidObjectId(hostel) ? hostel : null;
+    const categoryId = category && isValidObjectId(category) ? category : null;
+
+    const result = await clearMonthBillsAndReverseDemands({
+      month,
+      hostel: hostelId,
+      category: categoryId
+    });
+
+    if (!result.ok) {
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+        reason: result.reason
+      });
     }
 
-    const result = await Room.updateMany(
-      filter,
-      { $pull: { electricityBills: { month } } }
-    );
-
-    const scope = [hostel, category].filter(Boolean).length ? 'filtered rooms' : 'all rooms';
+    const scope = hostelId || categoryId ? 'filtered rooms' : 'all rooms';
     res.json({
       success: true,
-      message: `Removed electricity bills for ${month} from ${scope}.`,
-      modifiedCount: result.modifiedCount
+      message:
+        result.message ||
+        `Deleted electricity bills for ${month} from ${scope} and reversed student fee demands.`,
+      modifiedCount: result.deletedBills,
+      deletedBills: result.deletedBills,
+      demandsReversed: result.demandsReversed,
+      demandsDeleted: result.demandsDeleted,
+      demandsFailed: result.demandsFailed,
+      demandsSkipped: result.demandsSkipped,
+      feeHeadConfigured: result.feeHeadConfigured,
+      data: result
     });
   } catch (error) {
     next(error);
@@ -774,15 +849,11 @@ export const getStudentRoomBills = async (req, res, next) => {
       });
     }
 
-    // Sort bills by month in descending order
-    const sortedBills = room.electricityBills.sort((a, b) => b.month.localeCompare(a.month));
+    // Bills live in ElectricityBill collection
+    const sortedBills = await ElectricityBill.find({ room: room._id }).sort({ month: -1 }).lean();
 
-    // Get current student count for the room (new room reference)
-    const studentsInRoom = await User.countDocuments({
-      room: room._id,
-      role: 'student',
-      applicationStatus: { $in: ['Active', 'Extended'] }
-    });
+    // For legacy bills without studentBills: occupants from HostelRequests for that month
+    const occupantCountByMonth = new Map();
 
     // For each bill, find the student's share and check payment status
     const studentBills = await Promise.all(sortedBills.map(async (bill) => {
@@ -805,7 +876,13 @@ export const getStudentRoomBills = async (req, res, next) => {
         studentShare = null;
         paymentStatus = 'unpaid';
       } else {
-        // Old bill without studentBills - calculate equal share and check payment status
+        // Old bill without studentBills - equal share across HostelRequest occupants for that month
+        let studentsInRoom = occupantCountByMonth.get(bill.month);
+        if (studentsInRoom === undefined) {
+          const occupants = await getActiveOccupantsForRoomMonth(room, bill.month);
+          studentsInRoom = occupants.length;
+          occupantCountByMonth.set(bill.month, studentsInRoom);
+        }
         studentShare = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : null;
         
         // Adjust for NOC calculated bill if applicable
@@ -944,13 +1021,28 @@ export const getStudentRoomBills = async (req, res, next) => {
   }
 };
 
-// Get the current default electricity rate
-export const getDefaultElectricityRate = (req, res) => {
-  res.json({ success: true, rate: Room.defaultElectricityRate });
+// Get the current electricity settings (rate + fee head)
+export const getDefaultElectricityRate = async (req, res) => {
+  try {
+    const settings = await loadElectricitySettings();
+    res.json({
+      success: true,
+      rate: settings.defaultRate,
+      feeHeadId: settings.feeHeadId || null,
+      feeHeadCode: settings.feeHeadCode || null,
+      feeHeadName: settings.feeHeadName || null
+    });
+  } catch (error) {
+    console.error('Error fetching electricity settings:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch electricity settings'
+    });
+  }
 };
 
-// Set the default electricity rate
-export const setDefaultElectricityRate = (req, res) => {
+// Set default electricity rate (and optionally fee head via dedicated endpoint)
+export const setDefaultElectricityRate = async (req, res) => {
   try {
     const { rate } = req.body;
     
@@ -962,6 +1054,10 @@ export const setDefaultElectricityRate = (req, res) => {
     }
 
     const newRate = Number(rate);
+    const settings = await ElectricitySettings.getOrCreate();
+    settings.defaultRate = newRate;
+    settings.updatedBy = req.admin?._id || req.user?._id || null;
+    await settings.save();
     Room.setDefaultElectricityRate(newRate);
     
     res.json({ 
@@ -976,6 +1072,260 @@ export const setDefaultElectricityRate = (req, res) => {
       message: 'Failed to update default electricity rate' 
     });
   }
+};
+
+/** GET electricity settings (rate + mapped fee head) */
+export const getElectricitySettings = async (req, res) => {
+  try {
+    const settings = await loadElectricitySettings();
+    res.json({
+      success: true,
+      data: {
+        defaultRate: settings.defaultRate,
+        feeHeadId: settings.feeHeadId || null,
+        feeHeadCode: settings.feeHeadCode || null,
+        feeHeadName: settings.feeHeadName || null
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching electricity settings:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch electricity settings' });
+  }
+};
+
+export const getGeneratorBillForMonth = async (req, res) => {
+  try {
+    await ensureGeneratorBillIndexes();
+    const month = String(req.query.month || '').trim();
+    const hostel = resolveGeneratorHostelId(req);
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Query month (YYYY-MM) is required.'
+      });
+    }
+    if (!hostel || !isValidObjectId(hostel)) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid hostel id is required.'
+      });
+    }
+
+    const generatorBill = await GeneratorBill.findOne({ month, hostel }).lean();
+    res.json({
+      success: true,
+      data: normalizeGeneratorBill(generatorBill, month, hostel)
+    });
+  } catch (error) {
+    console.error('Error fetching generator bill:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch generator bill' });
+  }
+};
+
+export const saveGeneratorBillForMonth = async (req, res) => {
+  try {
+    await ensureGeneratorBillIndexes();
+    const month = String(req.body.month || '').trim();
+    const hostel = resolveGeneratorHostelId(req);
+    const parsedAmount = Number(req.body.amount);
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Month must be in YYYY-MM format.'
+      });
+    }
+    if (!hostel || !isValidObjectId(hostel)) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid hostel id is required.'
+      });
+    }
+    if (Number.isNaN(parsedAmount) || parsedAmount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Generator amount must be 0 or more.'
+      });
+    }
+
+    const actorId = req.admin?._id || req.warden?._id || req.user?._id || null;
+    const existing = await GeneratorBill.findOne({ month, hostel });
+
+    let generatorBill;
+    if (existing) {
+      existing.amount = parsedAmount;
+      existing.updatedBy = actorId;
+      generatorBill = await existing.save();
+    } else {
+      generatorBill = await GeneratorBill.create({
+        hostel,
+        month,
+        amount: parsedAmount,
+        createdBy: actorId,
+        updatedBy: actorId
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Generator bill saved successfully.',
+      data: normalizeGeneratorBill(generatorBill, month, hostel)
+    });
+  } catch (error) {
+    console.error('Error saving generator bill:', error);
+    res.status(500).json({ success: false, message: 'Failed to save generator bill' });
+  }
+};
+
+/** POST save electricity settings (rate and/or fee head from Fees DB) */
+export const saveElectricitySettings = async (req, res) => {
+  try {
+    const { defaultRate, feeHeadId, feeHeadCode, feeHeadName, clearFeeHead } = req.body;
+    const settings = await ElectricitySettings.getOrCreate();
+
+    if (defaultRate !== undefined && defaultRate !== null && defaultRate !== '') {
+      const parsed = Number(defaultRate);
+      if (isNaN(parsed) || parsed <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid rate. Rate must be a positive number.'
+        });
+      }
+      settings.defaultRate = parsed;
+      Room.setDefaultElectricityRate(parsed);
+    }
+
+    if (clearFeeHead) {
+      settings.feeHeadId = null;
+      settings.feeHeadCode = null;
+      settings.feeHeadName = null;
+    } else if (feeHeadId) {
+      settings.feeHeadId = String(feeHeadId);
+      settings.feeHeadCode = feeHeadCode ? String(feeHeadCode) : settings.feeHeadCode;
+      settings.feeHeadName = feeHeadName ? String(feeHeadName) : settings.feeHeadName;
+    }
+
+    settings.updatedBy = req.admin?._id || req.user?._id || null;
+    await settings.save();
+
+    res.json({
+      success: true,
+      message: 'Electricity settings saved successfully',
+      data: {
+        defaultRate: settings.defaultRate,
+        feeHeadId: settings.feeHeadId || null,
+        feeHeadCode: settings.feeHeadCode || null,
+        feeHeadName: settings.feeHeadName || null
+      }
+    });
+  } catch (error) {
+    console.error('Error saving electricity settings:', error);
+    res.status(500).json({ success: false, message: 'Failed to save electricity settings' });
+  }
+};
+
+/** List fee heads from Fees MongoDB for Settings picker */
+export const getFeeHeadsForElectricity = async (req, res) => {
+  try {
+    const result = await listFeeHeadsFromFeesDb();
+    if (!result.ok) {
+      return res.status(503).json({
+        success: false,
+        message:
+          result.reason === 'fees_db_not_configured'
+            ? 'Fees database is not configured (FEES_MONGODB_URI)'
+            : 'Fees database is not connected',
+        feeHeads: []
+      });
+    }
+    res.json({ success: true, feeHeads: result.feeHeads });
+  } catch (error) {
+    console.error('Error listing fee heads:', error);
+    res.status(500).json({ success: false, message: 'Failed to list fee heads', feeHeads: [] });
+  }
+};
+
+/**
+ * Sync Fees DB demands for an already-raised bill (create missing studentfees only).
+ * POST /:roomId/electricity-bill/sync-demands  body: { month }
+ */
+export const syncElectricityBillDemands = async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+    const { month } = req.body;
+
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid month in YYYY-MM format is required.'
+      });
+    }
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    const result = await syncExistingBillFeeDemands({ room, month });
+    if (!result.ok) {
+      const status =
+        result.reason === 'bill_not_found'
+          ? 404
+          : result.reason === 'fee_head_not_configured'
+            ? 400
+            : 503;
+      return res.status(status).json({
+        success: false,
+        message: result.message,
+        reason: result.reason
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Synced room ${room.roomNumber}: ${result.eligibleCount} eligible, ${result.created} created, ${result.updated} updated, ${result.removed || 0} removed.`,
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Live active students in a room + attendance days for a bill month.
+ * GET /:roomId/electricity-occupants?month=YYYY-MM
+ */
+export const getElectricityRoomOccupants = async (req, res, next) => {
+  try {
+    const { roomId } = req.params;
+    const { month } = req.query;
+
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Query month (YYYY-MM) is required.'
+      });
+    }
+
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Room not found' });
+    }
+
+    const students = await getLiveOccupantsWithAttendance(room, month);
+    res.json({
+      success: true,
+      data: {
+        roomNumber: room.roomNumber,
+        month,
+        minAttendanceDays: MIN_ATTENDANCE_DAYS_FOR_ELECTRICITY_DEMAND,
+        students,
+        eligibleCount: students.filter((s) => s.eligibleForDemand).length,
+        totalLive: students.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
 }; 
 
 // Get room payment statistics
@@ -984,88 +1334,46 @@ export const getRoomPaymentStats = async (req, res) => {
     const { month } = req.query;
     const currentMonth = month || new Date().toISOString().slice(0, 7);
 
-    // Get current month payment status for all rooms
-    const currentMonthStats = await Room.aggregate([
-      {
-        $unwind: '$electricityBills'
-      },
-      {
-        $match: {
-          'electricityBills.month': currentMonth
+    const prevMonthDate = new Date();
+    prevMonthDate.setMonth(prevMonthDate.getMonth() - 1);
+    const previousMonth = prevMonthDate.toISOString().slice(0, 7);
+
+    const groupByStatus = async (targetMonth) =>
+      ElectricityBill.aggregate([
+        { $match: { month: targetMonth } },
+        {
+          $group: {
+            _id: {
+              roomNumber: '$roomNumber'
+            },
+            paymentStatus: { $first: '$paymentStatus' },
+            billAmount: { $first: '$total' },
+            billMonth: { $first: '$month' }
+          }
+        },
+        {
+          $group: {
+            _id: '$paymentStatus',
+            rooms: { $push: '$$ROOT' },
+            count: { $sum: 1 },
+            totalAmount: { $sum: '$billAmount' }
+          }
         }
-      },
+      ]);
+
+    const currentMonthStats = await groupByStatus(currentMonth);
+    const previousMonthStats = await groupByStatus(previousMonth);
+
+    const paymentSummary = await ElectricityBill.aggregate([
+      { $match: { month: { $in: [currentMonth, previousMonth] } } },
       {
         $group: {
           _id: {
-            roomNumber: '$roomNumber'
-          },
-          paymentStatus: { $first: '$electricityBills.paymentStatus' },
-          billAmount: { $first: '$electricityBills.total' },
-          billMonth: { $first: '$electricityBills.month' }
-        }
-      },
-      {
-        $group: {
-          _id: '$paymentStatus',
-          rooms: { $push: '$$ROOT' },
-          count: { $sum: 1 },
-          totalAmount: { $sum: '$billAmount' }
-        }
-      }
-    ]);
-
-    // Get previous month payment status
-    const prevMonth = new Date();
-    prevMonth.setMonth(prevMonth.getMonth() - 1);
-    const previousMonth = prevMonth.toISOString().slice(0, 7);
-
-    const previousMonthStats = await Room.aggregate([
-      {
-        $unwind: '$electricityBills'
-      },
-      {
-        $match: {
-          'electricityBills.month': previousMonth
-        }
-      },
-      {
-        $group: {
-          _id: {
-            roomNumber: '$roomNumber'
-          },
-          paymentStatus: { $first: '$electricityBills.paymentStatus' },
-          billAmount: { $first: '$electricityBills.total' },
-          billMonth: { $first: '$electricityBills.month' }
-        }
-      },
-      {
-        $group: {
-          _id: '$paymentStatus',
-          rooms: { $push: '$$ROOT' },
-          count: { $sum: 1 },
-          totalAmount: { $sum: '$billAmount' }
-        }
-      }
-    ]);
-
-    // Get overall payment summary
-    const paymentSummary = await Room.aggregate([
-      {
-        $unwind: '$electricityBills'
-      },
-      {
-        $match: {
-          'electricityBills.month': { $in: [currentMonth, previousMonth] }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            month: '$electricityBills.month',
-            status: '$electricityBills.paymentStatus'
+            month: '$month',
+            status: '$paymentStatus'
           },
           count: { $sum: 1 },
-          totalAmount: { $sum: '$electricityBills.total' }
+          totalAmount: { $sum: '$total' }
         }
       }
     ]);
@@ -1084,7 +1392,6 @@ export const getRoomPaymentStats = async (req, res) => {
         summary: paymentSummary
       }
     });
-
   } catch (error) {
     console.error('Error getting room payment stats:', error);
     res.status(500).json({
@@ -1100,29 +1407,20 @@ export const getCurrentMonthPayments = async (req, res) => {
   try {
     const currentMonth = new Date().toISOString().slice(0, 7);
 
-    const payments = await Room.aggregate([
-      {
-        $unwind: '$electricityBills'
-      },
-      {
-        $match: {
-          'electricityBills.month': currentMonth
-        }
-      },
+    const payments = await ElectricityBill.aggregate([
+      { $match: { month: currentMonth } },
       {
         $group: {
           _id: {
             roomNumber: '$roomNumber'
           },
-          paymentStatus: { $first: '$electricityBills.paymentStatus' },
-          billAmount: { $first: '$electricityBills.total' },
-          billMonth: { $first: '$electricityBills.month' },
-          paidAt: { $first: '$electricityBills.paidAt' }
+          paymentStatus: { $first: '$paymentStatus' },
+          billAmount: { $first: '$total' },
+          billMonth: { $first: '$month' },
+          paidAt: { $first: '$paidAt' }
         }
       },
-      {
-        $sort: { '_id.roomNumber': 1 }
-      }
+      { $sort: { '_id.roomNumber': 1 } }
     ]);
 
     res.json({
@@ -1132,7 +1430,6 @@ export const getCurrentMonthPayments = async (req, res) => {
         payments
       }
     });
-
   } catch (error) {
     console.error('Error getting current month payments:', error);
     res.status(500).json({
@@ -1150,29 +1447,20 @@ export const getPreviousMonthPayments = async (req, res) => {
     prevMonth.setMonth(prevMonth.getMonth() - 1);
     const previousMonth = prevMonth.toISOString().slice(0, 7);
 
-    const payments = await Room.aggregate([
-      {
-        $unwind: '$electricityBills'
-      },
-      {
-        $match: {
-          'electricityBills.month': previousMonth
-        }
-      },
+    const payments = await ElectricityBill.aggregate([
+      { $match: { month: previousMonth } },
       {
         $group: {
           _id: {
             roomNumber: '$roomNumber'
           },
-          paymentStatus: { $first: '$electricityBills.paymentStatus' },
-          billAmount: { $first: '$electricityBills.total' },
-          billMonth: { $first: '$electricityBills.month' },
-          paidAt: { $first: '$electricityBills.paidAt' }
+          paymentStatus: { $first: '$paymentStatus' },
+          billAmount: { $first: '$total' },
+          billMonth: { $first: '$month' },
+          paidAt: { $first: '$paidAt' }
         }
       },
-      {
-        $sort: { '_id.roomNumber': 1 }
-      }
+      { $sort: { '_id.roomNumber': 1 } }
     ]);
 
     res.json({
@@ -1182,7 +1470,6 @@ export const getPreviousMonthPayments = async (req, res) => {
         payments
       }
     });
-
   } catch (error) {
     console.error('Error getting previous month payments:', error);
     res.status(500).json({
@@ -1241,7 +1528,7 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
     }
 
     const rooms = await Room.find(query)
-      .populate('hostel', 'name')
+      .populate('hostel', 'name code')
       .populate('category', 'name hostel')
       .sort({ roomNumber: 1 });
     

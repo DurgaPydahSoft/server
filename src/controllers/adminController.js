@@ -2,6 +2,7 @@ import User, { COURSES } from '../models/User.js';
 import Complaint from '../models/Complaint.js';
 import Leave from '../models/Leave.js';
 import Room from '../models/Room.js';
+import ElectricityBill from '../models/ElectricityBill.js';
 import Hostel from '../models/Hostel.js';
 import HostelCategory from '../models/HostelCategory.js';
 import SecuritySettings from '../models/SecuritySettings.js';
@@ -2376,14 +2377,13 @@ export const getDashboardSummary = async (req, res, next) => {
 };
 
 
-// Add electricity bill for a room
+// Add electricity bill for a room (legacy admin route — writes ElectricityBill collection)
 export const addElectricityBill = async (req, res, next) => {
   try {
     const { roomId } = req.params;
     const { month, startUnits, endUnits, rate } = req.body;
 
-    // Validate input
-    if (!month || !startUnits || !endUnits) {
+    if (!month || startUnits === undefined || endUnits === undefined) {
       throw createError(400, 'Month, startUnits, and endUnits are required');
     }
 
@@ -2391,7 +2391,6 @@ export const addElectricityBill = async (req, res, next) => {
       throw createError(400, 'End units cannot be less than start units');
     }
 
-    // Parse rate as number if provided
     let billRate = Room.defaultElectricityRate;
     if (rate !== undefined && rate !== null && rate !== '') {
       const parsedRate = Number(rate);
@@ -2411,15 +2410,13 @@ export const addElectricityBill = async (req, res, next) => {
       throw createError(404, 'Room not found');
     }
 
-    // Check if bill for this month already exists
-    const existingBill = room.electricityBills.find(bill => bill.month === month);
+    const existingBill = await ElectricityBill.findOne({ room: roomId, month });
     if (existingBill) {
       throw createError(400, 'Bill for this month already exists');
     }
 
-    // Find all students in this room
-    const studentsInRoom = await User.find({ 
-      roomNumber: room.roomNumber, 
+    const studentsInRoom = await User.find({
+      roomNumber: room.roomNumber,
       role: 'student',
       applicationStatus: { $in: ['Active', 'Extended'] }
     });
@@ -2428,147 +2425,99 @@ export const addElectricityBill = async (req, res, next) => {
       throw createError(400, 'No active students found in this room');
     }
 
-    // Check for approved NOCs that overlap with this billing period
-    // Parse the month to get the bill period
     const billMonth = new Date(month + '-01');
     const billMonthEnd = new Date(billMonth.getFullYear(), billMonth.getMonth() + 1, 0);
     billMonthEnd.setHours(23, 59, 59, 999);
 
-    // Find all approved NOCs for students in this room that overlap with this billing period
-    const studentIds = studentsInRoom.map(s => s._id);
+    const studentIds = studentsInRoom.map((s) => s._id);
     const approvedNOCs = await NOC.find({
       student: { $in: studentIds },
       status: 'Approved',
       'calculatedElectricityBill.total': { $exists: true, $ne: null }
     }).populate('student', 'name rollNumber');
 
-    // Calculate total NOC amount to subtract from the room bill
     let totalNOCAmount = 0;
-    const nocStudents = new Set(); // Track which students have NOCs
+    const nocStudents = new Set();
 
     for (const noc of approvedNOCs) {
       if (noc.calculatedElectricityBill) {
         const nocBillStart = new Date(noc.calculatedElectricityBill.billPeriodStart);
         const nocBillEnd = new Date(noc.calculatedElectricityBill.billPeriodEnd);
-        
-        // Check if NOC bill period overlaps with this monthly bill period
+
         if (billMonth <= nocBillEnd && billMonthEnd >= nocBillStart) {
-          // Use studentShare if available (new format), otherwise fall back to total
-          const nocAmount = noc.calculatedElectricityBill.studentShare || noc.calculatedElectricityBill.total || 0;
+          const nocAmount =
+            noc.calculatedElectricityBill.studentShare ||
+            noc.calculatedElectricityBill.total ||
+            0;
           totalNOCAmount += nocAmount;
           nocStudents.add(noc.student._id.toString());
-          console.log(`📊 NOC Adjustment: Student ${noc.student.name} (${noc.student.rollNumber}) has NOC share of ₹${nocAmount} for this billing period`);
         }
       }
     }
 
-    // Calculate remaining bill amount after subtracting NOC amounts
     const remainingBillAmount = Math.max(0, total - totalNOCAmount);
-    
-    // Filter out students who have NOCs (they've already been charged)
     const studentsWithoutNOC = studentsInRoom.filter(
-      student => !nocStudents.has(student._id.toString())
+      (student) => !nocStudents.has(student._id.toString())
     );
 
-    if (studentsWithoutNOC.length === 0) {
-      // All students have NOCs, but we still need to create bills with 0 amount
-      const studentBills = studentsInRoom.map(student => {
-        // Find the NOC for this student to get the adjustment amount
+    const buildStudentBills = (amountForNonNoc) =>
+      studentsInRoom.map((student) => {
+        const hasNOC = nocStudents.has(student._id.toString());
         let nocAdjustment = 0;
-        const studentNOC = approvedNOCs.find(noc => 
-          noc.student._id.toString() === student._id.toString() &&
-          billMonth <= new Date(noc.calculatedElectricityBill.billPeriodEnd) &&
-          billMonthEnd >= new Date(noc.calculatedElectricityBill.billPeriodStart)
-        );
-        if (studentNOC && studentNOC.calculatedElectricityBill) {
-          nocAdjustment = studentNOC.calculatedElectricityBill.studentShare || studentNOC.calculatedElectricityBill.total || 0;
+        if (hasNOC) {
+          const studentNOC = approvedNOCs.find(
+            (noc) =>
+              noc.student._id.toString() === student._id.toString() &&
+              billMonth <= new Date(noc.calculatedElectricityBill.billPeriodEnd) &&
+              billMonthEnd >= new Date(noc.calculatedElectricityBill.billPeriodStart)
+          );
+          if (studentNOC?.calculatedElectricityBill) {
+            nocAdjustment =
+              studentNOC.calculatedElectricityBill.studentShare ||
+              studentNOC.calculatedElectricityBill.total ||
+              0;
+          }
         }
-
         return {
           studentId: student._id,
           studentName: student.name,
           studentRollNumber: student.rollNumber,
-          amount: 0,
+          amount: hasNOC ? 0 : amountForNonNoc,
           paymentStatus: 'unpaid',
-          nocAdjustment: nocAdjustment
+          nocAdjustment: hasNOC ? nocAdjustment : 0
         };
       });
 
-      room.electricityBills.push({
-        month,
-        startUnits,
-        endUnits,
-        consumption,
-        rate: billRate,
-        total,
-        totalNOCAdjustment: totalNOCAmount,
-        remainingAmount: remainingBillAmount,
-        studentBills
-      });
+    const individualAmount =
+      studentsWithoutNOC.length > 0
+        ? Math.round(remainingBillAmount / studentsWithoutNOC.length)
+        : 0;
+    const studentBills = buildStudentBills(individualAmount);
 
-      await room.save();
-      return res.json({
-        success: true,
-        data: room.electricityBills[room.electricityBills.length - 1],
-        message: `All students have NOC adjustments. Total NOC amount: ₹${totalNOCAmount}`
-      });
-    }
-
-    // Calculate individual student amount (divide remaining amount equally among students without NOC)
-    const individualAmount = Math.round(remainingBillAmount / studentsWithoutNOC.length);
-
-    // Create student bills array
-    const studentBills = studentsInRoom.map(student => {
-      const hasNOC = nocStudents.has(student._id.toString());
-      
-      // Find the NOC for this student to get the adjustment amount
-      let nocAdjustment = 0;
-      if (hasNOC) {
-        const studentNOC = approvedNOCs.find(noc => 
-          noc.student._id.toString() === student._id.toString() &&
-          billMonth <= new Date(noc.calculatedElectricityBill.billPeriodEnd) &&
-          billMonthEnd >= new Date(noc.calculatedElectricityBill.billPeriodStart)
-        );
-        if (studentNOC && studentNOC.calculatedElectricityBill) {
-          nocAdjustment = studentNOC.calculatedElectricityBill.studentShare || studentNOC.calculatedElectricityBill.total || 0;
-        }
-      }
-
-      return {
-        studentId: student._id,
-        studentName: student.name,
-        studentRollNumber: student.rollNumber,
-        amount: hasNOC ? 0 : individualAmount, // Students with NOC pay 0 (already charged), others pay their share
-        paymentStatus: 'unpaid',
-        nocAdjustment: hasNOC ? nocAdjustment : 0
-      };
-    });
-
-    // Add new bill with student breakdown
-    room.electricityBills.push({
+    const bill = await ElectricityBill.create({
+      room: room._id,
+      hostel: room.hostel,
+      category: room.category,
+      roomNumber: room.roomNumber,
+      meterType: room.meterType || 'single',
       month,
       startUnits,
       endUnits,
       consumption,
       rate: billRate,
       total,
-      totalNOCAdjustment: totalNOCAmount, // Total amount already charged via NOC
-      remainingAmount: remainingBillAmount, // Amount to be shared among remaining students
+      totalNOCAdjustment: totalNOCAmount,
+      remainingAmount: remainingBillAmount,
       studentBills
     });
 
-    console.log(`📊 Bill Calculation Summary for ${month}:`);
-    console.log(`   Total Room Bill: ₹${total}`);
-    console.log(`   NOC Adjustments: ₹${totalNOCAmount} (${nocStudents.size} students)`);
-    console.log(`   Remaining Amount: ₹${remainingBillAmount}`);
-    console.log(`   Students without NOC: ${studentsWithoutNOC.length}`);
-    console.log(`   Amount per remaining student: ₹${individualAmount}`);
-
-    await room.save();
-
     res.json({
       success: true,
-      data: room.electricityBills[room.electricityBills.length - 1]
+      data: bill,
+      message:
+        studentsWithoutNOC.length === 0
+          ? `All students have NOC adjustments. Total NOC amount: ₹${totalNOCAmount}`
+          : undefined
     });
   } catch (error) {
     next(error);
@@ -2580,13 +2529,12 @@ export const getElectricityBills = async (req, res, next) => {
   try {
     const { roomId } = req.params;
 
-    const room = await Room.findById(roomId);
+    const room = await Room.findById(roomId).select('_id');
     if (!room) {
       throw createError(404, 'Room not found');
     }
 
-    // Sort bills by month in descending order
-    const sortedBills = room.electricityBills.sort((a, b) => b.month.localeCompare(a.month));
+    const sortedBills = await ElectricityBill.find({ room: roomId }).sort({ month: -1 });
 
     res.json({
       success: true,

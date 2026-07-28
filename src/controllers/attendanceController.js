@@ -1,6 +1,7 @@
 import Attendance from '../models/Attendance.js';
 import User from '../models/User.js';
 import Leave from '../models/Leave.js';
+import { createError } from '../utils/error.js';
 import { 
   normalizeCourseName, 
   getAllowedCourseNames,
@@ -49,6 +50,19 @@ const buildActiveStudentsQuery = ({ gender, category, roomNumber, hostel }) => {
   if (roomNumber?.trim()) query.roomNumber = roomNumber.trim();
   if (hostel) query.hostel = hostel;
   return query;
+};
+
+/** Match name / roll / admission (UI "Student ID" search is free-text, not ObjectId). */
+const matchesStudentSearch = (student, search) => {
+  if (!search?.trim()) return true;
+  const q = String(search).trim().toLowerCase();
+  const fields = [
+    student?.name,
+    student?.rollNumber,
+    student?.admissionNumber,
+    student?.sdmsRollNumber
+  ];
+  return fields.some((f) => f && String(f).toLowerCase().includes(q));
 };
 
 export const getEffectiveJoiningDate = (student) => {
@@ -164,7 +178,7 @@ export const getStudentsForAttendance = async (req, res, next) => {
       // Filter out students who have renewed to a newer academic year
       const getStartYear = (ay) => {
         if (!ay) return 0;
-        return parseInt(ay.split('-')[0], 10) || 0;
+        return parseInt(String(ay).split('-')[0], 10) || 0;
       };
       const requestedYearStart = getStartYear(academicYear);
       students = students.filter(student => {
@@ -523,14 +537,15 @@ export const getAttendanceForDate = async (req, res, next) => {
         page: 1,
         limit: 1000000,
         academicFilters: { course, branch },
-        skipFeesAndConcessions: true
+        skipFeesAndConcessions: true,
+        skipEnrichment: true
       });
       students = result.students;
 
       // Filter out students who have renewed to a newer academic year
       const getStartYear = (ay) => {
         if (!ay) return 0;
-        return parseInt(ay.split('-')[0], 10) || 0;
+        return parseInt(String(ay).split('-')[0], 10) || 0;
       };
       const requestedYearStart = getStartYear(academicYear);
       students = students.filter(student => {
@@ -605,9 +620,7 @@ export const getAttendanceForDate = async (req, res, next) => {
     });
 
     if (studentId) {
-      attendance = attendance.filter(att =>
-        att.student?.rollNumber?.toLowerCase().includes(studentId.toLowerCase())
-      );
+      attendance = attendance.filter((att) => matchesStudentSearch(att.student, studentId));
     }
 
     if (status) {
@@ -646,21 +659,16 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       throw createError(400, 'Start date cannot be after end date');
     }
 
-    // Build base query for attendance
+    // Build base query for attendance (student text search applied after populate)
     let query = {
       date: { $gte: start, $lte: end }
     };
-
-    // If studentId is provided, filter by student
-    if (studentId) {
-      query.student = studentId;
-    }
 
     // Get all attendance records for the date range first
     let attendance = await Attendance.find(query)
       .populate({
         path: 'student',
-        select: 'name rollNumber course branch year gender roomNumber hostel',
+        select: 'name rollNumber admissionNumber course branch year gender roomNumber hostel applicationStatus',
         populate: [
           { path: 'course', select: 'name code' },
           { path: 'branch', select: 'name code' }
@@ -757,7 +765,7 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       // Filter out students who have renewed to a newer academic year
       const getStartYear = (ay) => {
         if (!ay) return 0;
-        return parseInt(ay.split('-')[0], 10) || 0;
+        return parseInt(String(ay).split('-')[0], 10) || 0;
       };
       const requestedYearStart = getStartYear(academicYear);
       const filteredStudents = result.students.filter(student => {
@@ -769,6 +777,21 @@ export const getAttendanceForDateRange = async (req, res, next) => {
       attendance = attendance.filter(att => 
         att.student && studentIdsFilter.has(att.student._id?.toString() || att.student?.toString())
       );
+    } else {
+      // Live mode: only currently active/extended hostel students
+      const activeStudents = await User.find(
+        buildActiveStudentsQuery({ gender, hostel, category: req.query.category, roomNumber: req.query.roomNumber })
+      )
+        .select('_id')
+        .lean();
+      const activeIds = new Set(activeStudents.map((s) => s._id.toString()));
+      attendance = attendance.filter(
+        (att) => att.student && activeIds.has(att.student._id?.toString() || att.student?.toString())
+      );
+    }
+
+    if (studentId) {
+      attendance = attendance.filter((att) => matchesStudentSearch(att.student, studentId));
     }
 
     if (course) {

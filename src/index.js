@@ -125,7 +125,16 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/hostel-management')
-  .then(() => console.log('Connected to MongoDB'))
+  .then(async () => {
+    console.log('Connected to MongoDB');
+    try {
+      const { loadElectricitySettings } = await import('./services/electricityBillingService.js');
+      await loadElectricitySettings();
+      console.log('⚡ Electricity settings loaded');
+    } catch (err) {
+      console.warn('Electricity settings load skipped:', err.message);
+    }
+  })
   .catch((err) => console.error('MongoDB connection error:', err));
 
 if (process.env.FEES_MONGODB_URI) {

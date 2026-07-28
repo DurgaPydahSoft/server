@@ -1,5 +1,6 @@
 import Payment from '../models/Payment.js';
 import Room from '../models/Room.js';
+import ElectricityBill from '../models/ElectricityBill.js';
 import User from '../models/User.js';
 import FeeStructure from '../models/FeeStructure.js';
 import cashfreeService from '../utils/cashfreeService.js';
@@ -9,6 +10,29 @@ import { fetchCourseByIdFromSQL, fetchBranchByIdFromSQL } from '../utils/sqlServ
 import Course from '../models/Course.js';
 import Branch from '../models/Branch.js';
 
+const markStudentBillPaid = (billDoc, studentId, payment) => {
+  if (!billDoc.studentBills?.length) {
+    billDoc.paymentStatus = 'paid';
+    billDoc.paymentId = payment._id;
+    billDoc.paidAt = payment.paymentDate || new Date();
+    return;
+  }
+  const sb = billDoc.studentBills.find(
+    (row) => row.studentId.toString() === studentId.toString()
+  );
+  if (sb) {
+    sb.paymentStatus = 'paid';
+    sb.paymentId = payment._id;
+    sb.paidAt = payment.paymentDate || new Date();
+  }
+  const allPaid = billDoc.studentBills.every((row) => row.paymentStatus === 'paid');
+  if (allPaid) {
+    billDoc.paymentStatus = 'paid';
+    billDoc.paymentId = payment._id;
+    billDoc.paidAt = payment.paymentDate || new Date();
+  }
+};
+
 // Initiate payment for electricity bill
 export const initiatePayment = async (req, res) => {
   try {
@@ -17,7 +41,6 @@ export const initiatePayment = async (req, res) => {
 
     console.log('💰 Initiating payment for bill:', billId, 'room:', roomId, 'student:', studentId);
 
-    // Validate required fields
     if (!billId || !roomId) {
       return res.status(400).json({
         success: false,
@@ -25,7 +48,6 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Check if Cashfree is configured
     if (!cashfreeService.isConfigured()) {
       return res.status(503).json({
         success: false,
@@ -33,7 +55,6 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Find the room and bill
     const room = await Room.findById(roomId);
     if (!room) {
       return res.status(404).json({
@@ -42,62 +63,39 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Find the specific bill
-    const bill = room.electricityBills.find(b => b._id.toString() === billId);
-    if (!bill) {
+    const bill = await ElectricityBill.findByBillId(billId);
+    if (!bill || bill.room.toString() !== roomId.toString()) {
       return res.status(404).json({
         success: false,
         message: 'Electricity bill not found'
       });
     }
 
-    // Check if bill is already paid
-    console.log('🔍 Bill payment status:', bill.paymentStatus);
-    if (bill.paymentStatus === 'paid') {
-      console.log('❌ Bill already marked as paid in room');
+    const studentBillRow = bill.studentBills?.find(
+      (sb) => sb.studentId.toString() === studentId.toString()
+    );
+    if (studentBillRow?.paymentStatus === 'paid' || (!bill.studentBills?.length && bill.paymentStatus === 'paid')) {
       return res.status(400).json({
         success: false,
         message: 'This bill has already been paid'
       });
     }
 
-    // Check if this specific student has already paid for this bill
     const existingPayment = await Payment.findOne({
-      billId: billId,
+      billId: { $in: [bill._id, bill.legacyEmbeddedId].filter(Boolean) },
       studentId: studentId,
       status: 'success'
     });
 
-    console.log('🔍 Existing payment found:', !!existingPayment);
     if (existingPayment) {
-      console.log('❌ Payment record already exists for this student');
-      console.log('🔍 Payment details:', {
-        paymentId: existingPayment._id,
-        amount: existingPayment.amount,
-        status: existingPayment.status,
-        paymentDate: existingPayment.paymentDate
-      });
-      
-      // If payment exists but bill status is not updated, fix it
-      if (bill.paymentStatus !== 'paid') {
-        console.log('🔧 Fixing bill status - updating to paid');
-        const billIndex = room.electricityBills.findIndex(b => b._id.toString() === billId);
-        if (billIndex !== -1) {
-          room.electricityBills[billIndex].paymentStatus = 'paid';
-          room.electricityBills[billIndex].paymentId = existingPayment._id;
-          room.electricityBills[billIndex].paidAt = existingPayment.paymentDate;
-          await room.save();
-          console.log('✅ Bill status updated to paid');
-        }
-      }
-      
+      markStudentBillPaid(bill, studentId, existingPayment);
+      await bill.save();
       return res.status(400).json({
         success: false,
         message: 'You have already paid for this bill'
       });
     }
 
-    // Get student details
     const student = await User.findById(studentId);
     if (!student) {
       return res.status(404).json({
@@ -106,7 +104,6 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Validate required student fields
     if (!student.name) {
       return res.status(400).json({
         success: false,
@@ -114,34 +111,24 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Calculate student's share
     let studentAmount = 0;
-    const studentBill = bill.studentBills?.find(sb => sb.studentId.toString() === studentId.toString());
-    
-    if (studentBill) {
-      // New format - has studentBills array
-      studentAmount = studentBill.amount;
+    if (studentBillRow) {
+      studentAmount = studentBillRow.amount;
     } else {
-      // Old format - calculate equal share
       const studentsInRoom = await User.countDocuments({
-        roomNumber: room.roomNumber,
-        gender: room.gender,
-        category: room.category,
+        room: room._id,
         role: 'student',
         applicationStatus: { $in: ['Active', 'Extended'] }
       });
-      
       if (studentsInRoom === 0) {
         return res.status(400).json({
           success: false,
           message: 'No students found in room'
         });
       }
-      
       studentAmount = Math.round(bill.total / studentsInRoom);
     }
 
-    // Validate student amount
     if (!studentAmount || studentAmount <= 0) {
       return res.status(400).json({
         success: false,
@@ -149,33 +136,20 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Generate unique order ID
     const orderId = `ELEC_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    console.log('🔧 About to generate order data with billId:', billId);
-    console.log('🔧 Bill object:', bill);
-    console.log('🔧 Student details:', {
-      name: student.name,
-      email: student.email || 'Not provided',
-      phone: student.studentPhone || 'Not provided',
-      roomNumber: room.roomNumber
-    });
-
-    // Generate order data for Cashfree
-    // Note: email can be undefined/null - cashfreeService will handle it gracefully
     const orderData = cashfreeService.generateOrderData({
       orderId: orderId,
       amount: studentAmount,
       studentName: student.name || 'Student',
-      studentEmail: student.email || null, // Can be null - service will handle
+      studentEmail: student.email || null,
       studentPhone: student.studentPhone || student.phone || '9999999999',
       roomNumber: room.roomNumber || 'N/A',
       billMonth: bill.month || 'Unknown',
-      billId: billId
+      billId: bill._id.toString()
     });
 
-    // Create order with Cashfree
-    const cashfreeResult = await cashfreeService.createOrder(orderData, null); // No payment ID yet
+    const cashfreeResult = await cashfreeService.createOrder(orderData, null);
 
     if (!cashfreeResult.success) {
       return res.status(500).json({
@@ -185,31 +159,16 @@ export const initiatePayment = async (req, res) => {
       });
     }
 
-    // Update bill payment status to pending (no Payment record created yet)
-    const billIndex = room.electricityBills.findIndex(b => b._id.toString() === billId);
-    if (billIndex !== -1) {
-      room.electricityBills[billIndex].paymentStatus = 'pending';
-      room.electricityBills[billIndex].cashfreeOrderId = orderId; // Store order ID for webhook processing
-      room.electricityBills[billIndex].payingStudentId = studentId; // Store student ID for webhook processing
-      await room.save();
-      
-      console.log('✅ Bill updated with cashfreeOrderId:', orderId);
-      console.log('✅ Bill details:', {
-        billId: room.electricityBills[billIndex]._id,
-        cashfreeOrderId: room.electricityBills[billIndex].cashfreeOrderId,
-        paymentStatus: room.electricityBills[billIndex].paymentStatus
-      });
-    } else {
-      console.error('❌ Bill not found in room for billId:', billId);
-    }
-
-    console.log('✅ Payment initiated successfully:', orderId);
+    bill.paymentStatus = 'pending';
+    bill.cashfreeOrderId = orderId;
+    bill.payingStudentId = studentId;
+    await bill.save();
 
     res.status(200).json({
       success: true,
       message: 'Payment initiated successfully',
       data: {
-        billId: billId,
+        billId: bill._id,
         orderId: orderId,
         amount: studentAmount,
         paymentSessionId: cashfreeResult.data.payment_session_id,
@@ -217,7 +176,6 @@ export const initiatePayment = async (req, res) => {
         orderStatus: cashfreeResult.data.order_status
       }
     });
-
   } catch (error) {
     console.error('❌ Error initiating payment:', error);
     res.status(500).json({
@@ -561,45 +519,23 @@ export const processPayment = async (req, res) => {
 
     // If not a hostel fee payment, process as electricity bill payment
     console.log('🔍 Processing electricity bill payment for order:', order_id);
-    
-    // Find the bill by order ID (stored in room.electricityBills)
-    const room = await Room.findOne({ 
-      'electricityBills.cashfreeOrderId': order_id 
-    });
-    
-    if (!room) {
+
+    const bill = await ElectricityBill.findOne({ cashfreeOrderId: order_id });
+    if (!bill) {
       console.error('❌ Bill not found for order:', order_id);
-      console.log('🔍 Searching all rooms with electricity bills...');
-      
-      // Debug: Check all rooms with electricity bills
-      const allRooms = await Room.find({ 'electricityBills.0': { $exists: true } });
-      console.log('🔍 Found rooms with electricity bills:', allRooms.length);
-      
-      for (const r of allRooms) {
-        console.log('🔍 Room:', r.roomNumber, 'Bills:', r.electricityBills.map(b => ({
-          id: b._id,
-          cashfreeOrderId: b.cashfreeOrderId,
-          paymentStatus: b.paymentStatus
-        })));
-      }
-      
       return res.status(404).json({
         success: false,
         message: 'Bill not found'
       });
     }
 
-    // Find the specific bill
-    const billIndex = room.electricityBills.findIndex(b => b.cashfreeOrderId === order_id);
-    if (billIndex === -1) {
-      console.error('❌ Bill not found in room for order:', order_id);
+    const room = await Room.findById(bill.room);
+    if (!room) {
       return res.status(404).json({
         success: false,
-        message: 'Bill not found'
+        message: 'Room not found'
       });
     }
-
-    const bill = room.electricityBills[billIndex];
 
     // Determine payment status based on order status
     let paymentStatus = 'pending';
@@ -624,22 +560,18 @@ export const processPayment = async (req, res) => {
 
     // Only create Payment record if payment is successful
     if (paymentStatus === 'success') {
-      // Get the specific student who made the payment
       const student = await User.findById(bill.payingStudentId);
 
       if (student) {
-        // Calculate student's share
-        const studentsInRoom = await User.countDocuments({
-          roomNumber: room.roomNumber,
-          gender: room.gender,
-          category: room.category,
-          role: 'student',
-          applicationStatus: { $in: ['Active', 'Extended'] }
-        });
+        const studentBillRow = bill.studentBills?.find(
+          (sb) => sb.studentId.toString() === student._id.toString()
+        );
+        let studentAmount = studentBillRow?.amount;
+        if (studentAmount == null) {
+          const studentsInRoom = Math.max(bill.studentBills?.length || 0, 1);
+          studentAmount = Math.round(bill.total / studentsInRoom);
+        }
 
-        const studentAmount = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : bill.total;
-
-        // Create Payment record only for successful payments
         const payment = new Payment({
           billId: bill._id,
           roomId: room._id,
@@ -663,39 +595,29 @@ export const processPayment = async (req, res) => {
             total: bill.total
           }
         });
-        
-        console.log('💾 Creating electricity bill payment record with UTR:', {
-          utr_number,
-          payment_id,
-          fallback_utr: `CF_${order_id}`,
-          final_utr: utr_number || payment_id || `CF_${order_id}`
-        });
 
         await payment.save();
+        markStudentBillPaid(bill, student._id, payment);
 
-        // Update bill with payment ID
-        room.electricityBills[billIndex].paymentId = payment._id;
-        room.electricityBills[billIndex].paidAt = new Date();
-
-    // Send notification to student
-      try {
-        await notificationService.sendPaymentSuccessNotification(
+        try {
+          await notificationService.sendPaymentSuccessNotification(
             student._id,
             studentAmount,
             bill.month
-        );
-      } catch (notificationError) {
-        console.error('Error sending payment success notification:', notificationError);
+          );
+        } catch (notificationError) {
+          console.error('Error sending payment success notification:', notificationError);
         }
       }
     }
 
-    // Update room bill payment status
-    room.electricityBills[billIndex].paymentStatus = paymentStatus === 'success' ? 'paid' : paymentStatus;
-    await room.save();
-    
-    console.log('✅ Bill status updated to:', room.electricityBills[billIndex].paymentStatus);
+    bill.paymentStatus = paymentStatus === 'success' ? 'paid' : paymentStatus;
+    if (paymentStatus === 'success') {
+      bill.paidAt = bill.paidAt || new Date();
+    }
+    await bill.save();
 
+    console.log('✅ Bill status updated to:', bill.paymentStatus);
     console.log('✅ Payment processed successfully:', { order_id, status: paymentStatus });
 
     res.status(200).json({
@@ -721,7 +643,6 @@ export const getPaymentStatus = async (req, res) => {
 
     console.log('🔍 Getting payment status for billId:', billId, 'studentId:', studentId);
 
-    // Find the student's room
     const student = await User.findById(studentId);
     if (!student) {
       return res.status(404).json({
@@ -730,21 +651,7 @@ export const getPaymentStatus = async (req, res) => {
       });
     }
 
-    const room = await Room.findOne({
-      roomNumber: student.roomNumber,
-      gender: student.gender,
-      category: student.category
-    });
-
-    if (!room) {
-      return res.status(404).json({
-        success: false,
-        message: 'Room not found'
-      });
-    }
-
-    // Find the specific bill
-    const bill = room.electricityBills.find(b => b._id.toString() === billId);
+    const bill = await ElectricityBill.findByBillId(billId);
     if (!bill) {
       return res.status(404).json({
         success: false,
@@ -752,33 +659,40 @@ export const getPaymentStatus = async (req, res) => {
       });
     }
 
-    // Check if there's a successful Payment record
+    const room = await Room.findById(bill.room);
+    if (!room) {
+      return res.status(404).json({
+        success: false,
+        message: 'Room not found'
+      });
+    }
+
     const payment = await Payment.findOne({
-      billId: billId,
+      billId: { $in: [bill._id, bill.legacyEmbeddedId].filter(Boolean) },
       studentId: studentId,
       status: 'success'
     });
 
-    // Calculate student's share
-    const studentsInRoom = await User.countDocuments({
-      roomNumber: student.roomNumber,
-      gender: student.gender,
-      category: student.category,
-      role: 'student',
-      applicationStatus: { $in: ['Active', 'Extended'] }
-    });
+    const studentBillRow = bill.studentBills?.find(
+      (sb) => sb.studentId.toString() === studentId.toString()
+    );
+    let studentAmount = studentBillRow?.amount;
+    if (studentAmount == null) {
+      const studentsInRoom = Math.max(bill.studentBills?.length || 0, 1);
+      studentAmount = Math.round(bill.total / studentsInRoom);
+    }
 
-    const studentAmount = studentsInRoom > 0 ? Math.round(bill.total / studentsInRoom) : bill.total;
+    const rowStatus = studentBillRow?.paymentStatus || bill.paymentStatus;
 
     res.json({
       success: true,
       data: {
-        billId: billId,
-        status: payment ? 'success' : (bill.paymentStatus === 'paid' ? 'success' : bill.paymentStatus || 'unpaid'),
+        billId: bill._id,
+        status: payment ? 'success' : (rowStatus === 'paid' ? 'success' : rowStatus || 'unpaid'),
         amount: payment?.amount || studentAmount,
         orderId: bill.cashfreeOrderId,
         paymentId: payment?._id,
-        paidAt: payment?.paymentDate || bill.paidAt,
+        paidAt: payment?.paymentDate || studentBillRow?.paidAt || bill.paidAt,
         createdAt: bill.createdAt,
         billMonth: bill.month,
         roomNumber: room.roomNumber,
@@ -790,7 +704,6 @@ export const getPaymentStatus = async (req, res) => {
         endUnits: bill.endUnits
       }
     });
-
   } catch (error) {
     console.error('❌ Error getting payment status:', error);
     res.status(500).json({
@@ -1002,16 +915,18 @@ export const verifyPayment = async (req, res) => {
     payment.failureReason = failureReason;
     await payment.save();
 
-    // Update room bill payment status
-    const room = await Room.findById(payment.roomId);
-    if (room) {
-      const billIndex = room.electricityBills.findIndex(b => b._id.toString() === payment.billId.toString());
-      if (billIndex !== -1) {
-        room.electricityBills[billIndex].paymentStatus = paymentStatus === 'success' ? 'paid' : 'unpaid';
-        room.electricityBills[billIndex].paidAt = paymentStatus === 'success' ? new Date() : null;
-        await room.save();
-        console.log('✅ Room bill status updated');
+    // Update electricity bill payment status
+    const bill = await ElectricityBill.findByBillId(payment.billId);
+    if (bill) {
+      if (paymentStatus === 'success') {
+        markStudentBillPaid(bill, payment.studentId, payment);
+        bill.paidAt = new Date();
+      } else {
+        bill.paymentStatus = 'unpaid';
+        bill.paidAt = null;
       }
+      await bill.save();
+      console.log('✅ Electricity bill status updated');
     }
 
     console.log('✅ Payment verification completed:', { paymentId, status: paymentStatus });
@@ -1060,14 +975,13 @@ export const cancelPayment = async (req, res) => {
     payment.failureReason = 'Cancelled by user';
     await payment.save();
 
-    // Update room bill payment status
-    const room = await Room.findById(payment.roomId);
-    if (room) {
-      const billIndex = room.electricityBills.findIndex(b => b._id.toString() === payment.billId.toString());
-      if (billIndex !== -1) {
-        room.electricityBills[billIndex].paymentStatus = 'unpaid';
-        await room.save();
-      }
+    // Update electricity bill payment status
+    const bill = await ElectricityBill.findByBillId(payment.billId);
+    if (bill) {
+      bill.paymentStatus = 'unpaid';
+      bill.cashfreeOrderId = null;
+      bill.payingStudentId = null;
+      await bill.save();
     }
 
     res.json({
@@ -1398,8 +1312,8 @@ export const recordElectricityPayment = async (req, res) => {
       });
     }
 
-    const bill = room.electricityBills.find(b => b._id.toString() === billId);
-    if (!bill) {
+    const bill = await ElectricityBill.findByBillId(billId);
+    if (!bill || bill.room.toString() !== roomId.toString()) {
       return res.status(404).json({
         success: false,
         message: 'Electricity bill not found'
@@ -1411,7 +1325,6 @@ export const recordElectricityPayment = async (req, res) => {
     let studentAmount = 0;
     
     if (bill.studentBills && bill.studentBills.length > 0) {
-      // New format - has studentBills array
       studentBill = bill.studentBills.find(sb => sb.studentId.toString() === studentId);
       if (!studentBill) {
         return res.status(404).json({
@@ -1420,7 +1333,6 @@ export const recordElectricityPayment = async (req, res) => {
         });
       }
       
-      // Check if already paid
       if (studentBill.paymentStatus === 'paid') {
         return res.status(400).json({
           success: false,
@@ -1429,7 +1341,6 @@ export const recordElectricityPayment = async (req, res) => {
       }
       studentAmount = studentBill.amount;
     } else {
-      // Old format - no studentBills array
       if (bill.paymentStatus === 'paid') {
         return res.status(400).json({
           success: false,
@@ -1437,11 +1348,8 @@ export const recordElectricityPayment = async (req, res) => {
         });
       }
       
-      // Get current student count in room
       const studentsInRoom = await User.countDocuments({
-        roomNumber: room.roomNumber,
-        gender: room.gender,
-        category: room.category,
+        room: room._id,
         role: 'student',
         applicationStatus: { $in: ['Active', 'Extended'] }
       });
@@ -1465,7 +1373,7 @@ export const recordElectricityPayment = async (req, res) => {
       collectedBy: adminId,
       collectedByName: adminName,
       paymentType: 'electricity',
-      billId: billId,
+      billId: bill._id,
       roomId: roomId,
       billMonth: bill.month,
       utrNumber: utrNumber,
@@ -1482,27 +1390,8 @@ export const recordElectricityPayment = async (req, res) => {
     await payment.save();
 
     // Update bill status
-    if (studentBill) {
-      // New format - update student bill
-      studentBill.paymentStatus = 'paid';
-      studentBill.paymentId = payment._id;
-      studentBill.paidAt = new Date();
-
-      // Check if all students in room have paid
-      const allPaid = bill.studentBills.every(sb => sb.paymentStatus === 'paid');
-      if (allPaid) {
-        bill.paymentStatus = 'paid';
-        bill.paymentId = payment._id;
-        bill.paidAt = new Date();
-      }
-    } else {
-      // Old format - mark entire room bill as paid
-      bill.paymentStatus = 'paid';
-      bill.paymentId = payment._id;
-      bill.paidAt = new Date();
-    }
-
-    await room.save();
+    markStudentBillPaid(bill, studentId, payment);
+    await bill.save();
 
     console.log('✅ Electricity payment recorded successfully:', {
       paymentId: payment._id,
