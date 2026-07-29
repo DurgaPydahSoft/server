@@ -1507,6 +1507,8 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
   try {
     const { hostel, category, academicYear } = req.query;
     const query = {};
+    // Live vacancy when academicYear is omitted; AY-active vacancy when provided.
+    const ay = academicYear && String(academicYear).trim() ? String(academicYear).trim() : null;
 
     const admin = req.admin || req.warden || req.user;
     const assignedHostelId = admin?.assignedHostelId?._id || admin?.assignedHostelId;
@@ -1534,7 +1536,9 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
     
     // Get student count and staff count for each room
     const roomsWithDetails = await Promise.all(rooms.map(async (room) => {
-      const studentCount = await countStudentsInRoomForAcademicYear(room, academicYear);
+      const studentCount = ay
+        ? await countStudentsInRoomForAcademicYear(room, ay)
+        : await countRoomOccupancyForDisplay(room, null);
 
       const staffCount = await StaffGuest.countDocuments({
         type: 'staff',
@@ -1555,7 +1559,8 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
         occupancyRate: room.bedCount
           ? Math.round((totalOccupancy / room.bedCount) * 100)
           : 0,
-        academicYear: academicYear || null
+        academicYear: ay,
+        occupancyMode: ay ? 'ay' : 'live'
       };
     }));
 
@@ -1563,7 +1568,8 @@ export const getRoomsWithBedAvailability = async (req, res, next) => {
       success: true,
       data: {
         rooms: roomsWithDetails,
-        academicYear: academicYear || null
+        academicYear: ay,
+        occupancyMode: ay ? 'ay' : 'live'
       }
     });
   } catch (error) {
