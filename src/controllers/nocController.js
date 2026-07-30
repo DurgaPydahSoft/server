@@ -1,4 +1,5 @@
-import NOC from '../models/NOC.js';
+import mongoose from 'mongoose';
+import NOC, { NOCSettings } from '../models/NOC.js';
 import User from '../models/User.js';
 import Admin from '../models/Admin.js';
 import Room from '../models/Room.js';
@@ -7,6 +8,77 @@ import { createError } from '../utils/error.js';
 import Notification from '../models/Notification.js';
 import { enrichStudentAcademics, enrichStudentsAcademics } from '../utils/studentAcademicEnricher.js';
 import { getCourseById, getBranchById } from '../utils/courseBranchHelper.js';
+import { connectFeesDatabase, getFeesConnection, isFeesDbConfigured } from '../config/feesDatabase.js';
+import { getStudentFeeModel } from '../models/fees/StudentFee.js';
+import { toFeesAcademicYear, resolveFeesStudentId } from '../services/feesSyncService.js';
+
+// Helper to create a breakage fee demand in the student fees records
+const createBreakageFeeDemand = async (student, amount, remarks, academicYear, feeHeadId, feeHeadName) => {
+  try {
+    const isConfigured = isFeesDbConfigured();
+    if (!isConfigured) {
+      console.warn('⚠️ Fees database is not configured. Skipping demand creation.');
+      return;
+    }
+
+    if (!feeHeadId) {
+      console.warn('⚠️ No breakage fee head configured. Skipping demand creation.');
+      return;
+    }
+
+    // Connect to external DB
+    await connectFeesDatabase();
+    const conn = getFeesConnection();
+    if (!conn) {
+      console.warn('⚠️ Fees database connection not available. Skipping demand creation.');
+      return;
+    }
+
+    const StudentFee = getStudentFeeModel();
+    const enriched = await enrichStudentAcademics(student.toObject ? student.toObject() : student);
+    const studentId = resolveFeesStudentId(student, enriched);
+    const feesAcademicYear = toFeesAcademicYear(academicYear || student.academicYear);
+
+    if (!studentId || !feesAcademicYear) {
+      console.warn('⚠️ Missing student ID or academic year. Skipping demand creation.');
+      return;
+    }
+
+    const payload = {
+      academicYear: feesAcademicYear,
+      feeHead: new mongoose.Types.ObjectId(feeHeadId),
+      structureId: null,
+      semester: null,
+      termNumber: null,
+      studentId: studentId,
+      studentYear: Number(enriched.year || student.year || 1),
+      amount: Number(amount),
+      branch: String(enriched.branchId || enriched.branch || student.branch || '').trim(),
+      college: student.college?.name || student.college || '',
+      course: String(enriched.courseId || enriched.course || student.course || '').trim(),
+      isActive: true,
+      remarks: remarks || `NOC Breakage Fee (${feeHeadName || 'General'})`,
+      studentName: student.name
+    };
+
+    // Use updateOne with upsert to avoid duplicate index errors
+    await StudentFee.findOneAndUpdate(
+      {
+        studentId: studentId,
+        feeHead: payload.feeHead,
+        academicYear: feesAcademicYear
+      },
+      {
+        $set: payload,
+        $setOnInsert: { createdAt: new Date() }
+      },
+      { upsert: true, new: true }
+    );
+    console.log(`✅ Breakage fee demand of ₹${amount} created successfully for student ${student.name} (${studentId})`);
+  } catch (error) {
+    console.error('❌ Error creating breakage fee demand:', error);
+  }
+};
 
 // Helper to resolve Course and Branch string IDs for a student
 const resolveStudentCourseAndBranch = async (student) => {
@@ -57,79 +129,9 @@ const populateSQLAcademics = async (nocRequests) => {
   return isArray ? populated : populated[0];
 };
 
-// Student: Create NOC request
+// Student: Create NOC request (Disabled - Wardens only)
 export const createNOCRequest = async (req, res, next) => {
-  try {
-    const { reason, vacatingDate } = req.body;
-    const studentId = req.user.id;
-
-    // Validate vacating date
-    if (!vacatingDate) {
-      return next(createError(400, 'Vacating date is required'));
-    }
-
-    const vacatingDateObj = new Date(vacatingDate);
-    if (isNaN(vacatingDateObj.getTime())) {
-      return next(createError(400, 'Invalid vacating date format'));
-    }
-
-    // Allow any date (past or future) for vacating date
-
-    // Get student details
-    const student = await User.findById(studentId);
-    if (!student) {
-      return next(createError(404, 'Student not found'));
-    }
-
-    // Check if student already has a pending NOC request
-    const existingNOC = await NOC.findOne({
-      student: studentId,
-      status: { $in: ['Pending', 'Warden Verified'] }
-    });
-
-    if (existingNOC) {
-      return next(createError(400, 'You already have a pending NOC request'));
-    }
-
-    // Check if student is already deactivated
-    if (student.applicationStatus === 'Expired') {
-      return next(createError(400, 'Your account is already deactivated'));
-    }
-
-    // Resolve course & branch string IDs
-    const { courseId, branchId } = await resolveStudentCourseAndBranch(student);
-    if (!courseId || !branchId) {
-      return next(createError(400, 'Student course and branch details could not be resolved'));
-    }
-
-    // Create NOC request
-    const nocRequest = new NOC({
-      student: studentId,
-      studentName: student.name,
-      rollNumber: student.rollNumber,
-      course: courseId,
-      branch: branchId,
-      year: student.year,
-      academicYear: student.academicYear,
-      reason: reason.trim(),
-      vacatingDate: vacatingDateObj
-    });
-
-    await nocRequest.save();
-
-    // Populate the created NOC
-    const tempNOC = await NOC.findById(nocRequest._id)
-      .populate('student', 'name rollNumber course branch year academicYear');
-    const populatedNOC = await populateSQLAcademics(tempNOC);
-
-    res.status(201).json({
-      success: true,
-      message: 'NOC request submitted successfully',
-      data: populatedNOC
-    });
-  } catch (error) {
-    next(error);
-  }
+  return next(createError(400, 'Students are not allowed to submit NOC requests directly. Please contact the warden.'));
 };
 
 // Student: Get their NOC requests
@@ -227,10 +229,10 @@ export const deleteNOCByAdmin = async (req, res, next) => {
 // Warden: Create NOC request on behalf of student
 export const createNOCForStudent = async (req, res, next) => {
   try {
-    const { studentId, reason, vacatingDate } = req.body;
+    const { studentId, reason, vacatingDate, breakageFee, breakageRemarks, meterReadings } = req.body;
     const wardenId = req.warden._id;
 
-    console.log('📝 Warden creating NOC for student:', { studentId, reason, vacatingDate, wardenId });
+    console.log('📝 Warden creating NOC for student:', { studentId, reason, vacatingDate, wardenId, breakageFee });
 
     // Validate required fields
     if (!studentId || !reason) {
@@ -246,8 +248,6 @@ export const createNOCForStudent = async (req, res, next) => {
     if (isNaN(vacatingDateObj.getTime())) {
       return next(createError(400, 'Invalid vacating date format'));
     }
-
-    // Allow any date (past or future) for vacating date
 
     // Validate reason length
     if (reason.trim().length < 10) {
@@ -285,6 +285,19 @@ export const createNOCForStudent = async (req, res, next) => {
       return next(createError(400, 'Student course and branch details could not be resolved'));
     }
 
+    // Fetch configured breakage fee head
+    let breakageFeeHeadId = null;
+    let breakageFeeHeadName = null;
+    try {
+      const settings = await NOCSettings.findOne();
+      if (settings) {
+        breakageFeeHeadId = settings.breakageFeeHeadId;
+        breakageFeeHeadName = settings.breakageFeeHeadName;
+      }
+    } catch (settingsErr) {
+      console.error('Failed to fetch NOC settings:', settingsErr);
+    }
+
     // Create NOC request
     const nocRequest = new NOC({
       student: studentId,
@@ -297,7 +310,17 @@ export const createNOCForStudent = async (req, res, next) => {
       reason: reason.trim(),
       vacatingDate: vacatingDateObj,
       raisedBy: 'warden',
-      raisedByWarden: wardenId
+      raisedByWarden: wardenId,
+      status: 'Approved', // Warden creation is final
+      verifiedBy: wardenId,
+      verifiedAt: new Date(),
+      approvedBy: wardenId,
+      approvedAt: new Date(),
+      breakageFee: Number(breakageFee) || 0,
+      breakageRemarks: breakageRemarks || '',
+      breakageFeeHeadId,
+      breakageFeeHeadName,
+      meterReadings: meterReadings || { meterType: 'single' }
     });
 
     await nocRequest.save();
@@ -306,11 +329,23 @@ export const createNOCForStudent = async (req, res, next) => {
     await Notification.create({
       recipient: studentId,
       recipientModel: 'User',
-      title: 'NOC Request Created',
-      message: `A NOC request has been created on your behalf by the warden. Reason: ${reason.substring(0, 100)}${reason.length > 100 ? '...' : ''}`,
+      title: 'NOC Request Approved',
+      message: `Your NOC request has been approved by the warden. Your hostel profile will be deactivated on your vacating date (${new Date(nocRequest.vacatingDate).toLocaleDateString('en-IN')}) for this academic year.`,
       type: 'system',
       priority: 'high'
     });
+
+    // Generate fee demand if breakage fee is set
+    if (Number(breakageFee) > 0) {
+      await createBreakageFeeDemand(
+        student,
+        breakageFee,
+        breakageRemarks,
+        student.academicYear,
+        breakageFeeHeadId,
+        breakageFeeHeadName
+      );
+    }
 
     // Populate the created NOC
     const tempNOC = await NOC.findById(nocRequest._id)
@@ -322,7 +357,7 @@ export const createNOCForStudent = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'NOC request created successfully on behalf of student',
+      message: 'NOC request created and approved successfully on behalf of student',
       data: populatedNOC
     });
   } catch (error) {
@@ -334,10 +369,10 @@ export const createNOCForStudent = async (req, res, next) => {
 // Admin: Create NOC request on behalf of student for their academic year
 export const createNOCByAdmin = async (req, res, next) => {
   try {
-    const { studentId, reason, vacatingDate } = req.body;
+    const { studentId, reason, vacatingDate, breakageFee, breakageRemarks, meterReadings } = req.body;
     const adminId = req.user.id;
 
-    console.log('📝 Admin creating NOC for student:', { studentId, reason, vacatingDate, adminId });
+    console.log('📝 Admin creating NOC for student:', { studentId, reason, vacatingDate, adminId, breakageFee });
 
     // Validate required fields
     if (!studentId || !reason) {
@@ -353,8 +388,6 @@ export const createNOCByAdmin = async (req, res, next) => {
     if (isNaN(vacatingDateObj.getTime())) {
       return next(createError(400, 'Invalid vacating date format'));
     }
-
-    // Allow any date (past or future) for vacating date
 
     if (reason.trim().length < 10) {
       return next(createError(400, 'Reason must be at least 10 characters long'));
@@ -391,6 +424,19 @@ export const createNOCByAdmin = async (req, res, next) => {
       return next(createError(400, 'Student course and branch details could not be resolved'));
     }
 
+    // Fetch configured breakage fee head
+    let breakageFeeHeadId = null;
+    let breakageFeeHeadName = null;
+    try {
+      const settings = await NOCSettings.findOne();
+      if (settings) {
+        breakageFeeHeadId = settings.breakageFeeHeadId;
+        breakageFeeHeadName = settings.breakageFeeHeadName;
+      }
+    } catch (settingsErr) {
+      console.error('Failed to fetch NOC settings:', settingsErr);
+    }
+
     // Create NOC request for that student's academic year only
     const nocRequest = new NOC({
       student: studentId,
@@ -403,7 +449,14 @@ export const createNOCByAdmin = async (req, res, next) => {
       reason: reason.trim(),
       vacatingDate: vacatingDateObj,
       raisedBy: 'admin',
-      approvedBy: null
+      status: 'Approved', // Admin creation is final
+      approvedBy: adminId,
+      approvedAt: new Date(),
+      breakageFee: Number(breakageFee) || 0,
+      breakageRemarks: breakageRemarks || '',
+      breakageFeeHeadId,
+      breakageFeeHeadName,
+      meterReadings: meterReadings || { meterType: 'single' }
     });
 
     await nocRequest.save();
@@ -413,10 +466,22 @@ export const createNOCByAdmin = async (req, res, next) => {
       recipient: studentId,
       recipientModel: 'User',
       title: 'NOC Request Created by Admin',
-      message: `A NOC request has been created on your behalf by the admin for academic year ${student.academicYear}. Reason: ${reason.substring(0, 100)}${reason.length > 100 ? '...' : ''}`,
+      message: `A NOC request has been created and approved on your behalf by the admin for academic year ${student.academicYear}. Reason: ${reason.substring(0, 100)}${reason.length > 100 ? '...' : ''}`,
       type: 'system',
       priority: 'high'
     });
+
+    // Generate fee demand if breakage fee is set
+    if (Number(breakageFee) > 0) {
+      await createBreakageFeeDemand(
+        student,
+        breakageFee,
+        breakageRemarks,
+        student.academicYear,
+        breakageFeeHeadId,
+        breakageFeeHeadName
+      );
+    }
 
     // Populate the created NOC
     const tempNOC = await NOC.findById(nocRequest._id)
@@ -427,7 +492,7 @@ export const createNOCByAdmin = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'NOC request created successfully by admin',
+      message: 'NOC request created and approved successfully by admin',
       data: populatedNOC
     });
   } catch (error) {
@@ -477,16 +542,28 @@ export const getStudentsForNOC = async (req, res, next) => {
     }
 
     const students = await User.find(query)
-      .select('name rollNumber course branch year academicYear gender roomNumber')
+      .select('name rollNumber course branch year academicYear gender room roomNumber')
+      .populate('room', 'meterType')
+      .populate('course', 'name')
+      .populate('branch', 'name')
       .sort({ name: 1 })
       .limit(50);
 
-    // Enrich with SQL academic details
-    const enrichedStudents = await enrichStudentsAcademics(students.map(s => s.toObject()));
+    // Skip heavy external SQL database calls during creation searches
+    const enrichedStudents = await enrichStudentsAcademics(
+      students.map(s => s.toObject()),
+      { skipFeesAndConcessions: true, skipEnrichment: true }
+    );
     const availableStudentsFormatted = enrichedStudents.map(student => ({
       ...student,
-      course: { _id: student.courseId || student.course, name: student.course || '' },
-      branch: { _id: student.branchId || student.branch, name: student.branch || '' }
+      course: { 
+        _id: student.course?._id || student.courseId || student.course || '', 
+        name: student.course?.name || student.course || '' 
+      },
+      branch: { 
+        _id: student.branch?._id || student.branchId || student.branch || '', 
+        name: student.branch?.name || student.branch || '' 
+      }
     }));
 
     // Filter out students who already have pending NOC requests
@@ -521,7 +598,11 @@ export const getWardenNOCRequests = async (req, res, next) => {
     }
 
     const tempRequests = await NOC.find(query)
-      .populate('student', 'name rollNumber course branch year academicYear')
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year academicYear room',
+        populate: { path: 'room', select: 'meterType' }
+      })
       .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
       .sort({ createdAt: -1 });
     const nocRequests = await populateSQLAcademics(tempRequests);
@@ -554,7 +635,7 @@ export const getWardenChecklistItems = async (req, res, next) => {
 export const wardenVerifyNOC = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { remarks } = req.body;
+    const { remarks, breakageFee, breakageRemarks, meterReadings } = req.body;
     const wardenId = req.user.id;
 
     const nocRequest = await NOC.findById(id);
@@ -566,16 +647,34 @@ export const wardenVerifyNOC = async (req, res, next) => {
       return next(createError(400, 'Only pending NOC requests can be approved'));
     }
 
-    // Update status to Approved directly
-    await nocRequest.updateStatus('Approved', wardenId, remarks || '');
-    // Check if vacatingDate is today or in the past
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const isPastOrToday = new Date(nocRequest.vacatingDate) <= today;
-
-    if (isPastOrToday) {
-      await nocRequest.deactivateStudent();
+    // Fetch configured breakage fee head
+    let breakageFeeHeadId = null;
+    let breakageFeeHeadName = null;
+    try {
+      const settings = await NOCSettings.findOne();
+      if (settings) {
+        breakageFeeHeadId = settings.breakageFeeHeadId;
+        breakageFeeHeadName = settings.breakageFeeHeadName;
+      }
+    } catch (settingsErr) {
+      console.error('Failed to fetch NOC settings:', settingsErr);
     }
+
+    nocRequest.status = 'Approved';
+    nocRequest.verifiedBy = wardenId;
+    nocRequest.verifiedAt = new Date();
+    nocRequest.approvedBy = wardenId;
+    nocRequest.approvedAt = new Date();
+    nocRequest.wardenRemarks = remarks || '';
+    nocRequest.breakageFee = Number(breakageFee) || 0;
+    nocRequest.breakageRemarks = breakageRemarks || '';
+    nocRequest.breakageFeeHeadId = breakageFeeHeadId;
+    nocRequest.breakageFeeHeadName = breakageFeeHeadName;
+    if (meterReadings) {
+      nocRequest.meterReadings = meterReadings;
+    }
+
+    await nocRequest.save();
 
     // Create notification for student
     await Notification.create({
@@ -587,6 +686,21 @@ export const wardenVerifyNOC = async (req, res, next) => {
       priority: 'high'
     });
 
+    // Generate fee demand if breakage fee is set
+    if (Number(breakageFee) > 0) {
+      const student = await User.findById(nocRequest.student);
+      if (student) {
+        await createBreakageFeeDemand(
+          student,
+          breakageFee,
+          breakageRemarks,
+          student.academicYear,
+          breakageFeeHeadId,
+          breakageFeeHeadName
+        );
+      }
+    }
+
     // Populate the updated NOC
     const tempNOC = await NOC.findById(id)
       .populate('student', 'name rollNumber course branch year academicYear')
@@ -595,9 +709,7 @@ export const wardenVerifyNOC = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: isPastOrToday
-        ? 'NOC request approved and student deactivated successfully'
-        : 'NOC request approved successfully (deactivation scheduled on vacating date)',
+      message: 'NOC request approved successfully (deactivation scheduled on vacating date)',
       data: populatedNOC
     });
   } catch (error) {
@@ -661,7 +773,11 @@ export const getAllNOCRequests = async (req, res, next) => {
     }
 
     const tempRequests = await NOC.find(query)
-      .populate('student', 'name rollNumber course branch year academicYear')
+      .populate({
+        path: 'student',
+        select: 'name rollNumber course branch year academicYear room',
+        populate: { path: 'room', select: 'meterType' }
+      })
       .populate('verifiedBy approvedBy rejectedBy raisedByWarden', 'username role')
       .sort({ createdAt: -1 });
     const nocRequests = await populateSQLAcademics(tempRequests);
@@ -679,7 +795,7 @@ export const getAllNOCRequests = async (req, res, next) => {
 export const approveNOCRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { adminRemarks } = req.body;
+    const { adminRemarks, breakageFee, breakageRemarks, meterReadings } = req.body;
     const superAdminId = req.user.id;
 
     const nocRequest = await NOC.findById(id);
@@ -691,16 +807,32 @@ export const approveNOCRequest = async (req, res, next) => {
       return next(createError(400, 'Only pending NOC requests can be approved'));
     }
 
-    // Update status to Approved directly
-    await nocRequest.updateStatus('Approved', superAdminId, adminRemarks || '');
-    // Check if vacatingDate is today or in the past
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const isPastOrToday = new Date(nocRequest.vacatingDate) <= today;
-
-    if (isPastOrToday) {
-      await nocRequest.deactivateStudent();
+    // Fetch configured breakage fee head
+    let breakageFeeHeadId = null;
+    let breakageFeeHeadName = null;
+    try {
+      const settings = await NOCSettings.findOne();
+      if (settings) {
+        breakageFeeHeadId = settings.breakageFeeHeadId;
+        breakageFeeHeadName = settings.breakageFeeHeadName;
+      }
+    } catch (settingsErr) {
+      console.error('Failed to fetch NOC settings:', settingsErr);
     }
+
+    nocRequest.status = 'Approved';
+    nocRequest.approvedBy = superAdminId;
+    nocRequest.approvedAt = new Date();
+    nocRequest.adminRemarks = adminRemarks || '';
+    nocRequest.breakageFee = Number(breakageFee) || 0;
+    nocRequest.breakageRemarks = breakageRemarks || '';
+    nocRequest.breakageFeeHeadId = breakageFeeHeadId;
+    nocRequest.breakageFeeHeadName = breakageFeeHeadName;
+    if (meterReadings) {
+      nocRequest.meterReadings = meterReadings;
+    }
+
+    await nocRequest.save();
 
     // Create notification for student
     await Notification.create({
@@ -712,6 +844,21 @@ export const approveNOCRequest = async (req, res, next) => {
       priority: 'high'
     });
 
+    // Generate fee demand if breakage fee is set
+    if (Number(breakageFee) > 0) {
+      const student = await User.findById(nocRequest.student);
+      if (student) {
+        await createBreakageFeeDemand(
+          student,
+          breakageFee,
+          breakageRemarks,
+          student.academicYear,
+          breakageFeeHeadId,
+          breakageFeeHeadName
+        );
+      }
+    }
+
     // Populate the updated NOC
     const tempNOC = await NOC.findById(id)
       .populate('student', 'name rollNumber course branch year academicYear')
@@ -720,9 +867,7 @@ export const approveNOCRequest = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: isPastOrToday
-        ? 'NOC request approved directly and student deactivated successfully'
-        : 'NOC request approved directly (deactivation scheduled on vacating date)',
+      message: 'NOC request approved successfully by admin (deactivation scheduled on vacating date)',
       data: populatedNOC
     });
   } catch (error) {
@@ -803,6 +948,91 @@ export const getNOCStats = async (req, res, next) => {
     res.json({
       success: true,
       data: formattedStats
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Admin: Get list of fee heads from the external database
+export const getNOCFeeHeads = async (req, res, next) => {
+  try {
+    const isConfigured = isFeesDbConfigured();
+    if (!isConfigured) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+
+    await connectFeesDatabase();
+    const conn = getFeesConnection();
+    if (!conn) {
+      return next(createError(500, 'External Fees database connection failed'));
+    }
+
+    const db = conn.db;
+    const feeHeads = await db.collection('feeheads').find({}).toArray();
+
+    // Map _id to id for consistency
+    const formattedFeeHeads = feeHeads.map(fh => ({
+      id: fh._id.toString(),
+      _id: fh._id.toString(),
+      name: fh.name,
+      code: fh.code
+    }));
+
+    res.json({
+      success: true,
+      data: formattedFeeHeads
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Admin: Get NOC settings (the breakage fee head configured)
+export const getNOCSettings = async (req, res, next) => {
+  try {
+    let settings = await NOCSettings.findOne();
+    if (!settings) {
+      settings = await NOCSettings.create({
+        breakageFeeHeadId: '',
+        breakageFeeHeadName: ''
+      });
+    }
+
+    res.json({
+      success: true,
+      data: settings
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Admin: Save/Update NOC settings
+export const updateNOCSettings = async (req, res, next) => {
+  try {
+    const { breakageFeeHeadId, breakageFeeHeadName } = req.body;
+
+    let settings = await NOCSettings.findOne();
+    if (!settings) {
+      settings = new NOCSettings({
+        breakageFeeHeadId: breakageFeeHeadId || '',
+        breakageFeeHeadName: breakageFeeHeadName || ''
+      });
+    } else {
+      settings.breakageFeeHeadId = breakageFeeHeadId || '';
+      settings.breakageFeeHeadName = breakageFeeHeadName || '';
+    }
+
+    await settings.save();
+
+    res.json({
+      success: true,
+      message: 'NOC settings updated successfully',
+      data: settings
     });
   } catch (error) {
     next(error);

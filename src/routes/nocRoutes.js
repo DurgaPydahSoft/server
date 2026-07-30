@@ -15,7 +15,10 @@ import {
   approveNOCRequest,
   rejectNOCRequest,
   deleteNOCByAdmin,
-  getNOCStats
+  getNOCStats,
+  getNOCFeeHeads,
+  getNOCSettings,
+  updateNOCSettings
 } from '../controllers/nocController.js';
 import { authenticateStudent, wardenAuth, adminAuth } from '../middleware/authMiddleware.js';
 
@@ -66,5 +69,8 @@ router.post('/admin/:id/approve', nocManagementAuth, approveNOCRequest);  // Dir
 router.post('/admin/:id/reject', nocManagementAuth, rejectNOCRequest);
 router.delete('/admin/:id', nocManagementAuth, deleteNOCByAdmin);
 router.get('/admin/stats', nocManagementAuth, getNOCStats);
+router.get('/admin/fee-heads', nocManagementAuth, getNOCFeeHeads);
+router.get('/admin/settings', nocManagementAuth, getNOCSettings);
+router.post('/admin/settings', nocManagementAuth, updateNOCSettings);
 
 export default router;

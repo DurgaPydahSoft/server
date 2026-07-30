@@ -128,6 +128,68 @@ const nocSchema = new mongoose.Schema({
     type: String,
     trim: true,
     maxLength: [1000, 'Admin remarks cannot exceed 1000 characters']
+  },
+  breakageFee: {
+    type: Number,
+    default: 0
+  },
+  breakageRemarks: {
+    type: String,
+    default: ''
+  },
+  breakageFeeHeadId: {
+    type: String,
+    default: null
+  },
+  breakageFeeHeadName: {
+    type: String,
+    default: null
+  },
+  meterReadings: {
+    meterType: {
+      type: String,
+      enum: ['single', 'dual'],
+      default: 'single'
+    },
+    startUnits: {
+      type: Number
+    },
+    endUnits: {
+      type: Number
+    },
+    meter1StartUnits: {
+      type: Number
+    },
+    meter1EndUnits: {
+      type: Number
+    },
+    meter2StartUnits: {
+      type: Number
+    },
+    meter2EndUnits: {
+      type: Number
+    },
+    readingDate: {
+      type: Date,
+      default: null
+    },
+    enteredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Admin',
+      default: null
+    }
+  },
+  calculatedElectricityBill: {
+    consumption: { type: Number },
+    rate: { type: Number },
+    totalRoomBill: { type: Number },
+    studentShare: { type: Number },
+    numberOfStudents: { type: Number },
+    total: { type: Number }, // For backward compatibility
+    billPeriodStart: { type: Date },
+    billPeriodEnd: { type: Date },
+    daysInPeriod: { type: Number },
+    calculatedAt: { type: Date }
   }
 }, {
   timestamps: true,
@@ -265,7 +327,8 @@ nocSchema.methods.deactivateStudent = async function() {
     roomNumber: null,
     bedNumber: null,
     lockerNumber: null,
-    nocDate: this.vacatingDate || this.approvedAt || new Date()
+    nocDate: this.vacatingDate || this.approvedAt || new Date(),
+    leftDate: this.vacatingDate || this.approvedAt || new Date()
   });
 
   // Phase 4: close HostelRequest allocation for this academic year
@@ -378,5 +441,21 @@ nocSchema.pre('remove', async function(next) {
 });
 
 const NOC = mongoose.model('NOC', nocSchema);
+
+const nocSettingsSchema = new mongoose.Schema({
+  breakageFeeHeadId: {
+    type: String,
+    default: ''
+  },
+  breakageFeeHeadName: {
+    type: String,
+    default: ''
+  }
+}, {
+  timestamps: true,
+  collection: 'nocsettings'
+});
+
+export const NOCSettings = mongoose.model('NOCSettings', nocSettingsSchema);
 
 export default NOC;
