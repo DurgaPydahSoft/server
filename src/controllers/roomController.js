@@ -45,13 +45,23 @@ const resolveGeneratorHostelId = (req) => {
   return req.query.hostel || req.body.hostel || null;
 };
 
-const normalizeGeneratorBill = (generatorBill, month, hostel) => ({
-  hostel: generatorBill?.hostel?._id || generatorBill?.hostel || hostel || null,
-  month: generatorBill?.month || month || null,
-  amount: Number(generatorBill?.amount) || 0,
-  updatedAt: generatorBill?.updatedAt || null,
-  createdAt: generatorBill?.createdAt || null
-});
+const normalizeGeneratorBill = (generatorBill, month, hostel) => {
+  const dieselLitres = Number(generatorBill?.dieselLitres) || 0;
+  const perLitreAmount = Number(generatorBill?.perLitreAmount) || 0;
+  const amount =
+    dieselLitres > 0 || perLitreAmount > 0
+      ? Math.round(dieselLitres * perLitreAmount * 100) / 100
+      : Number(generatorBill?.amount) || 0;
+  return {
+    hostel: generatorBill?.hostel?._id || generatorBill?.hostel || hostel || null,
+    month: generatorBill?.month || month || null,
+    dieselLitres,
+    perLitreAmount,
+    amount,
+    updatedAt: generatorBill?.updatedAt || null,
+    createdAt: generatorBill?.createdAt || null
+  };
+};
 
 /** Upsert ElectricityBill for a room+month and sync occupant demands */
 const upsertRoomElectricityBill = async (room, month, billFields) => {
@@ -1127,7 +1137,37 @@ export const saveGeneratorBillForMonth = async (req, res) => {
     await ensureGeneratorBillIndexes();
     const month = String(req.body.month || '').trim();
     const hostel = resolveGeneratorHostelId(req);
-    const parsedAmount = Number(req.body.amount);
+
+    const hasDieselLitres = req.body.dieselLitres !== undefined && req.body.dieselLitres !== '';
+    const hasPerLitre = req.body.perLitreAmount !== undefined && req.body.perLitreAmount !== '';
+    const dieselLitres = hasDieselLitres ? Number(req.body.dieselLitres) : 0;
+    const perLitreAmount = hasPerLitre ? Number(req.body.perLitreAmount) : 0;
+    const legacyAmount = req.body.amount !== undefined ? Number(req.body.amount) : NaN;
+
+    let parsedAmount;
+    if (hasDieselLitres || hasPerLitre) {
+      if (Number.isNaN(dieselLitres) || dieselLitres < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Diesel litres must be 0 or more.'
+        });
+      }
+      if (Number.isNaN(perLitreAmount) || perLitreAmount < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Per litre amount must be 0 or more.'
+        });
+      }
+      parsedAmount = Math.round(dieselLitres * perLitreAmount * 100) / 100;
+    } else if (!Number.isNaN(legacyAmount) && legacyAmount >= 0) {
+      parsedAmount = legacyAmount;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide dieselLitres and perLitreAmount (or legacy amount).'
+      });
+    }
+
     if (!month || !/^\d{4}-\d{2}$/.test(month)) {
       return res.status(400).json({
         success: false,
@@ -1140,12 +1180,6 @@ export const saveGeneratorBillForMonth = async (req, res) => {
         message: 'A valid hostel id is required.'
       });
     }
-    if (Number.isNaN(parsedAmount) || parsedAmount < 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Generator amount must be 0 or more.'
-      });
-    }
 
     const actorId = req.admin?._id || req.warden?._id || req.user?._id || null;
     const existing = await GeneratorBill.findOne({ month, hostel });
@@ -1153,6 +1187,9 @@ export const saveGeneratorBillForMonth = async (req, res) => {
     let generatorBill;
     if (existing) {
       existing.amount = parsedAmount;
+      existing.dieselLitres = hasDieselLitres || hasPerLitre ? dieselLitres : existing.dieselLitres || 0;
+      existing.perLitreAmount =
+        hasDieselLitres || hasPerLitre ? perLitreAmount : existing.perLitreAmount || 0;
       existing.updatedBy = actorId;
       generatorBill = await existing.save();
     } else {
@@ -1160,20 +1197,68 @@ export const saveGeneratorBillForMonth = async (req, res) => {
         hostel,
         month,
         amount: parsedAmount,
+        dieselLitres: hasDieselLitres || hasPerLitre ? dieselLitres : 0,
+        perLitreAmount: hasDieselLitres || hasPerLitre ? perLitreAmount : 0,
         createdBy: actorId,
         updatedBy: actorId
       });
     }
 
+    // Respond immediately — hostel-wide bill re-sync can take minutes (attendance + fees).
     res.json({
       success: true,
-      message: 'Generator bill saved successfully.',
-      data: normalizeGeneratorBill(generatorBill, month, hostel)
+      data: {
+        ...normalizeGeneratorBill(generatorBill, month, hostel),
+        syncQueued: true
+      },
+      message:
+        'Generator bill saved. Room electricity bills are being updated in the background with new generator shares.'
+    });
+
+    setImmediate(() => {
+      resyncHostelElectricityBillsForGenerator({ hostel, month }).catch((syncErr) => {
+        console.error(
+          `Generator save background re-sync failed (${hostel}/${month}):`,
+          syncErr.message
+        );
+      });
     });
   } catch (error) {
     console.error('Error saving generator bill:', error);
     res.status(500).json({ success: false, message: 'Failed to save generator bill' });
   }
+};
+
+/** Background: recompute studentBills/demands for all room bills in hostel+month. */
+const resyncHostelElectricityBillsForGenerator = async ({ hostel, month }) => {
+  const rooms = await Room.find({ hostel }).select('_id hostel category roomNumber meterType').lean();
+  if (!rooms.length) return { syncedBills: 0 };
+
+  const roomById = new Map(rooms.map((r) => [String(r._id), r]));
+  const bills = await ElectricityBill.find({
+    month,
+    room: { $in: rooms.map((r) => r._id) }
+  });
+
+  let syncedBills = 0;
+  for (const bill of bills) {
+    const room = roomById.get(String(bill.room));
+    if (!room) continue;
+    const occupancy = await applyOccupantsAndSyncDemands({
+      room,
+      month,
+      total: bill.total,
+      previousStudentBills: bill.studentBills || []
+    });
+    bill.studentBills = occupancy.studentBills;
+    await bill.save({ validateModifiedOnly: true });
+    syncedBills += 1;
+  }
+
+  console.log(
+    `Generator re-sync done for hostel=${hostel} month=${month}: ${syncedBills} bill(s) updated`
+  );
+  return { syncedBills };
 };
 
 /** POST save electricity settings (rate and/or fee head from Fees DB) */

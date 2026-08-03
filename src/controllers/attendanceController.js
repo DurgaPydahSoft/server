@@ -143,8 +143,11 @@ const computeAttendanceStatistics = (records) => {
   return {
     totalStudents,
     morningPresent,
+    morningAbsent: Math.max(0, totalStudents - morningPresent),
     eveningPresent,
+    eveningAbsent: Math.max(0, totalStudents - eveningPresent),
     nightPresent,
+    nightAbsent: Math.max(0, totalStudents - nightPresent),
     fullyPresent,
     partiallyPresent,
     absent
@@ -849,8 +852,11 @@ export const getAttendanceForDateRange = async (req, res, next) => {
     const statistics = {
       totalStudents,
       morningPresent,
+      morningAbsent: Math.max(0, totalStudents - morningPresent),
       eveningPresent,
+      eveningAbsent: Math.max(0, totalStudents - eveningPresent),
       nightPresent,
+      nightAbsent: Math.max(0, totalStudents - nightPresent),
       fullyPresent,
       partiallyPresent,
       absent

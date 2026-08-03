@@ -38,6 +38,7 @@ import paymentRoutes from './routes/paymentRoutes.js';
 import reminderConfigRoutes from './routes/reminderConfigRoutes.js';
 import nocRoutes from './routes/nocRoutes.js';
 import nocChecklistRoutes from './routes/nocChecklistRoutes.js';
+import roomChangeRoutes from './routes/roomChangeRoutes.js';
 import apiRouter from './routes/index.js';
 import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
 import { scheduleLateFeeProcessing } from './utils/lateFeeProcessor.js';
@@ -231,6 +232,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/reminder-config', reminderConfigRoutes);
 app.use('/api/noc', nocRoutes);
 app.use('/api/noc/checklist', nocChecklistRoutes);
+app.use('/api/room-changes', roomChangeRoutes);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {

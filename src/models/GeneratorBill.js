@@ -14,6 +14,22 @@ const generatorBillSchema = new mongoose.Schema(
       match: [/^\d{4}-\d{2}$/, 'Month must be in YYYY-MM format'],
       index: true
     },
+    /** Diesel quantity in litres */
+    dieselLitres: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+    /** Cost per litre */
+    perLitreAmount: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+    /**
+     * Hostel generator TOTAL for the month (litres × perLitreAmount).
+     * Split across eligible hostel students (not a flat per-student add-on).
+     */
     amount: {
       type: Number,
       required: true,
@@ -47,10 +63,11 @@ export const ensureGeneratorBillIndexes = async () => {
   if (generatorBillIndexesReady) return;
   await GeneratorBill.createCollection().catch(() => {});
   const collection = GeneratorBill.collection;
-  const indexes = await collection.indexes();
-  const hasLegacyMonthIndex = indexes.some((idx) => idx.name === 'month_1');
-  if (hasLegacyMonthIndex) {
-    await collection.dropIndex('month_1');
+  try {
+    // no-op probe
+    await collection.indexExists('hostel_1_month_1');
+  } catch (_) {
+    /* ignore */
   }
   await GeneratorBill.syncIndexes();
   generatorBillIndexesReady = true;

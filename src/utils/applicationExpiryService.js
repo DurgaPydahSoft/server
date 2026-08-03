@@ -444,7 +444,9 @@ export const expireHostelRequestByLeftDate = async (hostelRequest, { adminId = n
     userId: student?._id || null,
     status: 'expired',
     statusReason: 'left_date',
-    adminId
+    adminId,
+    // expiredAt must reflect the left date, not "now"
+    closedAt: hostelRequest.leftDate
   });
 
   if (!closed) return null;
@@ -457,7 +459,6 @@ export const expireHostelRequestByLeftDate = async (hostelRequest, { adminId = n
       student.room = undefined;
       student.applicationStatus = 'Expired';
       student.hostelStatus = 'Inactive';
-      student.leftDate = hostelRequest.leftDate;
       await student.save({ validateModifiedOnly: true });
     }
 
@@ -1052,7 +1053,12 @@ export const attachResolvedExpiryDates = async (students) => {
       let roomNumber = student.roomNumber;
       let bedNumber = student.bedNumber;
       let lockerNumber = student.lockerNumber;
-      let actualExpiredAt = student.allocatedTo || null;
+      // Prefer HostelRequest stay/expiry dates (leftDate / expiredAt via overlay) over occupancy history
+      let actualExpiredAt =
+        student.leftDate ||
+        student.actualExpiredAt ||
+        student.allocatedTo ||
+        null;
 
       const isExpiredProfile = student.applicationStatus === 'Expired';
 
@@ -1069,7 +1075,8 @@ export const attachResolvedExpiryDates = async (students) => {
             bedNumber = history.bedNumber;
             lockerNumber = history.lockerNumber;
           }
-          if (isExpiredProfile && history.allocatedTo) {
+          // Only fill from history when HostelRequest did not already supply an expiry/left date
+          if (isExpiredProfile && history.allocatedTo && !actualExpiredAt) {
             actualExpiredAt = history.allocatedTo;
           }
         } else if (!roomNumber && student.room) {

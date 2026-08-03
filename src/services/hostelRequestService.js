@@ -14,6 +14,16 @@ import {
 
 const normalizeAdmission = (value) => (value || '').toString().trim().toUpperCase();
 
+/** True when leftDate is today or earlier (local end-of-day). */
+const isLeftDateDueNow = (leftDate) => {
+  if (!leftDate) return false;
+  const d = leftDate instanceof Date ? leftDate : new Date(leftDate);
+  if (Number.isNaN(d.getTime())) return false;
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  return d.getTime() <= end.getTime();
+};
+
 export const resolveCollegeCode = (sdms, bodyCollegeCode, studentCollege) => {
   if (bodyCollegeCode) return String(bodyCollegeCode).trim().toUpperCase();
   const college = sdms?.college || studentCollege;
@@ -44,11 +54,17 @@ export const emitOccupancyHistoryForRequest = async (
   hostelRequest,
   userId,
   adminId,
-  expiryReason = 'registration'
+  expiryReason = 'registration',
+  options = {}
 ) => {
   if (!userId) return null;
   // No room yet (category-only registration) — nothing to audit for occupancy
   if (!hostelRequest.roomId || !hostelRequest.roomNumber) return null;
+
+  const allocatedFrom =
+    options.allocatedFrom ||
+    hostelRequest.allocatedAt ||
+    new Date();
 
   return RoomOccupancyHistory.create({
     student: userId,
@@ -64,7 +80,7 @@ export const emitOccupancyHistoryForRequest = async (
     roomNumber: hostelRequest.roomNumber,
     bedNumber: hostelRequest.bedNumber,
     lockerNumber: hostelRequest.lockerNumber,
-    allocatedFrom: hostelRequest.allocatedAt || new Date(),
+    allocatedFrom,
     allocatedTo: null,
     status: mapHistoryStatus(hostelRequest.status),
     expiryReason,
@@ -262,7 +278,8 @@ export const closeActiveHostelRequest = async ({
   userId = null,
   status = 'expired',
   statusReason = '',
-  adminId = null
+  adminId = null,
+  closedAt = null
 }) => {
   if (!['expired', 'cancelled'].includes(status)) {
     throw createError(400, 'closeActiveHostelRequest status must be expired or cancelled');
@@ -278,13 +295,16 @@ export const closeActiveHostelRequest = async ({
   });
   if (!item) return null;
 
+  const closedDate = closedAt ? new Date(closedAt) : new Date();
+  const effectiveClosedAt = Number.isNaN(closedDate.getTime()) ? new Date() : closedDate;
+
   item.status = status;
   item.statusReason = statusReason || status;
   item.updatedBy = adminId || item.updatedBy;
   if (status === 'expired') {
-    item.expiredAt = new Date();
+    item.expiredAt = effectiveClosedAt;
   } else {
-    item.cancelledAt = new Date();
+    item.cancelledAt = effectiveClosedAt;
   }
   await item.save({ validateModifiedOnly: true });
 
@@ -294,7 +314,7 @@ export const closeActiveHostelRequest = async ({
     {
       $set: {
         status: historyStatus,
-        allocatedTo: new Date(),
+        allocatedTo: effectiveClosedAt,
         expiryReason: statusReason || status
       }
     }
@@ -369,6 +389,49 @@ export const updateStayDatesForAdmission = async ({
   }
   if (leftDate !== undefined) {
     item.leftDate = leftDate ? new Date(leftDate) : null;
+
+    if (item.leftDate && isLeftDateDueNow(item.leftDate)) {
+      // Past/today left date → expire this AY request immediately
+      const wasActive = item.status === 'active';
+      item.status = 'expired';
+      item.statusReason = 'left_date';
+      item.expiredAt = item.leftDate;
+
+      if (wasActive) {
+        await RoomOccupancyHistory.updateMany(
+          {
+            hostelRequestId: item._id,
+            status: { $in: ['Active', 'Extended'] },
+            allocatedTo: null
+          },
+          {
+            $set: {
+              status: 'Expired',
+              allocatedTo: item.leftDate,
+              expiryReason: 'left_date'
+            }
+          }
+        );
+      } else {
+        await RoomOccupancyHistory.updateMany(
+          {
+            hostelRequestId: item._id,
+            status: { $in: ['Expired', 'Withdrawn'] }
+          },
+          { $set: { allocatedTo: item.leftDate } }
+        );
+      }
+    } else if (item.leftDate && (item.status === 'expired' || item.expiredAt)) {
+      // Already expired, keep expiredAt aligned with leftDate
+      item.expiredAt = item.leftDate;
+      await RoomOccupancyHistory.updateMany(
+        {
+          hostelRequestId: item._id,
+          status: { $in: ['Expired', 'Withdrawn'] }
+        },
+        { $set: { allocatedTo: item.leftDate } }
+      );
+    }
   }
   if (adminId) item.updatedBy = adminId;
 

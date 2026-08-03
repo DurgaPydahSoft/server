@@ -25,7 +25,15 @@ export const mapHostelRequestStatusToLegacy = (status) => {
  * Safe no-op when request is missing (legacy students before backfill).
  */
 export const overlayStudentWithHostelRequest = (student, request, requestedYear) => {
-  if (!request) return student;
+  // Stay dates are HostelRequest-only — never leak User.admitDate/joiningDate/leftDate
+  if (!request) {
+    return {
+      ...student,
+      admitDate: null,
+      joiningDate: null,
+      leftDate: null
+    };
+  }
 
   const legacy = mapHostelRequestStatusToLegacy(request.status);
   const hostel =
@@ -69,17 +77,13 @@ export const overlayStudentWithHostelRequest = (student, request, requestedYear)
     hostelRequestStatus: request.status,
     hostelRequestCreatedAt: request.createdAt,
     hostelSequenceId: request.hostelSequenceId,
-    // AY-wise stay dates from HostelRequest (fallback to User for pre-migration rows)
-    admitDate:
-      request.admitDate !== undefined && request.admitDate !== null
-        ? request.admitDate
-        : student.admitDate ?? request.createdAt ?? null,
-    joiningDate:
-      request.joiningDate !== undefined ? request.joiningDate : student.joiningDate ?? null,
-    leftDate: request.leftDate !== undefined ? request.leftDate : student.leftDate ?? null,
+    // AY-wise stay dates — HostelRequest is the only source of truth
+    admitDate: request.admitDate ?? request.createdAt ?? null,
+    joiningDate: request.joiningDate ?? null,
+    leftDate: request.leftDate ?? null,
     allocatedFrom: request.allocatedAt || student.allocatedFrom,
-    allocatedTo: request.expiredAt || request.cancelledAt || student.allocatedTo,
-    actualExpiredAt: request.expiredAt || student.actualExpiredAt,
+    allocatedTo: request.expiredAt || request.cancelledAt || null,
+    actualExpiredAt: request.expiredAt || null,
     isHistoricalView: currentAcademicYear
       ? currentAcademicYear !== requestYear
       : Boolean(student.isHistoricalView)

@@ -7,6 +7,8 @@ import ElectricitySettings from '../models/ElectricitySettings.js';
 import ElectricityBill from '../models/ElectricityBill.js';
 import GeneratorBill from '../models/GeneratorBill.js';
 import Room from '../models/Room.js';
+import RoomOccupancyHistory from '../models/RoomOccupancyHistory.js';
+import NOC from '../models/NOC.js';
 import {
   connectFeesDatabase,
   getFeesConnection,
@@ -23,8 +25,8 @@ import { getISTStartOfDay, getISTEndOfDay } from '../utils/dateUtils.js';
 
 const FEE_HEADS_COLLECTION = 'feeheads';
 
-/** Must have more than this many present/partial days in the bill month to create a fee demand */
-export const MIN_ATTENDANCE_DAYS_FOR_ELECTRICITY_DEMAND = 5;
+/** Legacy threshold — no longer used for eligibility (shares use attendance days directly). */
+export const MIN_ATTENDANCE_DAYS_FOR_ELECTRICITY_DEMAND = 0;
 
 /** Academic year starts in June (matches past-payments / backfill convention). */
 export const getAcademicYearForMonth = (monthStr) => {
@@ -71,22 +73,125 @@ export const requestOverlapsBillMonth = (request, monthStart, monthEnd) => {
     asDate(request.createdAt);
   if (joined && joined > monthEnd) return false;
 
-  const left = asDate(request.leftDate) || asDate(request.expiredAt);
-  if (left && left < monthStart) return false;
+  const left =
+    asDate(request.segmentEndExclusive) ||
+    asDate(request.leftDate) ||
+    asDate(request.expiredAt);
+  // segmentEndExclusive is exclusive: still overlaps if left === monthStart boundary handled by $gt in query;
+  // for filter: if exclusive end <= monthStart, no overlap
+  if (request.segmentEndExclusive != null) {
+    const endEx = asDate(request.segmentEndExclusive);
+    if (endEx && endEx <= monthStart) return false;
+  } else if (left && left < monthStart) {
+    return false;
+  }
 
   return true;
 };
 
 /**
+ * Occupants for a room+month from RoomOccupancyHistory segments (includes Transferred).
+ * allocatedTo is exclusive end so mid-month transfers split correctly across rooms.
+ */
+export const getHistoryOccupantsForRoomMonth = async (room, monthStr) => {
+  if (!room?._id || !monthStr || !/^\d{4}-\d{2}$/.test(monthStr)) return [];
+
+  const year = parseInt(monthStr.slice(0, 4));
+  const month = parseInt(monthStr.slice(5, 7)) - 1;
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+  const segments = await RoomOccupancyHistory.find({
+    room: room._id,
+    allocatedFrom: { $lte: monthEnd },
+    $or: [{ allocatedTo: null }, { allocatedTo: { $gt: monthStart } }]
+  })
+    .sort({ allocatedFrom: 1 })
+    .lean();
+
+  if (!segments.length) {
+    return getLiveActiveOccupantsForRoom(room);
+  }
+
+  const requestIds = [
+    ...new Set(segments.map((s) => String(s.hostelRequestId || '')).filter(Boolean))
+  ];
+  const requests = requestIds.length
+    ? await HostelRequest.find({ _id: { $in: requestIds } })
+        .populate('studentMasterId', 'admissionNumber name rollNumber studentPhone userId')
+        .lean()
+    : [];
+  const requestById = new Map(requests.map((r) => [String(r._id), r]));
+
+  // Get all unique student user IDs to look up approved NOCs
+  const studentUserIds = [
+    ...new Set([
+      ...segments.map((s) => String(s.student || '')).filter(Boolean),
+      ...requests.map((r) => String(r.studentMasterId?.userId || '')).filter(Boolean)
+    ])
+  ];
+
+  const nocs = studentUserIds.length
+    ? await NOC.find({ student: { $in: studentUserIds }, status: 'Approved' }).lean()
+    : [];
+  const nocByStudentId = new Map(nocs.map((n) => [String(n.student), n]));
+
+  return segments.map((seg) => {
+    const req = seg.hostelRequestId ? requestById.get(String(seg.hostelRequestId)) : null;
+    const allocatedFrom = asDate(seg.allocatedFrom);
+    const allocatedTo = asDate(seg.allocatedTo);
+
+    const studentIdStr = String(seg.student || req?.studentMasterId?.userId || '');
+    const studentNoc = studentIdStr ? nocByStudentId.get(studentIdStr) : null;
+    const nocVacatingDate = studentNoc ? asDate(studentNoc.vacatingDate) : null;
+    const requestLeftDate = req ? (asDate(req.leftDate) || asDate(req.expiredAt)) : null;
+
+    const resolvedLeftDate = nocVacatingDate || requestLeftDate;
+
+    let segmentEnd = allocatedTo;
+    if (resolvedLeftDate) {
+      const exclusiveLeftEnd = new Date(resolvedLeftDate.getTime() + 24 * 60 * 60 * 1000);
+      if (!segmentEnd || exclusiveLeftEnd < segmentEnd) {
+        segmentEnd = exclusiveLeftEnd;
+      }
+    }
+
+    return {
+      ...(req || {}),
+      _id: req?._id || seg.hostelRequestId || seg._id,
+      admissionNumber: req?.admissionNumber || seg.rollNumber || '',
+      sdmsName: req?.sdmsName || seg.studentName || '',
+      sdmsRollNumber: req?.sdmsRollNumber || seg.rollNumber || '',
+      academicYear: req?.academicYear || seg.academicYear,
+      status: req?.status || (seg.status === 'Active' ? 'active' : 'expired'),
+      roomId: room._id,
+      roomNumber: seg.roomNumber || room.roomNumber,
+      bedNumber: seg.bedNumber || req?.bedNumber,
+      lockerNumber: seg.lockerNumber || req?.lockerNumber,
+      hostelId: seg.hostel || req?.hostelId,
+      studentMasterId: req?.studentMasterId,
+      joiningDate: allocatedFrom,
+      admitDate: allocatedFrom,
+      allocatedAt: allocatedFrom,
+      leftDate: resolvedLeftDate || (allocatedTo ? new Date(allocatedTo.getTime() - 24 * 60 * 60 * 1000) : null),
+      expiredAt: null,
+      segmentEndExclusive: segmentEnd,
+      occupancyHistoryId: seg._id,
+      historyStudentId: seg.student
+    };
+  });
+};
+
+/**
  * Live active HostelRequests in a room (any academic year).
- * Electricity billing splits by this live count — not month/AY history.
+ * Prefer getHistoryOccupantsForRoomMonth for electricity billing months.
  */
 export const getLiveActiveOccupantsForRoom = async (room) => {
   if (!room?._id) return [];
 
   return HostelRequest.find({
     roomId: room._id,
-    status: 'active'
+    status: { $in: ['active', 'expired'] }
   })
     .populate('studentMasterId', 'admissionNumber name rollNumber studentPhone userId')
     .sort({ allocatedAt: 1, academicYear: -1 })
@@ -94,11 +199,10 @@ export const getLiveActiveOccupantsForRoom = async (room) => {
 };
 
 /**
- * @deprecated Prefer getLiveActiveOccupantsForRoom — kept name for call sites.
- * Month is only used for fee-year fallback, not for filtering occupants.
+ * Occupants for billing a room month — history segments when available.
  */
-export const getActiveOccupantsForRoomMonth = async (room, _monthStr) => {
-  return getLiveActiveOccupantsForRoom(room);
+export const getActiveOccupantsForRoomMonth = async (room, monthStr) => {
+  return getHistoryOccupantsForRoomMonth(room, monthStr);
 };
 
 const roundShare = (total, count) => {
@@ -110,7 +214,166 @@ export const getGeneratorAmountForMonth = async (monthStr, hostelId) => {
   if (!monthStr || !/^\d{4}-\d{2}$/.test(monthStr) || !hostelId) return 0;
   const hostel = hostelId?._id || hostelId;
   const generatorBill = await GeneratorBill.findOne({ month: monthStr, hostel }).lean();
-  return Number(generatorBill?.amount) || 0;
+  return resolveGeneratorTotal(generatorBill);
+};
+
+export const getJoinedDateFromRequest = (req) =>
+  asDate(req?.joiningDate) ||
+  asDate(req?.admitDate) ||
+  asDate(req?.allocatedAt) ||
+  asDate(req?.createdAt);
+
+export const isPastJoinerForMonth = (joinedDate, monthStart) =>
+  Boolean(joinedDate && monthStart && joinedDate < monthStart);
+
+/**
+ * Calendar days billed in the month for a room occupancy segment.
+ * allocatedTo is treated as exclusive end (transfer date = first day in new room).
+ * Falls back to joining-day → month-end when no segment end is provided.
+ */
+export const getSegmentBillingDaysInMonth = (
+  allocatedFrom,
+  allocatedToExclusive,
+  monthStart,
+  year,
+  month
+) => {
+  const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+  const from = allocatedFrom instanceof Date ? allocatedFrom : asDate(allocatedFrom);
+  if (!from) return 0;
+
+  const nextMonthStart = new Date(year, month + 1, 1);
+  const monthEndInclusive = new Date(year, month, totalDaysInMonth);
+
+  const start =
+    from < monthStart
+      ? monthStart
+      : new Date(from.getFullYear(), from.getMonth(), from.getDate());
+
+  let endExclusive = allocatedToExclusive
+    ? allocatedToExclusive instanceof Date
+      ? allocatedToExclusive
+      : asDate(allocatedToExclusive)
+    : nextMonthStart;
+  if (!endExclusive || endExclusive > nextMonthStart) endExclusive = nextMonthStart;
+  endExclusive = new Date(
+    endExclusive.getFullYear(),
+    endExclusive.getMonth(),
+    endExclusive.getDate()
+  );
+
+  if (start >= endExclusive) return 0;
+  if (start > monthEndInclusive) return 0;
+
+  const lastInclusive = new Date(
+    endExclusive.getFullYear(),
+    endExclusive.getMonth(),
+    endExclusive.getDate() - 1
+  );
+  if (lastInclusive < monthStart) return 0;
+
+  const startDay =
+    start.getFullYear() === year && start.getMonth() === month ? start.getDate() : 1;
+  const endDay =
+    lastInclusive.getFullYear() === year && lastInclusive.getMonth() === month
+      ? lastInclusive.getDate()
+      : totalDaysInMonth;
+
+  if (endDay < startDay) return 0;
+  return endDay - startDay + 1;
+};
+
+/**
+ * Calendar days billed in the month for an occupant (no transfer end).
+ * Past joiners / unknown join → full month.
+ * Mid-month joiners → inclusive days from joining date through month end.
+ */
+export const getStayBillingDaysInMonth = (joinedDate, monthStart, year, month) =>
+  getSegmentBillingDaysInMonth(joinedDate, null, monthStart, year, month);
+
+/**
+ * All month-overlapping occupants are eligible.
+ * Mid-month share uses joining-day → month-end calendar days (not attendance).
+ */
+export const isEligibleForElectricityDemand = (
+  _attendanceDays,
+  _opts = {}
+) => true;
+
+/** Hostel generator total: litres × rate when diesel inputs present, else legacy amount. */
+export const resolveGeneratorTotal = (generatorBill) => {
+  if (!generatorBill) return 0;
+  const litres = Number(generatorBill.dieselLitres);
+  const rate = Number(generatorBill.perLitreAmount);
+  const hasDieselInputs =
+    (Number.isFinite(litres) && litres > 0) || (Number.isFinite(rate) && rate > 0);
+  if (hasDieselInputs) {
+    return Math.round((Number.isFinite(litres) ? litres : 0) * (Number.isFinite(rate) ? rate : 0) * 100) / 100;
+  }
+  return Number(generatorBill.amount) || 0;
+};
+
+/**
+ * Split a total among eligible rows (equal vs mixed-joiner).
+ * Returns per-row amounts aligned with eligibleRows order + mean share.
+ */
+export const splitAmountAmongEligibleRows = (
+  eligibleRows,
+  totalAmount,
+  monthStart,
+  year,
+  month,
+  { hasNewJoining: hasNewJoiningOverride = null } = {}
+) => {
+  const total = Number(totalAmount) || 0;
+  if (!eligibleRows.length) {
+    return { amounts: [], meanShare: 0, hasNewJoining: false, totalBillingDays: 0 };
+  }
+
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+  const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const hasNewJoining =
+    hasNewJoiningOverride != null
+      ? Boolean(hasNewJoiningOverride)
+      : eligibleRows.some((r) => {
+          const joined = r.joinedDate instanceof Date ? r.joinedDate : asDate(r.joinedDate);
+          const end = r.segmentEndExclusive ?? r.allocatedTo ?? null;
+          const days = getSegmentBillingDaysInMonth(joined, end, monthStart, year, month);
+          // Day-split if anyone joined mid-month OR transferred out mid-month (partial segment)
+          return days > 0 && days < totalDaysInMonth;
+        });
+
+  if (hasNewJoining) {
+    const totalBillingDays = eligibleRows.reduce((sum, r) => {
+      const joined = r.joinedDate instanceof Date ? r.joinedDate : asDate(r.joinedDate);
+      const end = r.segmentEndExclusive ?? r.allocatedTo ?? null;
+      return sum + getSegmentBillingDaysInMonth(joined, end, monthStart, year, month);
+    }, 0);
+
+    const amounts = eligibleRows.map((row) => {
+      if (totalBillingDays <= 0) return Math.round(total / eligibleRows.length);
+      const joined = row.joinedDate instanceof Date ? row.joinedDate : asDate(row.joinedDate);
+      const end = row.segmentEndExclusive ?? row.allocatedTo ?? null;
+      const billingDays = getSegmentBillingDaysInMonth(joined, end, monthStart, year, month);
+      return Math.round(billingDays * (total / totalBillingDays));
+    });
+
+    return {
+      amounts,
+      meanShare: Math.round(total / eligibleRows.length),
+      hasNewJoining: true,
+      totalBillingDays
+    };
+  }
+
+  const equal = roundShare(total, eligibleRows.length);
+  return {
+    amounts: eligibleRows.map(() => equal),
+    meanShare: equal,
+    hasNewJoining: false,
+    totalBillingDays: eligibleRows.length * totalDaysInMonth
+  };
 };
 
 const buildElectricityDemandRemarks = ({
@@ -149,17 +412,24 @@ export const countPresentOrPartialDaysInMonth = async (studentId, monthStr) => {
   });
 };
 
-export const isEligibleForElectricityDemand = (attendanceDays) =>
-  Number(attendanceDays) > MIN_ATTENDANCE_DAYS_FOR_ELECTRICITY_DEMAND;
-
 /**
  * Live occupants with attendance days for the bill month (for UI + billing filter).
  */
 export const getLiveOccupantsWithAttendance = async (room, monthStr) => {
-  const occupants = await getLiveActiveOccupantsForRoom(room);
+  const occupants = await getHistoryOccupantsForRoomMonth(room, monthStr);
   const fallbackAcademicYear = getAcademicYearForMonth(monthStr);
+  const generatorShares = await buildGeneratorSharesForHostelMonth(room?.hostel, monthStr);
 
-  const masterIds = occupants
+  const year = parseInt(monthStr.slice(0, 4));
+  const month = parseInt(monthStr.slice(5, 7)) - 1;
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+  const filteredOccupants = occupants.filter((req) =>
+    requestOverlapsBillMonth(req, monthStart, monthEnd)
+  );
+
+  const masterIds = filteredOccupants
     .map((r) => r.studentMasterId?._id || r.studentMasterId)
     .filter(Boolean);
   const masters = masterIds.length
@@ -170,7 +440,7 @@ export const getLiveOccupantsWithAttendance = async (room, monthStr) => {
   const masterById = new Map(masters.map((m) => [String(m._id), m]));
 
   const rows = [];
-  for (const req of occupants) {
+  for (const req of filteredOccupants) {
     const masterId = req.studentMasterId?._id || req.studentMasterId;
     const master =
       (req.studentMasterId && typeof req.studentMasterId === 'object' && req.studentMasterId.name
@@ -178,11 +448,27 @@ export const getLiveOccupantsWithAttendance = async (room, monthStr) => {
         : null) ||
       masterById.get(String(masterId)) ||
       {};
-    const userId = master.userId || null;
+    const userId = master.userId || req.historyStudentId || null;
     const attendanceDays = userId
       ? await countPresentOrPartialDaysInMonth(userId, monthStr)
       : 0;
-    const eligible = isEligibleForElectricityDemand(attendanceDays);
+
+    const joinedDate = getJoinedDateFromRequest(req);
+    const segmentEnd = asDate(req.segmentEndExclusive);
+    const billingDays = getSegmentBillingDaysInMonth(
+      joinedDate,
+      segmentEnd,
+      monthStart,
+      year,
+      month
+    );
+
+    const eligible = isEligibleForElectricityDemand(attendanceDays, {
+      joinedDate,
+      monthStart
+    });
+
+    const generatorShare = userId ? (generatorShares.byStudentId.get(String(userId)) || 0) : 0;
 
     rows.push({
       _id: userId || req._id,
@@ -197,22 +483,38 @@ export const getLiveOccupantsWithAttendance = async (room, monthStr) => {
       hostelRequestId: req._id,
       studentPhone: master.studentPhone || null,
       attendanceDays,
-      eligibleForDemand: eligible
+      billingDays,
+      segmentEndExclusive: segmentEnd ? segmentEnd.toISOString() : null,
+      leftDate: req.leftDate ? (req.leftDate instanceof Date ? req.leftDate.toISOString() : new Date(req.leftDate).toISOString()) : null,
+      eligibleForDemand: eligible,
+      generatorShare,
+      isPastJoiner: isPastJoinerForMonth(joinedDate, monthStart),
+      joinedDate: joinedDate ? joinedDate.toISOString() : null
     });
   }
   return rows;
 };
 
 /**
- * Build ElectricityBill.studentBills from live active occupants who have
- * more than 5 present/partial days in the bill month.
+ * Build ElectricityBill.studentBills from occupancy-history segments for the month.
+ * Past-in-room / mid-month room join / mid-month transfer (exclusive end) supported.
+ * Generator share is hostel-wide (diesel total split), looked up per student.
  */
 export const buildStudentBillsForRoomMonth = async (room, monthStr, totalAmount) => {
   const fallbackAcademicYear = getAcademicYearForMonth(monthStr);
-  const generatorAmount = await getGeneratorAmountForMonth(monthStr, room?.hostel);
-  const occupants = await getLiveActiveOccupantsForRoom(room);
+  const generatorShares = await buildGeneratorSharesForHostelMonth(room?.hostel, monthStr);
+  const occupants = await getHistoryOccupantsForRoomMonth(room, monthStr);
 
-  const masterIds = occupants
+  const year = parseInt(monthStr.slice(0, 4));
+  const month = parseInt(monthStr.slice(5, 7)) - 1;
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+  const filteredOccupants = occupants.filter((req) =>
+    requestOverlapsBillMonth(req, monthStart, monthEnd)
+  );
+
+  const masterIds = filteredOccupants
     .map((r) => r.studentMasterId?._id || r.studentMasterId)
     .filter(Boolean);
 
@@ -223,7 +525,12 @@ export const buildStudentBillsForRoomMonth = async (room, monthStr, totalAmount)
     : [];
   const masterById = new Map(masters.map((m) => [String(m._id), m]));
 
-  const userIds = masters.map((m) => m.userId).filter(Boolean);
+  const userIds = [
+    ...new Set([
+      ...masters.map((m) => m.userId).filter(Boolean).map(String),
+      ...filteredOccupants.map((r) => r.historyStudentId).filter(Boolean).map(String)
+    ])
+  ];
   const users = userIds.length
     ? await User.find({ _id: { $in: userIds } })
         .select('_id name rollNumber admissionNumber academicYear')
@@ -234,7 +541,7 @@ export const buildStudentBillsForRoomMonth = async (room, monthStr, totalAmount)
   const eligibleRows = [];
   const ineligibleUserIds = [];
 
-  for (const req of occupants) {
+  for (const req of filteredOccupants) {
     const masterId = req.studentMasterId?._id || req.studentMasterId;
     const master =
       (req.studentMasterId && typeof req.studentMasterId === 'object' && req.studentMasterId.name
@@ -243,8 +550,8 @@ export const buildStudentBillsForRoomMonth = async (room, monthStr, totalAmount)
       masterById.get(String(masterId)) ||
       {};
 
-    const user = master.userId ? userById.get(String(master.userId)) : null;
-    const studentId = user?._id || master.userId;
+    const studentId = master.userId || req.historyStudentId;
+    const user = studentId ? userById.get(String(studentId)) : null;
     if (!studentId) {
       console.warn(
         `[electricityBilling] No User linked for admission ${req.admissionNumber} — skipping`
@@ -252,8 +559,15 @@ export const buildStudentBillsForRoomMonth = async (room, monthStr, totalAmount)
       continue;
     }
 
+    const joinedDate = getJoinedDateFromRequest(req);
+    const segmentEndExclusive = asDate(req.segmentEndExclusive);
     const attendanceDays = await countPresentOrPartialDaysInMonth(studentId, monthStr);
-    if (!isEligibleForElectricityDemand(attendanceDays)) {
+    if (
+      !isEligibleForElectricityDemand(attendanceDays, {
+        joinedDate,
+        monthStart
+      })
+    ) {
       ineligibleUserIds.push(String(studentId));
       continue;
     }
@@ -265,35 +579,212 @@ export const buildStudentBillsForRoomMonth = async (room, monthStr, totalAmount)
       admissionNumber: req.admissionNumber,
       hostelRequestId: req._id,
       academicYear: req.academicYear || fallbackAcademicYear,
-      attendanceDays
+      attendanceDays,
+      joinedDate,
+      segmentEndExclusive
     });
   }
 
-  const share = roundShare(totalAmount, eligibleRows.length);
-  const studentBills = eligibleRows.map((row) => ({
-    studentId: row.studentId,
-    studentName: row.studentName,
-    studentRollNumber: row.studentRollNumber,
-    admissionNumber: row.admissionNumber,
-    hostelRequestId: row.hostelRequestId,
-    academicYear: row.academicYear,
-    attendanceDays: row.attendanceDays,
-    electricityAmount: share,
-    generatorAmount,
-    amount: share + generatorAmount,
-    nocAdjustment: 0,
-    paymentStatus: 'unpaid'
-  }));
+  const hasNewJoining = eligibleRows.some((row) => {
+    const days = getSegmentBillingDaysInMonth(
+      row.joinedDate,
+      row.segmentEndExclusive,
+      monthStart,
+      year,
+      month
+    );
+    const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+    return days > 0 && days < totalDaysInMonth;
+  });
+
+  const elecSplit = splitAmountAmongEligibleRows(
+    eligibleRows,
+    totalAmount,
+    monthStart,
+    year,
+    month,
+    { hasNewJoining }
+  );
+
+  const studentBills = eligibleRows.map((row, idx) => {
+    const electricityAmount = elecSplit.amounts[idx] || 0;
+    const generatorAmount =
+      generatorShares.byStudentId.get(String(row.studentId)) || 0;
+    return {
+      studentId: row.studentId,
+      studentName: row.studentName,
+      studentRollNumber: row.studentRollNumber,
+      admissionNumber: row.admissionNumber,
+      hostelRequestId: row.hostelRequestId,
+      academicYear: row.academicYear,
+      attendanceDays: row.attendanceDays,
+      electricityAmount,
+      generatorAmount,
+      amount: electricityAmount + generatorAmount,
+      nocAdjustment: 0,
+      paymentStatus: 'unpaid'
+    };
+  });
 
   return {
-    occupants,
+    occupants: filteredOccupants,
     studentBills,
     ineligibleUserIds,
     occupantCount: occupants.length,
     eligibleCount: studentBills.length,
-    sharePerStudent: share,
-    generatorAmount,
+    sharePerStudent: elecSplit.meanShare,
+    generatorAmount: generatorShares.meanShare,
+    generatorTotal: generatorShares.total,
     academicYear: fallbackAcademicYear
+  };
+};
+
+/**
+ * Hostel-wide diesel generator total split among eligible students
+ * (same eligibility + equal/mixed rules as electricity).
+ */
+export const buildGeneratorSharesForHostelMonth = async (hostelId, monthStr) => {
+  const empty = {
+    byStudentId: new Map(),
+    total: 0,
+    meanShare: 0,
+    eligibleCount: 0,
+    dieselLitres: 0,
+    perLitreAmount: 0
+  };
+  if (!hostelId || !monthStr || !/^\d{4}-\d{2}$/.test(monthStr)) return empty;
+
+  const hostel = hostelId?._id || hostelId;
+  const generatorBill = await GeneratorBill.findOne({ month: monthStr, hostel }).lean();
+  const total = resolveGeneratorTotal(generatorBill);
+  if (total <= 0) {
+    return {
+      ...empty,
+      dieselLitres: Number(generatorBill?.dieselLitres) || 0,
+      perLitreAmount: Number(generatorBill?.perLitreAmount) || 0
+    };
+  }
+
+  const year = parseInt(monthStr.slice(0, 4));
+  const month = parseInt(monthStr.slice(5, 7)) - 1;
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59, 999);
+  const fallbackAcademicYear = getAcademicYearForMonth(monthStr);
+
+  const requests = await HostelRequest.find({
+    hostelId: hostel,
+    status: { $in: ['active', 'expired'] }
+  })
+    .populate('studentMasterId', 'admissionNumber name rollNumber userId')
+    .lean();
+
+  const studentUserIds = requests
+    .map((r) => String(r.studentMasterId?.userId || ''))
+    .filter(Boolean);
+
+  const nocs = studentUserIds.length
+    ? await NOC.find({ student: { $in: studentUserIds }, status: 'Approved' }).lean()
+    : [];
+  const nocByStudentId = new Map(nocs.map((n) => [String(n.student), n]));
+
+  const enrichedRequests = requests.map((req) => {
+    const studentIdStr = String(req.studentMasterId?.userId || '');
+    const studentNoc = studentIdStr ? nocByStudentId.get(studentIdStr) : null;
+    const nocVacatingDate = studentNoc ? asDate(studentNoc.vacatingDate) : null;
+    const requestLeftDate = asDate(req.leftDate) || asDate(req.expiredAt);
+
+    const resolvedLeftDate = nocVacatingDate || requestLeftDate;
+
+    const next = { ...req };
+    if (resolvedLeftDate) {
+      const exclusiveLeftEnd = new Date(resolvedLeftDate.getTime() + 24 * 60 * 60 * 1000);
+      next.segmentEndExclusive = exclusiveLeftEnd;
+      next.leftDate = resolvedLeftDate;
+    }
+    return next;
+  });
+
+  const filtered = enrichedRequests.filter((req) =>
+    requestOverlapsBillMonth(req, monthStart, monthEnd)
+  );
+
+  const masterIds = filtered
+    .map((r) => r.studentMasterId?._id || r.studentMasterId)
+    .filter(Boolean);
+  const masters = masterIds.length
+    ? await StudentMaster.find({ _id: { $in: masterIds } })
+        .select('admissionNumber name rollNumber userId')
+        .lean()
+    : [];
+  const masterById = new Map(masters.map((m) => [String(m._id), m]));
+
+  const eligibleRows = [];
+  const seenStudents = new Set();
+
+  for (const req of filtered) {
+    const masterId = req.studentMasterId?._id || req.studentMasterId;
+    const master =
+      (req.studentMasterId && typeof req.studentMasterId === 'object' && req.studentMasterId.name
+        ? req.studentMasterId
+        : null) ||
+      masterById.get(String(masterId)) ||
+      {};
+    const studentId = master.userId;
+    if (!studentId) continue;
+    const key = String(studentId);
+    if (seenStudents.has(key)) continue;
+
+    const joinedDate = getJoinedDateFromRequest(req);
+    const attendanceDays = await countPresentOrPartialDaysInMonth(studentId, monthStr);
+    if (
+      !isEligibleForElectricityDemand(attendanceDays, {
+        joinedDate,
+        monthStart
+      })
+    ) {
+      continue;
+    }
+
+    seenStudents.add(key);
+    eligibleRows.push({
+      studentId,
+      attendanceDays,
+      joinedDate,
+      segmentEndExclusive: req.segmentEndExclusive ?? null,
+      academicYear: req.academicYear || fallbackAcademicYear
+    });
+  }
+
+  const hasNewJoining = filtered.some((req) => {
+    const joined = getJoinedDateFromRequest(req);
+    const end = req.segmentEndExclusive ?? null;
+    const days = getSegmentBillingDaysInMonth(joined, end, monthStart, year, month);
+    const totalDaysInMonth = new Date(year, month + 1, 0).getDate();
+    return days > 0 && days < totalDaysInMonth;
+  });
+
+  const split = splitAmountAmongEligibleRows(
+    eligibleRows,
+    total,
+    monthStart,
+    year,
+    month,
+    { hasNewJoining }
+  );
+  const byStudentId = new Map();
+  eligibleRows.forEach((row, idx) => {
+    byStudentId.set(String(row.studentId), split.amounts[idx] || 0);
+  });
+
+  return {
+    byStudentId,
+    total,
+    meanShare: split.meanShare,
+    eligibleCount: eligibleRows.length,
+    dieselLitres: Number(generatorBill?.dieselLitres) || 0,
+    perLitreAmount: Number(generatorBill?.perLitreAmount) || 0,
+    hasNewJoining: split.hasNewJoining,
+    totalBillingDays: split.totalBillingDays
   };
 };
 

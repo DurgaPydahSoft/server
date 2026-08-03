@@ -55,6 +55,10 @@ import {
   updateStayDatesForAdmission
 } from '../services/hostelRequestService.js';
 import HostelRequest from '../models/HostelRequest.js';
+import {
+  normalizeAdmissionNumber,
+  overlayStudentWithHostelRequest
+} from '../utils/hostelRequestListDto.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -1225,6 +1229,45 @@ export const getStudents = async (req, res, next) => {
       }
     }
 
+    // When no AY filter, still expose stay dates from the active HostelRequest only (never User)
+    if (!academicYear && students?.length) {
+      const admissions = [
+        ...new Set(
+          students
+            .map((s) => normalizeAdmissionNumber(s.admissionNumber))
+            .filter(Boolean)
+        )
+      ];
+      if (admissions.length) {
+        const activeRequests = await HostelRequest.find({
+          admissionNumber: { $in: admissions },
+          status: 'active'
+        })
+          .populate('hostelId', '_id name')
+          .populate('hostelCategoryId', '_id name')
+          .lean();
+        const requestByAdmission = new Map();
+        for (const request of activeRequests) {
+          const key = normalizeAdmissionNumber(request.admissionNumber);
+          if (key) requestByAdmission.set(key, request);
+        }
+        students = students.map((student) => {
+          const request = requestByAdmission.get(
+            normalizeAdmissionNumber(student.admissionNumber)
+          );
+          return overlayStudentWithHostelRequest(
+            student,
+            request || null,
+            request?.academicYear || student.academicYear
+          );
+        });
+      } else {
+        students = students.map((student) =>
+          overlayStudentWithHostelRequest(student, null, student.academicYear)
+        );
+      }
+    }
+
     students = await attachResolvedExpiryDates(students);
 
     res.json({
@@ -1348,22 +1391,20 @@ export const updateStudent = async (req, res, next) => {
             `No hostel request found for this student in academic year ${targetYear}`
           );
         }
-
-        // Mirror onto User only when editing the student's current academic year (legacy cache)
-        if (String(targetYear) === String(student.academicYear)) {
-          if (stayDates.admitDate) student.admitDate = stayDates.admitDate;
-          if (joiningDate !== undefined) student.joiningDate = stayDates.joiningDate;
-          if (leftDate !== undefined) student.leftDate = stayDates.leftDate;
-        }
+        // Stay dates live only on HostelRequest — do not mirror onto User
       }
 
       if (leftDate) {
         // Schedule expiry for leftDate. Expire immediately only if date is today or earlier.
         if (stayDates && isLeftDateDue(stayDates.leftDate || leftDate)) {
-          expiredRequest = await expireHostelRequestByLeftDate(stayDates, {
-            adminId: req.admin?._id
-          });
-          if (expiredRequest && String(targetYear) === String(student.academicYear)) {
+          // updateStayDatesForAdmission already expires the HostelRequest when due;
+          // keep this for User/history side-effects on still-active docs.
+          expiredRequest =
+            (await expireHostelRequestByLeftDate(stayDates, {
+              adminId: req.admin?._id
+            })) || stayDates;
+
+          if (String(targetYear) === String(student.academicYear)) {
             student.bedNumber = undefined;
             student.lockerNumber = undefined;
             student.roomNumber = undefined;
@@ -1472,9 +1513,9 @@ export const updateStudent = async (req, res, next) => {
         data: {
           student: {
             id: student._id,
-            admitDate: stayDates?.admitDate ?? student.admitDate,
-            joiningDate: stayDates?.joiningDate ?? student.joiningDate,
-            leftDate: stayDates?.leftDate ?? student.leftDate,
+            admitDate: stayDates?.admitDate ?? null,
+            joiningDate: stayDates?.joiningDate ?? null,
+            leftDate: stayDates?.leftDate ?? null,
             roomNumber: student.roomNumber,
             bedNumber: student.bedNumber,
             lockerNumber: student.lockerNumber,
@@ -1691,8 +1732,14 @@ export const updateStudent = async (req, res, next) => {
     }
     // Phase 6: allocation lives on HostelRequest — sync there, not onto User room/hostel fields
     if (batch) student.batch = normalizeBatchToYear(batch);
-    if (academicYear) student.academicYear = academicYear;
-    if (hostelStatus) {
+    // academicYear in this payload scopes which HostelRequest to update (outer filter / form year).
+    // Do NOT rewrite User.academicYear here — that is the student's current year and must stay intact.
+    const stayYear = academicYear || student.academicYear;
+    const isEditingCurrentYear = String(stayYear) === String(student.academicYear);
+
+    // hostelStatus is User-level — only apply when editing the student's CURRENT academic year.
+    // Historical AY edits must not deactivate/cancel the live year request.
+    if (hostelStatus && isEditingCurrentYear) {
       const statusNorm = String(hostelStatus).toLowerCase();
       if (statusNorm === 'inactive' || statusNorm === 'expired') {
         student.applicationStatus = 'Expired';
@@ -1706,8 +1753,7 @@ export const updateStudent = async (req, res, next) => {
     }
     if (email) student.email = email;
 
-    // AY-wise stay dates → HostelRequest (User kept as current-year cache only)
-    const stayYear = academicYear || student.academicYear;
+    // AY-wise stay dates → HostelRequest only (never User)
     if (admitDate || joiningDate || leftDate !== undefined) {
       const stayDates = await updateStayDatesForAdmission({
         admissionNumber: student.admissionNumber,
@@ -1718,17 +1764,19 @@ export const updateStudent = async (req, res, next) => {
         adminId: req.admin?._id
       });
 
-      if (stayDates && String(stayYear) === String(student.academicYear || academicYear)) {
-        if (stayDates.admitDate) student.admitDate = stayDates.admitDate;
-        if (joiningDate !== undefined) student.joiningDate = stayDates.joiningDate;
-        if (leftDate !== undefined) student.leftDate = stayDates.leftDate;
+      if (!stayDates) {
+        throw createError(
+          404,
+          `No hostel request found for this student in academic year ${stayYear}`
+        );
       }
 
       if (leftDate) {
         // Schedule expiry; apply immediately only if leftDate is today or earlier.
         if (stayDates && isLeftDateDue(stayDates.leftDate || leftDate)) {
+          // HostelRequest is expired inside updateStayDatesForAdmission when due.
           await expireHostelRequestByLeftDate(stayDates, { adminId: req.admin?._id });
-          if (String(stayYear) === String(student.academicYear || academicYear)) {
+          if (isEditingCurrentYear) {
             student.bedNumber = undefined;
             student.lockerNumber = undefined;
             student.roomNumber = undefined;
@@ -1902,6 +1950,7 @@ export const updateStudent = async (req, res, next) => {
     }
 
     if (
+      isEditingCurrentYear &&
       student.applicationStatus === 'Expired' &&
       ['Active', 'Extended'].includes(previousApplicationStatus)
     ) {
