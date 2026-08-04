@@ -1020,101 +1020,9 @@ export const applyOccupantsAndSyncDemands = async ({
     ])
   );
 
+  // Fee DB demand sync is disabled — electricity bills are tracked only in this
+  // system and do NOT create StudentFee records in the external Fees DB.
   const demandResults = [];
-  if (settings.feeHeadId) {
-    const occupantByUserId = new Map();
-    for (const req of breakdown.occupants) {
-      const master = req.studentMasterId;
-      const userId = master?.userId || null;
-      if (userId) occupantByUserId.set(String(userId), req);
-    }
-
-    // Remove demands for live occupants below attendance threshold
-    for (const userId of breakdown.ineligibleUserIds || []) {
-      const req = breakdown.occupants.find((o) => {
-        const uid = o.studentMasterId?.userId;
-        return uid && String(uid) === String(userId);
-      });
-      const academicYear = req?.academicYear || breakdown.academicYear;
-      if (!academicYear) continue;
-      try {
-        const studentDoc = await resolveStudentDocForDemand(
-          { studentId: userId, admissionNumber: req?.admissionNumber },
-          { academicYear, admissionNumber: req?.admissionNumber }
-        );
-        const del = await deleteElectricityFeeDemand({
-          studentDoc: { ...studentDoc, academicYear },
-          feeHeadId: settings.feeHeadId,
-          academicYear
-        });
-        demandResults.push({ studentId: String(userId), ...del, reason: 'below_attendance_threshold' });
-      } catch (err) {
-        demandResults.push({ studentId: String(userId), ok: false, error: err.message });
-      }
-    }
-
-    // Also process students removed from this month's bill (reduce demand)
-    const currentIds = new Set(breakdown.studentBills.map((sb) => String(sb.studentId)));
-    for (const [studentId, prevAmount] of prevByStudent.entries()) {
-      if (currentIds.has(studentId)) continue;
-      if ((breakdown.ineligibleUserIds || []).includes(String(studentId))) continue;
-      const studentDoc = await resolveStudentDocForDemand(
-        { studentId, amount: 0, admissionNumber: null },
-        null
-      );
-      const academicYear =
-        getAcademicYearForMonth(month) || toFeesAcademicYear(studentDoc.academicYear);
-      const result = await upsertElectricityFeeDemand({
-        studentDoc,
-        feeHeadId: settings.feeHeadId,
-        academicYear,
-        amount: 0,
-        previousAmount: prevAmount.amount,
-        roomNumber: room.roomNumber,
-        billTotal: total,
-        month,
-        electricityAmount: 0,
-        generatorAmount: 0
-      });
-      demandResults.push({ studentId, ...result });
-    }
-
-    for (const sb of breakdown.studentBills) {
-      const req = occupantByUserId.get(String(sb.studentId));
-      const studentDoc = await resolveStudentDocForDemand(sb, req);
-      const academicYear = sb.academicYear || breakdown.academicYear;
-      const previousAmount = prevByStudent.get(String(sb.studentId))?.amount || 0;
-      try {
-        const result = await upsertElectricityFeeDemand({
-          studentDoc,
-          feeHeadId: settings.feeHeadId,
-          academicYear,
-          amount: sb.amount,
-          previousAmount,
-          roomNumber: room.roomNumber,
-          billTotal: total,
-          month,
-          electricityAmount: sb.electricityAmount,
-          generatorAmount: sb.generatorAmount
-        });
-        demandResults.push({ studentId: String(sb.studentId), ...result });
-      } catch (err) {
-        console.error(
-          `[electricityBilling] Demand sync failed for ${sb.studentRollNumber}:`,
-          err.message
-        );
-        demandResults.push({
-          studentId: String(sb.studentId),
-          ok: false,
-          error: err.message
-        });
-      }
-    }
-  } else {
-    console.warn(
-      '[electricityBilling] No electricity fee head configured — studentBills saved without Fees DB demand'
-    );
-  }
 
   // Strip helper fields not in Room schema before embedding; preserve payment state
   const prevPaymentByStudent = new Map(
@@ -1157,10 +1065,16 @@ export const applyOccupantsAndSyncDemands = async ({
 
 /**
  * Sync Fees DB demands for an already-raised bill.
- * Rebuilds studentBills from live eligible occupants (>5 present/partial days),
- * removes demands for ineligible students, and updates share amounts for eligible ones.
+ * NOTE: Fees DB demand sync is disabled — electricity bills no longer create
+ * StudentFee records in the external Fees DB.
  */
 export const syncExistingBillFeeDemands = async ({ room, month }) => {
+  return {
+    ok: false,
+    reason: 'fee_sync_disabled',
+    message: 'Electricity fee demand sync to the Fees DB is disabled.'
+  };
+  // --- disabled block below kept for reference ---
   const settings = await ElectricitySettings.getOrCreate();
   if (!settings.feeHeadId) {
     return {
