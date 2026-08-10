@@ -482,6 +482,25 @@ export const generateHostelAdmit = async (studentId) => {
   const printLogo = await loadPrintLogoImage();
   const printQr = await loadPrintQrImage();
 
+  // Resolve course and branch codes for display, e.g. "Btech-CSE" or "Diploma-DCSE"
+  let courseBranchDisplay = getCourseName(student.course);
+  try {
+    const { getCourseById, getBranchById } = await import('../utils/courseBranchHelper.js');
+    const courseObj = student.courseId ? await getCourseById(student.courseId) : null;
+    const branchObj = student.branchId ? await getBranchById(student.branchId) : null;
+
+    const courseCode = courseObj?.code || (typeof student.course === 'string' ? student.course : student.course?.code);
+    const branchCode = branchObj?.code || (typeof student.branch === 'string' ? student.branch : student.branch?.code);
+
+    if (courseCode && branchCode) {
+      courseBranchDisplay = `${courseCode}-${branchCode}`;
+    } else if (courseCode) {
+      courseBranchDisplay = courseCode;
+    }
+  } catch (err) {
+    console.error('Error resolving course and branch codes for admit card print:', err);
+  }
+
   const doc = new jsPDF('p', 'mm', 'a4');
   const pageWidth = doc.internal.pageSize.width; // 210mm
   const pageHeight = doc.internal.pageSize.height; // 297mm
@@ -626,14 +645,14 @@ export const generateHostelAdmit = async (studentId) => {
     const studentDetails = [
       ['Name:', String(student.name || '')],
       ['Roll No:', String(student.rollNumber || '')],
-      ['Course:', String(getCourseName(student.course))],
+      ['Course:', String(courseBranchDisplay)],
       ['Year:', String(student.year || '')],
       ['Hostel:', String(hostelName)],
       ['Mobile No:', String(student.studentPhone || '')],
       ['Parent No:', String(student.parentPhone || '')],
       ['Hostel ID:', String(student.hostelId || '')],
       ['Category:', String(student.category || '')],
-      ['Room:', String(student.room?.roomNumber || student.roomNumber || '')]
+      ['Room:', student.room ? String(student.room.roomNumber || student.roomNumber || '') : '']
     ];
 
     studentDetails.forEach(([label, value]) => {

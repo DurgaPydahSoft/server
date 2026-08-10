@@ -116,40 +116,88 @@ export const executeQuery = async (query, params = []) => {
   }
 };
 
-const STUDENT_SELECT_COLUMNS = `
-        id,
-        admission_number,
-        admission_no,
-        pin_no,
-        current_year,
-        current_semester,
-        batch,
-        course,
-        branch,
-        stud_type,
-        student_name,
-        student_status,
-        scholar_status,
-        student_mobile,
-        parent_mobile1,
-        parent_mobile2,
-        preferred_mobile_number,
-        caste,
-        gender,
-        father_name,
-        dob,
-        adhar_no,
-        admission_date,
-        student_address,
-        city_village,
-        mandal_name,
-        district,
-        previous_college,
-        certificates_status,
-        student_photo,
-        remarks,
-        created_at,
-        updated_at`;
+const STUDENT_DESIRED_COLUMNS = [
+  'id',
+  'admission_number',
+  'admission_no',
+  'pin_no',
+  'current_year',
+  'current_semester',
+  'batch',
+  'course',
+  'branch',
+  'stud_type',
+  'student_name',
+  'student_status',
+  'scholar_status',
+  'student_mobile',
+  'parent_mobile1',
+  'parent_mobile2',
+  'preferred_mobile_number',
+  'caste',
+  'gender',
+  'father_name',
+  'dob',
+  'adhar_no',
+  'admission_date',
+  'student_address',
+  'city_village',
+  'mandal_name',
+  'district',
+  'previous_college',
+  'certificates_status',
+  'student_photo',
+  'remarks',
+  'created_at',
+  'updated_at'
+];
+
+let studentsTableColumns = null;
+
+/**
+ * Dynamically fetch and cache all column names from the 'students' table
+ */
+export const getStudentsTableColumns = async () => {
+  if (studentsTableColumns) return studentsTableColumns;
+  try {
+    const pool = getSQLPool();
+    const [rows] = await pool.execute('SHOW COLUMNS FROM students');
+    studentsTableColumns = new Set(rows.map(row => row.Field.toLowerCase()));
+    console.log('✅ Resolved students table columns count:', studentsTableColumns.size);
+    return studentsTableColumns;
+  } catch (error) {
+    console.error('❌ Error fetching columns from students table:', error);
+    return null;
+  }
+};
+
+/**
+ * Filters standard query column projections down to columns that exist in the database table
+ */
+export const getSafeColumnsList = async (desiredColumns) => {
+  const columns = await getStudentsTableColumns();
+  if (!columns) {
+    return desiredColumns.join(', ');
+  }
+  
+  const result = desiredColumns.filter(col => columns.has(col.toLowerCase()));
+  
+  // Make sure if the table has college_id/course_id/branch_id/college, they are always selected
+  for (const idCol of ['college_id', 'course_id', 'branch_id', 'college']) {
+    if (columns.has(idCol) && !result.includes(idCol)) {
+      result.push(idCol);
+    }
+  }
+  
+  return result.join(', ');
+};
+
+/**
+ * Helper to get the full safe SELECT list for student details
+ */
+export const getSafeStudentSelectColumns = async () => {
+  return getSafeColumnsList(STUDENT_DESIRED_COLUMNS);
+};
 
 let lastSqlStudentFetchErrorLog = 0;
 
@@ -179,8 +227,9 @@ const formatSqlFetchError = (error) => {
 export const fetchStudentByIdentifier = async (identifier) => {
   try {
     const pool = getSQLPool();
+    const selectFields = await getSafeStudentSelectColumns();
     const query = `
-      SELECT ${STUDENT_SELECT_COLUMNS}
+      SELECT ${selectFields}
       FROM students
       WHERE pin_no = ? OR admission_number = ? OR admission_no = ?
       LIMIT 1
@@ -216,9 +265,10 @@ export const fetchStudentsByIdentifiers = async (identifiers = []) => {
 
   try {
     const pool = getSQLPool();
+    const selectFields = await getSafeStudentSelectColumns();
     const placeholders = unique.map(() => '?').join(', ');
     const query = `
-      SELECT ${STUDENT_SELECT_COLUMNS}
+      SELECT ${selectFields}
       FROM students
       WHERE pin_no IN (${placeholders})
          OR admission_number IN (${placeholders})
@@ -337,17 +387,20 @@ export const fetchStudentByName = async (name) => {
     const cleanName = name.replace(/\./g, '').replace(/\s+/g, '%').trim();
     // 'B . JAYA' -> 'B % JAYA'
     
+    const selectFields = await getSafeColumnsList([
+      'id',
+      'admission_number',
+      'admission_no',
+      'pin_no',
+      'student_name',
+      'current_year',
+      'batch',
+      'course',
+      'branch'
+    ]);
+    
     const query = `
-      SELECT 
-        id,
-        admission_number,
-        admission_no,
-        pin_no,
-        student_name,
-        current_year,
-        batch,
-        course,
-        branch
+      SELECT ${selectFields}
       FROM students
       WHERE REPLACE(student_name, '.', '') LIKE ? 
          OR student_name LIKE ?

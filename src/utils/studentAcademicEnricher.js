@@ -82,24 +82,115 @@ export const parseSqlStudentRow = async (sqlRow) => {
   let branch = sqlRow.branch || '';
   let courseId = null;
   let branchId = null;
-  let sqlCourseId = null;
-  let sqlBranchId = null;
+  let sqlCourseId = sqlRow.course_id ? parseInt(sqlRow.course_id, 10) : null;
+  let sqlBranchId = sqlRow.branch_id ? parseInt(sqlRow.branch_id, 10) : null;
   let college = null;
 
-  if (course) {
-    const match = await matchCourseAndBranch(course, branch);
-    if (match.success) {
-      course = match.courseName || course;
-      branch = match.branchName || branch;
-      courseId = match.courseId;
-      branchId = match.branchId;
-      college = match.college;
-      if (courseId?.toString().startsWith('sql_')) {
-        sqlCourseId = parseInt(courseId.toString().replace('sql_', ''), 10);
+  // 1. Resolve Course if we have sqlCourseId
+  if (sqlCourseId) {
+    try {
+      const { getCoursesFromSQL } = await import('./courseBranchMapper.js');
+      const courses = await getCoursesFromSQL();
+      const resolvedCourse = courses.find(c => Number(c.sqlId) === Number(sqlCourseId));
+      if (resolvedCourse) {
+        course = resolvedCourse.name || course;
+        courseId = resolvedCourse._id;
+        college = resolvedCourse.college;
       }
-      if (branchId?.toString().startsWith('sql_')) {
-        sqlBranchId = parseInt(branchId.toString().replace('sql_', ''), 10);
+    } catch (err) {
+      console.error('⚠️ [parseSqlStudentRow] Error resolving course by SQL ID:', err);
+    }
+  }
+
+  // 2. Resolve Branch if we have sqlBranchId
+  if (sqlBranchId) {
+    try {
+      const { getBranchesFromSQL } = await import('./courseBranchMapper.js');
+      const branches = await getBranchesFromSQL();
+      const resolvedBranch = branches.find(b => Number(b.sqlId) === Number(sqlBranchId));
+      if (resolvedBranch) {
+        branch = resolvedBranch.name || branch;
+        branchId = resolvedBranch._id;
       }
+    } catch (err) {
+      console.error('⚠️ [parseSqlStudentRow] Error resolving branch by SQL ID:', err);
+    }
+  }
+
+  // 3. Fallback to name matching if course or branch is not fully resolved but name strings are present
+  if ((!courseId || !branchId) && (course || branch)) {
+    try {
+      const match = await matchCourseAndBranch(course, branch);
+      if (match.success) {
+        if (!courseId) {
+          course = match.courseName || course;
+          courseId = match.courseId;
+          if (courseId?.toString().startsWith('sql_')) {
+            sqlCourseId = parseInt(courseId.toString().replace('sql_', ''), 10);
+          }
+        }
+        if (!branchId) {
+          branch = match.branchName || branch;
+          branchId = match.branchId;
+          if (branchId?.toString().startsWith('sql_')) {
+            sqlBranchId = parseInt(branchId.toString().replace('sql_', ''), 10);
+          }
+        }
+        if (!college) {
+          college = match.college;
+        }
+      }
+    } catch (err) {
+      console.error('⚠️ [parseSqlStudentRow] Error performing fallback course/branch matching:', err);
+    }
+  }
+
+  // 4. Resolve college by college_id if not already resolved from course
+  if (!college && sqlRow.college_id) {
+    try {
+      const { fetchCollegesFromSQL } = await import('./sqlService.js');
+      const collegesRes = await fetchCollegesFromSQL();
+      if (collegesRes.success && collegesRes.data) {
+        const col = collegesRes.data.find(c => Number(c.id) === Number(sqlRow.college_id));
+        if (col) {
+          college = {
+            id: col.id,
+            name: col.name,
+            code: col.code
+          };
+        }
+      }
+    } catch (err) {
+      console.error('⚠️ [parseSqlStudentRow] Error resolving college by ID:', err);
+    }
+  }
+
+  // 5. Fallback college from text column
+  if (!college && sqlRow.college) {
+    try {
+      const { fetchCollegesFromSQL } = await import('./sqlService.js');
+      const collegesRes = await fetchCollegesFromSQL();
+      if (collegesRes.success && collegesRes.data) {
+        const col = collegesRes.data.find(c => 
+          c.name.trim().toUpperCase() === sqlRow.college.toString().trim().toUpperCase() ||
+          c.code.trim().toUpperCase() === sqlRow.college.toString().trim().toUpperCase()
+        );
+        if (col) {
+          college = {
+            id: col.id,
+            name: col.name,
+            code: col.code
+          };
+        } else {
+          college = {
+            id: null,
+            name: sqlRow.college,
+            code: sqlRow.college.toString().substring(0, 10).toUpperCase()
+          };
+        }
+      }
+    } catch (err) {
+      console.error('⚠️ [parseSqlStudentRow] Error resolving college by name string:', err);
     }
   }
 
