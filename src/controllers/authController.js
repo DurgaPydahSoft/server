@@ -10,6 +10,9 @@ import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
 import { overlayStudentDtoWithHostelRequest } from '../services/hostelRequestService.js';
 import { isApplicationActive } from '../utils/studentStatusUtils.js';
 
+// TEMPORARY TOGGLE: Set to true to temporarily bypass hostel access deactivation check during login/auth
+const TEMPORARY_BYPASS_DEACTIVATION = true;
+
 const buildStudentAuthPayload = (enriched) => ({
   id: enriched._id,
   name: enriched.name,
@@ -78,9 +81,11 @@ export const studentLogin = async (req, res, next) => {
       throw createError(401, 'Invalid roll number or password');
     }
 
-    const student = students[0];
+    // Prioritize active application record over expired/withdrawn if multiple records exist
+    const activeStudent = students.find(s => s.applicationStatus !== 'Expired' && s.applicationStatus !== 'Withdrawn');
+    const student = activeStudent || students[0];
 
-    // Proactively sync password from older custom password record if latest record has default password
+    // Proactively sync password from older custom password record if selected record has default password
     if (student && !student.isPasswordChanged && students.length > 1) {
       const olderWithCustomPassword = students.slice(1).find(s => s.isPasswordChanged && s.password);
       if (olderWithCustomPassword) {
@@ -103,8 +108,8 @@ export const studentLogin = async (req, res, next) => {
       }
     }
 
-    // Block expired applications from logging in (applicationStatus is the account lifecycle)
-    if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
+    // Block expired applications from logging in (if ALL student records are Expired/Withdrawn)
+    if (!TEMPORARY_BYPASS_DEACTIVATION && (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
       throw createError(403, 'Your hostel access has been deactivated. Please contact the administration for assistance.');
     }
 
@@ -264,7 +269,7 @@ export const verifyRollNumber = async (req, res) => {
     const { rollNumber } = req.body;
     const identifier = rollNumber ? rollNumber.trim().toUpperCase() : '';
 
-    const student = await User.findOne({
+    const students = await User.find({
       $or: [
         { rollNumber: identifier },
         { admissionNumber: identifier }
@@ -272,11 +277,14 @@ export const verifyRollNumber = async (req, res) => {
       role: 'student'
     }).sort({ createdAt: -1 });
     
-    if (!student) {
+    if (!students || students.length === 0) {
       return res.status(404).json({ message: 'Roll number not found' });
     }
 
-    if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
+    const activeStudent = students.find(s => s.applicationStatus !== 'Expired' && s.applicationStatus !== 'Withdrawn');
+    const student = activeStudent || students[0];
+
+    if (!TEMPORARY_BYPASS_DEACTIVATION && (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
       return res.status(403).json({ message: 'Your hostel access has been deactivated. Please contact the administration for assistance.' });
     }
 
@@ -302,7 +310,7 @@ export const completeRegistration = async (req, res) => {
     const { rollNumber, password } = req.body;
     const identifier = rollNumber ? rollNumber.trim().toUpperCase() : '';
 
-    const student = await User.findOne({
+    const students = await User.find({
       $or: [
         { rollNumber: identifier },
         { admissionNumber: identifier }
@@ -310,11 +318,14 @@ export const completeRegistration = async (req, res) => {
       role: 'student'
     }).sort({ createdAt: -1 });
     
-    if (!student) {
+    if (!students || students.length === 0) {
       return res.status(404).json({ message: 'Roll number not found' });
     }
 
-    if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
+    const activeStudent = students.find(s => s.applicationStatus !== 'Expired' && s.applicationStatus !== 'Withdrawn');
+    const student = activeStudent || students[0];
+
+    if (!TEMPORARY_BYPASS_DEACTIVATION && (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
       return res.status(403).json({ message: 'Your hostel access has been deactivated. Please contact the administration for assistance.' });
     }
 
@@ -467,7 +478,7 @@ export const verifySSOToken = async (req, res, next) => {
       if (student.role !== 'student') {
         throw createError(401, 'Invalid token: user is not a student');
       }
-      if (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn') {
+      if (!TEMPORARY_BYPASS_DEACTIVATION && (student.applicationStatus === 'Expired' || student.applicationStatus === 'Withdrawn')) {
         throw createError(403, 'Your hostel access has been deactivated. Please contact the administration.');
       }
 
