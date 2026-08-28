@@ -27,6 +27,7 @@ import {
   normalizeAdmissionNumber,
   overlayStudentWithHostelRequest
 } from './hostelRequestListDto.js';
+import { dedupeStudentsByIdentity } from './studentListDedupe.js';
 
 export const getAcademicYearEndYear = (academicYear) => {
   if (!academicYear || !/^\d{4}-\d{4}$/.test(academicYear)) return null;
@@ -973,6 +974,8 @@ export const fetchStudentsForAcademicYear = async ({
     }
     students = students.filter((s) => matchesAcademicFilters(s, academicFilters));
   }
+
+  students = dedupeStudentsByIdentity(students);
 
   students = sortStudentsNewestFirst(students);
 

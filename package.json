@@ -24,7 +24,8 @@
     "migrate-warden-hostels": "node -r dotenv/config src/scripts/migrateWardenAssignedHostels.js",
     "migrate-warden-hostels:dry": "node -r dotenv/config src/scripts/migrateWardenAssignedHostels.js --dry-run",
     "backfill-hostel-requests": "node -r dotenv/config src/scripts/backfillHostelRequests.js",
-    "backfill-hostel-requests:dry": "node -r dotenv/config src/scripts/backfillHostelRequests.js --dry-run"
+    "backfill-hostel-requests:dry": "node -r dotenv/config src/scripts/backfillHostelRequests.js --dry-run",
+    "find-duplicate-students": "node -r dotenv/config src/scripts/findDuplicateStudentUsers.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.812.0",

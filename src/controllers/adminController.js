@@ -59,6 +59,7 @@ import {
   normalizeAdmissionNumber,
   overlayStudentWithHostelRequest
 } from '../utils/hostelRequestListDto.js';
+import { dedupeStudentsByIdentity } from '../utils/studentListDedupe.js';
 
 // Helper function to fetch image and convert to base64
 const fetchImageAsBase64 = async (imageUrl) => {
@@ -1212,6 +1213,7 @@ export const getStudents = async (req, res, next) => {
           .lean();
         let enriched = await enrichStudentsAcademics(allDocs, { skipFeesAndConcessions: isSkipFees });
         enriched = enriched.filter(s => matchesAcademicFilters(s, academicFilters));
+        enriched = dedupeStudentsByIdentity(enriched);
         count = enriched.length;
         const pageNum = parseInt(page, 10);
         const limitNum = parseInt(limit, 10);
