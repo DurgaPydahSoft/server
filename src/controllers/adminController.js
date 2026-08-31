@@ -57,7 +57,9 @@ import {
 import HostelRequest from '../models/HostelRequest.js';
 import {
   normalizeAdmissionNumber,
-  overlayStudentWithHostelRequest
+  overlayStudentWithHostelRequest,
+  applyActiveHostelRequestOverlay,
+  resolveCategoryNameForPrint
 } from '../utils/hostelRequestListDto.js';
 import { dedupeStudentsByIdentity } from '../utils/studentListDedupe.js';
 
@@ -3217,7 +3219,11 @@ export const generateAdmitCard = async (req, res, next) => {
       throw createError(404, 'Student not found');
     }
 
-    const enriched = await enrichStudentAcademics(student.toObject());
+    const studentWithAllocation = await applyActiveHostelRequestOverlay(
+      student.toObject(),
+      student.academicYear
+    );
+    const enriched = await enrichStudentAcademics(studentWithAllocation);
 
     if (!enriched.studentPhoto) {
       throw createError(400, 'Student photo is required for admit card generation. No photo found in SDMS for this student.');
@@ -3233,7 +3239,7 @@ export const generateAdmitCard = async (req, res, next) => {
       throw createError(400, 'Failed to load student photo from SDMS');
     }
 
-    let finalRoomNumber = student.roomNumber;
+    let finalRoomNumber = studentWithAllocation.roomNumber || student.roomNumber;
     if (!finalRoomNumber && (student.admissionNumber || student.rollNumber)) {
       const activeReq = await HostelRequest.findOne({
         $or: [
@@ -3247,6 +3253,8 @@ export const generateAdmitCard = async (req, res, next) => {
       }
     }
 
+    const categoryName = resolveCategoryNameForPrint(studentWithAllocation);
+
     res.json({
       success: true,
       data: {
@@ -3259,14 +3267,14 @@ export const generateAdmitCard = async (req, res, next) => {
           year: enriched.year ?? student.year,
           branch: enriched.branch?.name || enriched.branch || student.branch?.name || student.branch,
           gender: student.gender,
-          category: student.category,
+          category: categoryName,
           roomNumber: finalRoomNumber,
           studentPhone: enriched.studentPhone || student.studentPhone,
           parentPhone: enriched.parentPhone || student.parentPhone,
           email: student.email,
           batch: enriched.batch || student.batch,
           academicYear: student.academicYear,
-          hostelId: student.hostelId,
+          hostelId: studentWithAllocation.hostelSequenceId || student.hostelId,
           hostelStatus: student.hostelStatus,
           studentPhoto: photoBase64,
           address: student.address,

@@ -1,9 +1,9 @@
 /**
- * Fetch all HostelRequest rows for student "Nalli Prashanth"
- * (admit / joining / left dates + request status).
+ * Fetch HostelRequest rows for a student (admit / joining / left dates + hostel/category).
  *
  * Run from server/:
- *   node src/scripts/fetchNalliPrashanthRequests.js
+ *   node src/scripts/fetchNalliPrashanthRequests.js --admission-number=20261563
+ *   node src/scripts/fetchNalliPrashanthRequests.js --name="Nalli Prashanth"
  */
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
@@ -15,7 +15,15 @@ import User from '../models/User.js';
 
 dotenv.config();
 
-const TARGET_NAME = 'Nalli Prashanth';
+const nameArg = process.argv.find((a) => a.startsWith('--name='))?.split('=').slice(1).join('=').trim();
+const admissionArg = process.argv
+  .find((a) => a.startsWith('--admission-number='))
+  ?.split('=')[1]
+  ?.trim()
+  ?.toUpperCase();
+
+const TARGET_NAME = nameArg || '';
+const TARGET_ADMISSION = admissionArg || '';
 
 const fmt = (value) => {
   if (!value) return '—';
@@ -31,16 +39,29 @@ const run = async () => {
     process.exit(1);
   }
 
+  if (!TARGET_NAME && !TARGET_ADMISSION) {
+    console.error('Pass --admission-number=XXXXXXXX or --name="Student Name"');
+    process.exit(1);
+  }
+
   await mongoose.connect(uri);
   console.log('Connected.\n');
-  console.log(`Searching HostelRequests for: "${TARGET_NAME}"\n`);
+  console.log(
+    `Searching HostelRequests for: ${TARGET_ADMISSION ? `admission ${TARGET_ADMISSION}` : `name "${TARGET_NAME}"`}\n`
+  );
 
-  // 1) Match by name cached on HostelRequest / linked master / user
-  const nameRegex = new RegExp(TARGET_NAME.replace(/\s+/g, '\\s+'), 'i');
+  const nameRegex = TARGET_NAME ? new RegExp(TARGET_NAME.replace(/\s+/g, '\\s+'), 'i') : null;
+
+  const masterQuery = TARGET_ADMISSION
+    ? { admissionNumber: TARGET_ADMISSION }
+    : { name: nameRegex };
+  const userQuery = TARGET_ADMISSION
+    ? { role: 'student', admissionNumber: TARGET_ADMISSION }
+    : { role: 'student', name: nameRegex };
 
   const [masters, users] = await Promise.all([
-    StudentMaster.find({ name: nameRegex }).select('_id admissionNumber name rollNumber userId').lean(),
-    User.find({ role: 'student', name: nameRegex }).select('_id admissionNumber name rollNumber').lean()
+    StudentMaster.find(masterQuery).select('_id admissionNumber name rollNumber userId').lean(),
+    User.find(userQuery).select('_id admissionNumber name rollNumber hostel category roomNumber bedNumber academicYear').lean()
   ]);
 
   const masterIds = masters.map((m) => m._id);
@@ -62,7 +83,9 @@ const run = async () => {
   });
   console.log('');
 
-  const or = [{ sdmsName: nameRegex }];
+  const or = [];
+  if (TARGET_ADMISSION) or.push({ admissionNumber: TARGET_ADMISSION });
+  if (nameRegex) or.push({ sdmsName: nameRegex });
   if (masterIds.length) or.push({ studentMasterId: { $in: masterIds } });
   if (admissions.length) or.push({ admissionNumber: { $in: admissions } });
 

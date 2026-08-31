@@ -89,3 +89,52 @@ export const overlayStudentWithHostelRequest = (student, request, requestedYear)
       : Boolean(student.isHistoricalView)
   };
 };
+
+const buildActiveHostelRequestLookup = (student) => {
+  const orConditions = [];
+  if (student?.admissionNumber) {
+    orConditions.push({ admissionNumber: normalizeAdmissionNumber(student.admissionNumber) });
+  }
+  if (student?.rollNumber) {
+    orConditions.push({ sdmsRollNumber: String(student.rollNumber).trim().toUpperCase() });
+  }
+  if (!orConditions.length) return null;
+  return { status: 'active', $or: orConditions };
+};
+
+/** Resolve category/room/hostel from active HostelRequest when User cache is empty (CRM sync). */
+export const applyActiveHostelRequestOverlay = async (student, requestedYear = null) => {
+  const lookup = buildActiveHostelRequestLookup(student);
+  if (!lookup) return student;
+
+  const HostelRequest = (await import('../models/HostelRequest.js')).default;
+  await import('../models/Hostel.js');
+  await import('../models/HostelCategory.js');
+
+  const year = requestedYear || student.academicYear;
+  let activeReq = null;
+  if (year) {
+    activeReq = await HostelRequest.findOne({ ...lookup, academicYear: year })
+      .populate('hostelCategoryId', 'name')
+      .populate('hostelId', 'name')
+      .populate('roomId')
+      .lean();
+  }
+  if (!activeReq) {
+    activeReq = await HostelRequest.findOne(lookup)
+      .sort({ academicYear: -1, createdAt: -1 })
+      .populate('hostelCategoryId', 'name')
+      .populate('hostelId', 'name')
+      .populate('roomId')
+      .lean();
+  }
+
+  if (!activeReq) return student;
+  return overlayStudentWithHostelRequest(student, activeReq, year);
+};
+
+export const resolveCategoryNameForPrint = (student) => {
+  const raw = student?.category ?? student?.hostelCategory;
+  if (raw && typeof raw === 'object') return raw.name || '';
+  return String(raw || '').trim();
+};

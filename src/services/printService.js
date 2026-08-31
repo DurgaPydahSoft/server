@@ -17,6 +17,10 @@ import HostelRequest from '../models/HostelRequest.js';
 
 import { enrichStudentAcademics } from '../utils/studentAcademicEnricher.js';
 import { photoToBase64ForExport } from '../utils/studentPhotoService.js';
+import {
+  applyActiveHostelRequestOverlay,
+  resolveCategoryNameForPrint
+} from '../utils/hostelRequestListDto.js';
 
 // Helper function to format date as dd/mm/yyyy
 const formatDateDDMMYYYY = (date) => {
@@ -432,21 +436,8 @@ export const generateHostelAdmit = async (studentId) => {
     throw new Error('Student record not found');
   }
 
-  const studentObj = studentDoc.toObject();
-
-  if (!studentObj.roomNumber && !studentObj.room && (studentObj.admissionNumber || studentObj.rollNumber)) {
-    const activeReq = await HostelRequest.findOne({
-      $or: [
-        ...(studentObj.admissionNumber ? [{ admissionNumber: studentObj.admissionNumber }] : []),
-        ...(studentObj.rollNumber ? [{ sdmsRollNumber: studentObj.rollNumber }] : [])
-      ],
-      status: 'active'
-    }).populate('roomId').select('roomNumber roomId').lean();
-    if (activeReq) {
-      studentObj.roomNumber = activeReq.roomNumber;
-      if (activeReq.roomId) studentObj.room = activeReq.roomId;
-    }
-  }
+  let studentObj = studentDoc.toObject();
+  studentObj = await applyActiveHostelRequestOverlay(studentObj, studentObj.academicYear);
 
   const student = await enrichStudentAcademics(studentObj);
 
@@ -465,12 +456,14 @@ export const generateHostelAdmit = async (studentId) => {
   // Get course name from enriched student details
   const courseName = student.course?.name || student.course;
 
+  const categoryName = resolveCategoryNameForPrint(student);
+
   // Fetch fee structure using string course name (e.g. 'B.Tech') as per schema definition
   const baseQueryForFee = {
     academicYear: studentAcademicYear,
     course: courseName,
     year: student.year ? parseInt(student.year, 10) : 1,
-    category: student.category || 'A',
+    ...(categoryName ? { category: categoryName } : {}),
     isActive: true,
   };
   const feeStructure =
@@ -511,7 +504,9 @@ export const generateHostelAdmit = async (studentId) => {
   const generateOneCopy = (startY, copyLabel) => {
     const studentGender = student.gender?.toLowerCase();
     const studentCourse = getCourseName(student.course)?.toLowerCase();
-    const hostelName = studentGender === 'female' ? 'Girls Hostel' : 'Boys Hostel';
+    const hostelName =
+      student.hostel?.name ||
+      (studentGender === 'female' ? 'Girls Hostel' : 'Boys Hostel');
 
     const emergencyContacts = {
       'b.tech': '+91-9490484418',
@@ -650,9 +645,9 @@ export const generateHostelAdmit = async (studentId) => {
       ['Hostel:', String(hostelName)],
       ['Mobile No:', String(student.studentPhone || '')],
       ['Parent No:', String(student.parentPhone || '')],
-      ['Hostel ID:', String(student.hostelId || '')],
-      ['Category:', String(student.category || '')],
-      ['Room:', student.room ? String(student.room.roomNumber || student.roomNumber || '') : '']
+      ['Hostel ID:', String(student.hostelSequenceId || student.hostelId || '')],
+      ['Category:', categoryName],
+      ['Room:', String(student.room?.roomNumber || student.roomNumber || '')]
     ];
 
     studentDetails.forEach(([label, value]) => {
