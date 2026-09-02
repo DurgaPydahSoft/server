@@ -1,12 +1,12 @@
-import {
-  createRoomChangeRequest,
-  listRoomChangeRequests,
-  getStudentRoomHistory,
-  listStudentsWithRoomChangeHistory,
-  approveRoomChangeRequest,
-  rejectRoomChangeRequest
-} from '../services/roomChangeService.js';
 import HostelRequest from '../models/HostelRequest.js';
+import {
+  createCategoryChangeRequest,
+  listCategoryChangeRequests,
+  listStudentsWithCategoryChangeHistory,
+  approveCategoryChangeRequest,
+  rejectCategoryChangeRequest,
+  previewCategoryChangeFee
+} from '../services/categoryChangeService.js';
 
 const getActor = (req) => {
   const admin = req.admin || req.warden || req.user;
@@ -15,14 +15,13 @@ const getActor = (req) => {
   return { adminId: admin?._id, raisedBy: role, actorName };
 };
 
-/** Warden's linked hostel — null for admin (no hostel restriction). */
 const getWardenHostelId = (req) => {
   const warden = req.warden;
   if (!warden || warden.role !== 'warden') return null;
   return warden.assignedHostelId?._id || warden.assignedHostelId || null;
 };
 
-export const createRoomChange = async (req, res, next) => {
+export const createCategoryChange = async (req, res, next) => {
   try {
     const { adminId, raisedBy, actorName } = getActor(req);
     if (!adminId) {
@@ -32,6 +31,7 @@ export const createRoomChange = async (req, res, next) => {
     const {
       admissionNumber,
       academicYear,
+      toCategoryId,
       toRoomId,
       toBedNumber,
       toLockerNumber,
@@ -39,10 +39,11 @@ export const createRoomChange = async (req, res, next) => {
       reason
     } = req.body;
 
-    const doc = await createRoomChangeRequest({
+    const doc = await createCategoryChangeRequest({
       admissionNumber,
       academicYear,
-      toRoomId,
+      toCategoryId,
+      toRoomId: toRoomId || null,
       toBedNumber,
       toLockerNumber,
       effectiveDate,
@@ -55,7 +56,7 @@ export const createRoomChange = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'Room change request submitted for approval',
+      message: 'Category change request submitted for approval',
       data: doc
     });
   } catch (error) {
@@ -69,10 +70,10 @@ export const createRoomChange = async (req, res, next) => {
   }
 };
 
-export const listRoomChanges = async (req, res, next) => {
+export const listCategoryChanges = async (req, res, next) => {
   try {
     const { academicYear, status, admissionNumber, page, limit } = req.query;
-    const data = await listRoomChangeRequests({
+    const data = await listCategoryChangeRequests({
       academicYear,
       status,
       admissionNumber,
@@ -86,31 +87,10 @@ export const listRoomChanges = async (req, res, next) => {
   }
 };
 
-export const getRoomHistory = async (req, res, next) => {
-  try {
-    const { admissionNumber, academicYear, studentId } = req.query;
-    const items = await getStudentRoomHistory({
-      admissionNumber,
-      academicYear,
-      studentId
-    });
-    res.json({ success: true, data: items });
-  } catch (error) {
-    if (error.status || error.statusCode) {
-      return res.status(error.status || error.statusCode).json({
-        success: false,
-        message: error.message
-      });
-    }
-    next(error);
-  }
-};
-
-/** Students who already have room-change / multi-room history for an AY */
 export const listHistoryStudents = async (req, res, next) => {
   try {
     const { academicYear, q, page, limit } = req.query;
-    const data = await listStudentsWithRoomChangeHistory({
+    const data = await listStudentsWithCategoryChangeHistory({
       academicYear,
       q,
       page,
@@ -129,15 +109,14 @@ export const listHistoryStudents = async (req, res, next) => {
   }
 };
 
-/** Active students for AY picker — lightweight list with current room */
-export const listActiveStudentsForRoomChange = async (req, res, next) => {
+export const listActiveStudentsForCategoryChange = async (req, res, next) => {
   try {
     const { academicYear, q } = req.query;
     if (!academicYear) {
       return res.status(400).json({ success: false, message: 'academicYear is required' });
     }
 
-    const filter = { academicYear, status: 'active', roomId: { $ne: null } };
+    const filter = { academicYear, status: 'active' };
     const wardenHostelId = getWardenHostelId(req);
     if (req.warden?.role === 'warden') {
       if (!wardenHostelId) {
@@ -151,11 +130,7 @@ export const listActiveStudentsForRoomChange = async (req, res, next) => {
     if (q && String(q).trim()) {
       const term = String(q).trim();
       const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      filter.$or = [
-        { admissionNumber: rx },
-        { sdmsName: rx },
-        { sdmsRollNumber: rx }
-      ];
+      filter.$or = [{ admissionNumber: rx }, { sdmsName: rx }, { sdmsRollNumber: rx }];
     }
 
     const items = await HostelRequest.find(filter)
@@ -164,7 +139,7 @@ export const listActiveStudentsForRoomChange = async (req, res, next) => {
       )
       .populate('hostelId', 'name code')
       .populate('hostelCategoryId', 'name')
-      .populate('roomId', 'roomNumber bedCount')
+      .populate('roomId', 'roomNumber bedCount category')
       .sort({ roomNumber: 1, admissionNumber: 1 })
       .limit(100)
       .lean();
@@ -182,7 +157,10 @@ export const listActiveStudentsForRoomChange = async (req, res, next) => {
         currentBedNumber: r.bedNumber || '',
         currentLockerNumber: r.lockerNumber || '',
         hostel: r.hostelId,
+        hostelId: r.hostelId?._id || r.hostelId,
         category: r.hostelCategoryId,
+        currentCategoryId: r.hostelCategoryId?._id || r.hostelCategoryId,
+        currentCategoryName: r.hostelCategoryId?.name || '',
         bedCount: r.roomId?.bedCount
       }))
     });
@@ -191,16 +169,32 @@ export const listActiveStudentsForRoomChange = async (req, res, next) => {
   }
 };
 
-export const approveRoomChange = async (req, res, next) => {
+export const getFeePreview = async (req, res, next) => {
+  try {
+    const { admissionNumber, academicYear, toCategoryId } = req.query;
+    const data = await previewCategoryChangeFee({ admissionNumber, academicYear, toCategoryId });
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.status || error.statusCode) {
+      return res.status(error.status || error.statusCode).json({
+        success: false,
+        message: error.message
+      });
+    }
+    next(error);
+  }
+};
+
+export const approveCategoryChange = async (req, res, next) => {
   try {
     const { adminId, actorName } = getActor(req);
     if (!adminId) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    const doc = await approveRoomChangeRequest(req.params.id, adminId, req.body?.remarks || '', actorName);
+    const doc = await approveCategoryChangeRequest(req.params.id, adminId, req.body?.remarks || '', actorName);
     res.json({
       success: true,
-      message: 'Room change approved and applied',
+      message: 'Category change approved — fees updated in Fee Management',
       data: doc
     });
   } catch (error) {
@@ -214,13 +208,13 @@ export const approveRoomChange = async (req, res, next) => {
   }
 };
 
-export const rejectRoomChange = async (req, res, next) => {
+export const rejectCategoryChange = async (req, res, next) => {
   try {
     const { adminId, actorName } = getActor(req);
     if (!adminId) {
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
-    const doc = await rejectRoomChangeRequest(
+    const doc = await rejectCategoryChangeRequest(
       req.params.id,
       adminId,
       req.body?.rejectionReason || req.body?.reason || '',
@@ -228,7 +222,7 @@ export const rejectRoomChange = async (req, res, next) => {
     );
     res.json({
       success: true,
-      message: 'Room change request rejected',
+      message: 'Category change request rejected',
       data: doc
     });
   } catch (error) {

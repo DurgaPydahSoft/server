@@ -106,6 +106,7 @@ export const createRoomChangeRequest = async ({
   reason = '',
   raisedBy,
   raisedByAdmin,
+  raisedByName = '',
   restrictHostelId = null
 }) => {
   const admission = String(admissionNumber || '').trim();
@@ -200,6 +201,7 @@ export const createRoomChangeRequest = async ({
     status: 'Pending',
     raisedBy,
     raisedByAdmin,
+    raisedByName: raisedByName || '',
     requestedAt: new Date()
   });
 };
@@ -301,6 +303,8 @@ export const listStudentsWithRoomChangeHistory = async ({
   }
 
   const approved = await RoomChangeRequest.find(filter)
+    .populate('raisedByAdmin', 'name username role')
+    .populate('approvedBy', 'name username role')
     .sort({ effectiveDate: -1, approvedAt: -1 })
     .lean();
 
@@ -328,6 +332,16 @@ export const listStudentsWithRoomChangeHistory = async ({
       effectiveDate: req.effectiveDate,
       approvedAt: req.approvedAt,
       raisedBy: req.raisedBy,
+      raisedByName:
+        req.raisedByName ||
+        req.raisedByAdmin?.name ||
+        req.raisedByAdmin?.username ||
+        '',
+      approvedByName:
+        req.approvedByName ||
+        req.approvedBy?.name ||
+        req.approvedBy?.username ||
+        '',
       reason: req.reason || ''
     });
     // Latest approved change wins as "current" (list is sorted newest first)
@@ -358,7 +372,7 @@ export const listStudentsWithRoomChangeHistory = async ({
   };
 };
 
-export const approveRoomChangeRequest = async (requestId, adminId, remarks = '') => {
+export const approveRoomChangeRequest = async (requestId, adminId, remarks = '', approvedByName = '') => {
   const request = await RoomChangeRequest.findById(requestId);
   if (!request) throw createError(404, 'Room change request not found');
   if (request.status !== 'Pending') {
@@ -369,13 +383,14 @@ export const approveRoomChangeRequest = async (requestId, adminId, remarks = '')
 
   request.status = 'Approved';
   request.approvedBy = adminId;
+  request.approvedByName = approvedByName || '';
   request.approvedAt = new Date();
   request.approvalRemarks = remarks || '';
   await request.save();
   return request;
 };
 
-export const rejectRoomChangeRequest = async (requestId, adminId, rejectionReason = '') => {
+export const rejectRoomChangeRequest = async (requestId, adminId, rejectionReason = '', rejectedByName = '') => {
   const request = await RoomChangeRequest.findById(requestId);
   if (!request) throw createError(404, 'Room change request not found');
   if (request.status !== 'Pending') {
@@ -384,6 +399,7 @@ export const rejectRoomChangeRequest = async (requestId, adminId, rejectionReaso
 
   request.status = 'Rejected';
   request.rejectedBy = adminId;
+  request.rejectedByName = rejectedByName || '';
   request.rejectedAt = new Date();
   request.rejectionReason = rejectionReason || 'Rejected';
   await request.save();

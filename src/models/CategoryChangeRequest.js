@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-const roomChangeRequestSchema = new mongoose.Schema(
+const categoryChangeRequestSchema = new mongoose.Schema(
   {
     student: {
       type: mongoose.Schema.Types.ObjectId,
@@ -37,20 +37,24 @@ const roomChangeRequestSchema = new mongoose.Schema(
     },
 
     fromHostel: { type: mongoose.Schema.Types.ObjectId, ref: 'Hostel', default: null },
-    fromHostelCategory: { type: mongoose.Schema.Types.ObjectId, ref: 'HostelCategory', default: null },
+    fromHostelCategory: { type: mongoose.Schema.Types.ObjectId, ref: 'HostelCategory', required: true },
+    fromCategoryName: { type: String, trim: true, default: '' },
     fromRoom: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', default: null },
     fromRoomNumber: { type: String, trim: true, default: '' },
     fromBedNumber: { type: String, trim: true, default: '' },
     fromLockerNumber: { type: String, trim: true, default: '' },
 
-    toHostel: { type: mongoose.Schema.Types.ObjectId, ref: 'Hostel', required: true },
-    toHostelCategory: { type: mongoose.Schema.Types.ObjectId, ref: 'HostelCategory', default: null },
-    toRoom: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', required: true },
-    toRoomNumber: { type: String, trim: true, required: true },
+    toHostelCategory: { type: mongoose.Schema.Types.ObjectId, ref: 'HostelCategory', required: true },
+    toCategoryName: { type: String, trim: true, default: '' },
+    toRoom: { type: mongoose.Schema.Types.ObjectId, ref: 'Room', default: null },
+    toRoomNumber: { type: String, trim: true, default: '' },
     toBedNumber: { type: String, trim: true, default: '' },
     toLockerNumber: { type: String, trim: true, default: '' },
 
-    /** Transfer date used for occupancy history + electricity day split */
+    /** Fee snapshot at approval time */
+    previousTotalFee: { type: Number, default: 0, min: 0 },
+    newTotalFee: { type: Number, default: 0, min: 0 },
+
     effectiveDate: { type: Date, required: true, index: true },
 
     reason: {
@@ -94,9 +98,9 @@ const roomChangeRequestSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-roomChangeRequestSchema.index({ academicYear: 1, status: 1 });
-roomChangeRequestSchema.index({ student: 1, academicYear: 1 });
-roomChangeRequestSchema.index({ status: 1, requestedAt: -1 });
+categoryChangeRequestSchema.index({ academicYear: 1, status: 1 });
+categoryChangeRequestSchema.index({ student: 1, academicYear: 1 });
+categoryChangeRequestSchema.index({ status: 1, requestedAt: -1 });
 
-const RoomChangeRequest = mongoose.model('RoomChangeRequest', roomChangeRequestSchema);
-export default RoomChangeRequest;
+const CategoryChangeRequest = mongoose.model('CategoryChangeRequest', categoryChangeRequestSchema);
+export default CategoryChangeRequest;

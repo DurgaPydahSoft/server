@@ -39,8 +39,8 @@ import reminderConfigRoutes from './routes/reminderConfigRoutes.js';
 import nocRoutes from './routes/nocRoutes.js';
 import nocChecklistRoutes from './routes/nocChecklistRoutes.js';
 import roomChangeRoutes from './routes/roomChangeRoutes.js';
+import categoryChangeRoutes from './routes/categoryChangeRoutes.js';
 import apiRouter from './routes/index.js';
-import { scheduleReminderProcessing } from './utils/feeReminderProcessor.js';
 import { scheduleLateFeeProcessing } from './utils/lateFeeProcessor.js';
 import { scheduleApplicationExpiryProcessing } from './utils/applicationExpiryJob.js';
 import Notification from './models/Notification.js';
@@ -233,6 +233,7 @@ app.use('/api/reminder-config', reminderConfigRoutes);
 app.use('/api/noc', nocRoutes);
 app.use('/api/noc/checklist', nocChecklistRoutes);
 app.use('/api/room-changes', roomChangeRoutes);
+app.use('/api/category-changes', categoryChangeRoutes);
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
@@ -286,10 +287,6 @@ import { setupMenuImageCleanup } from './utils/setupCleanup.js';
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
-  
-  // Start fee reminder processing
-  scheduleReminderProcessing();
-  console.log('💰 Fee reminder processing scheduled');
   
   // Start late fee processing (can be called manually or via cron)
   scheduleLateFeeProcessing();

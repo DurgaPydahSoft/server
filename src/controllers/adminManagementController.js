@@ -359,6 +359,7 @@ export const updateSubAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { username, password, permissions, isActive, leaveManagementCourses, permissionAccessLevels, customRoleId, employeeId, hrmsUserId, hrmsEmployeeRef, hrmsLinkType, name, email } = req.body;
+    let resolvedLeaveManagementCourses = leaveManagementCourses;
 
     console.log('📝 Updating admin:', id);
     console.log('📝 Update data:', { username, permissions, isActive, leaveManagementCourses, customRoleId });
@@ -419,21 +420,21 @@ export const updateSubAdmin = async (req, res, next) => {
 
     // Validate leave management courses if leave_management permission is selected
     if (permissions && permissions.includes('leave_management')) {
-      if (!leaveManagementCourses || leaveManagementCourses.length === 0) {
+      if (!resolvedLeaveManagementCourses || resolvedLeaveManagementCourses.length === 0) {
         throw createError(400, 'At least one course must be selected for leave management permission');
       }
       
       // Validate that all courses exist in SQL database and convert to course names
       const { getCoursesFromSQL } = await import('../utils/courseBranchMapper.js');
       const sqlCourses = await getCoursesFromSQL();
-      const validatedCourses = leaveManagementCourses.map(courseIdOrName => {
+      const validatedCourses = resolvedLeaveManagementCourses.map(courseIdOrName => {
         const course = sqlCourses.find(c => c.name === courseIdOrName || c._id === courseIdOrName);
         if (!course) {
           throw createError(400, `Invalid course selected: ${courseIdOrName}. Course must exist in SQL database.`);
         }
         return course.name; // Store course name as string
       });
-      leaveManagementCourses = validatedCourses;
+      resolvedLeaveManagementCourses = validatedCourses;
     }
 
     // Update fields
@@ -452,9 +453,9 @@ export const updateSubAdmin = async (req, res, next) => {
       console.log('📝 Updating permissions from:', admin.permissions, 'to:', permissions);
       admin.permissions = permissions;
     }
-    if (leaveManagementCourses !== undefined && !customRoleId) {
-      console.log('📝 Updating leave management courses from:', admin.leaveManagementCourses, 'to:', leaveManagementCourses);
-      admin.leaveManagementCourses = leaveManagementCourses;
+    if (resolvedLeaveManagementCourses !== undefined && !customRoleId) {
+      console.log('📝 Updating leave management courses from:', admin.leaveManagementCourses, 'to:', resolvedLeaveManagementCourses);
+      admin.leaveManagementCourses = resolvedLeaveManagementCourses;
     }
     if (permissionAccessLevels !== undefined && !customRoleId) {
       console.log('📝 Updating permission access levels from:', admin.permissionAccessLevels, 'to:', permissionAccessLevels);
