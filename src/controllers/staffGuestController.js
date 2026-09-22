@@ -191,40 +191,22 @@ export const addStaffGuest = async (req, res, next) => {
 
     // Calculate charges for staff and students only
     let calculatedCharges = 0;
-    if (type === 'staff') {
-      if (stayType === 'monthly' && selectedMonth) {
-        // For monthly basis, calculate charges for the entire month
-        const chargeTypeValue = chargeType || 'per_day';
-        const monthlyFixedAmountValue = (chargeTypeValue === 'monthly_fixed' && monthlyFixedAmount) 
-          ? parseFloat(monthlyFixedAmount) 
-          : (chargeTypeValue === 'monthly_fixed' ? dailyRateSettings.monthlyFixedAmount : null);
-        
-        const tempStaffGuest = new StaffGuest({
-          type: 'staff',
-          stayType: 'monthly',
-          selectedMonth,
-          dailyRate: dailyRate ? parseFloat(dailyRate) : null,
-          chargeType: chargeTypeValue,
-          monthlyFixedAmount: monthlyFixedAmountValue
-        });
-        calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
-      } else if (stayType === 'daily' && checkinDate) {
-        // For daily basis, use existing logic
-        const tempStaffGuest = new StaffGuest({
-          type: 'staff',
-          stayType: 'daily',
-          checkinDate: new Date(checkinDate),
-          checkoutDate: checkoutDate ? new Date(checkoutDate) : null,
-          dailyRate: dailyRate ? parseFloat(dailyRate) : null
-        });
-        calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
-      }
-    } else if (type === 'student' && checkinDate) {
+    if (['staff', 'student'].includes(type)) {
+      const chargeTypeValue = chargeType || 'per_day';
+      const isFixed = ['monthly_fixed', 'fixed_rate', 'fixed'].includes(chargeTypeValue);
+      const fixedAmtValue = isFixed 
+        ? (monthlyFixedAmount ? parseFloat(monthlyFixedAmount) : (stayType === 'monthly' ? dailyRateSettings.monthlyFixedAmount : 0))
+        : null;
+      
       const tempStaffGuest = new StaffGuest({
-        type: 'student',
-        checkinDate: new Date(checkinDate),
+        type: type,
+        stayType: type === 'staff' ? (stayType || 'daily') : 'daily',
+        selectedMonth: type === 'staff' && stayType === 'monthly' ? selectedMonth : null,
+        checkinDate: checkinDate ? new Date(checkinDate) : null,
         checkoutDate: checkoutDate ? new Date(checkoutDate) : null,
-        dailyRate: dailyRate ? parseFloat(dailyRate) : null
+        dailyRate: dailyRate ? parseFloat(dailyRate) : null,
+        chargeType: chargeTypeValue,
+        monthlyFixedAmount: fixedAmtValue
       });
       calculatedCharges = tempStaffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
     }
@@ -251,9 +233,9 @@ export const addStaffGuest = async (req, res, next) => {
       roomNumber: ['staff', 'warden'].includes(type) ? (selectedRoom ? selectedRoom.roomNumber : (roomNumber ? roomNumber.trim() : null)) : null,
       bedNumber: ['staff', 'warden'].includes(type) && bedNumber ? bedNumber.trim() : null,
       dailyRate: dailyRate ? parseFloat(dailyRate) : null,
-      chargeType: (type === 'staff' && stayType === 'monthly') ? (chargeType || 'per_day') : 'per_day',
-      monthlyFixedAmount: (type === 'staff' && stayType === 'monthly' && (chargeType || 'per_day') === 'monthly_fixed') 
-        ? (monthlyFixedAmount ? parseFloat(monthlyFixedAmount) : dailyRateSettings.monthlyFixedAmount)
+      chargeType: (['staff', 'student'].includes(type)) ? (chargeType || 'per_day') : 'per_day',
+      monthlyFixedAmount: (['staff', 'student'].includes(type) && ['monthly_fixed', 'fixed_rate', 'fixed'].includes(chargeType || 'per_day')) 
+        ? (monthlyFixedAmount ? parseFloat(monthlyFixedAmount) : (stayType === 'monthly' ? dailyRateSettings.monthlyFixedAmount : 0))
         : null,
       calculatedCharges,
       photo: photoUrl,
@@ -686,31 +668,25 @@ export const updateStaffGuest = async (req, res, next) => {
     
     if (dailyRate !== undefined) staffGuest.dailyRate = dailyRate ? parseFloat(dailyRate) : null;
     
-    // Update charge type and monthly fixed amount for monthly staff
-    if (currentType === 'staff' && staffGuest.stayType === 'monthly') {
+    // Update charge type and fixed amount for staff and students
+    if (['staff', 'student'].includes(currentType)) {
       if (chargeType !== undefined) {
         staffGuest.chargeType = chargeType;
       }
-      if (monthlyFixedAmount !== undefined) {
-        const chargeTypeValue = chargeType !== undefined ? chargeType : staffGuest.chargeType;
-        if (chargeTypeValue === 'monthly_fixed') {
-          staffGuest.monthlyFixedAmount = monthlyFixedAmount 
-            ? parseFloat(monthlyFixedAmount) 
-            : dailyRateSettings.monthlyFixedAmount;
-        } else {
-          staffGuest.monthlyFixedAmount = null;
+      const chargeTypeValue = chargeType !== undefined ? chargeType : staffGuest.chargeType;
+      if (['monthly_fixed', 'fixed_rate', 'fixed'].includes(chargeTypeValue)) {
+        if (monthlyFixedAmount !== undefined && monthlyFixedAmount !== null && monthlyFixedAmount !== '') {
+          staffGuest.monthlyFixedAmount = parseFloat(monthlyFixedAmount);
+        } else if (staffGuest.monthlyFixedAmount === null) {
+          staffGuest.monthlyFixedAmount = staffGuest.stayType === 'monthly' ? dailyRateSettings.monthlyFixedAmount : 0;
         }
+      } else {
+        staffGuest.monthlyFixedAmount = null;
       }
     }
     
     // Recalculate charges for staff and students
-    if (currentType === 'staff') {
-      if (staffGuest.stayType === 'monthly' && staffGuest.selectedMonth) {
-        staffGuest.calculatedCharges = staffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
-      } else if (staffGuest.stayType === 'daily' && staffGuest.checkinDate) {
-        staffGuest.calculatedCharges = staffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
-      }
-    } else if (currentType === 'student' && staffGuest.checkinDate) {
+    if (['staff', 'student'].includes(currentType)) {
       staffGuest.calculatedCharges = staffGuest.calculateCharges(dailyRateSettings.staffDailyRate);
     } else if (currentType === 'guest') {
       staffGuest.calculatedCharges = 0;

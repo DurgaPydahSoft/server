@@ -105,12 +105,12 @@ const staffGuestSchema = new mongoose.Schema({
   },
   chargeType: {
     type: String,
-    enum: ['per_day', 'monthly_fixed'],
-    default: 'per_day' // Only applicable for monthly stayType
+    enum: ['per_day', 'monthly_fixed', 'fixed_rate', 'fixed'],
+    default: 'per_day'
   },
   monthlyFixedAmount: {
     type: Number,
-    default: null // Only applicable when chargeType is 'monthly_fixed'
+    default: null // Fixed rate amount for the stay period or month
   },
   calculatedCharges: {
     type: Number,
@@ -244,19 +244,19 @@ staffGuestSchema.methods.getValidityPeriod = function() {
 staffGuestSchema.methods.calculateCharges = function(defaultDailyRate = 0) {
   if (!['staff', 'student'].includes(this.type)) return 0;
   
-  // For monthly staff stays, check for selectedMonth instead of checkinDate
+  // If fixed rate / monthly fixed amount is set, use that
+  if (['monthly_fixed', 'fixed_rate', 'fixed'].includes(this.chargeType) && this.monthlyFixedAmount !== null && this.monthlyFixedAmount >= 0) {
+    return this.monthlyFixedAmount;
+  }
+  
+  // For monthly staff stays (per day rate)
   if (this.type === 'staff' && this.stayType === 'monthly' && this.selectedMonth) {
-    // If monthly fixed amount is set, use that
-    if (this.chargeType === 'monthly_fixed' && this.monthlyFixedAmount !== null && this.monthlyFixedAmount > 0) {
-      return this.monthlyFixedAmount;
-    }
-    // Otherwise, calculate based on daily rate
     const dayCount = this.getDayCount();
     const rateToUse = this.dailyRate !== null ? this.dailyRate : defaultDailyRate;
     return dayCount * rateToUse;
   }
   
-  // For daily staff stays and students, check for checkinDate
+  // For daily staff stays and students (per day rate)
   if (!this.checkinDate) return 0;
   
   const dayCount = this.getDayCount();

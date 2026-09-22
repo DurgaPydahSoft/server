@@ -865,12 +865,31 @@ export const generateStaffGuestAdmit = async (staffGuestId) => {
     doc.setFont('helvetica', 'bold');
     doc.text('CHARGES SUMMARY:', chargesSummaryX, emergencyY);
 
+    const isFixed = ['monthly_fixed', 'fixed_rate', 'fixed'].includes(staffGuest.chargeType);
+    const totalCharges = isGuest ? 0 : (isFixed ? (staffGuest.monthlyFixedAmount || staffGuest.calculatedCharges || 0) : (dailyRate * dayCount));
+    const actualCharges = isGuest ? 0 : (staffGuest.calculatedCharges || totalCharges);
+
     if (isGuest) {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7);
       doc.text(`No charges for guests`, chargesSummaryX, emergencyY + 5);
       doc.setFont('helvetica', 'bold');
       doc.text(`Total Payable: Rs.0`, chargesSummaryX, emergencyY + 10);
+    } else if (isFixed) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.text(`Charge Type: Fixed Rate`, chargesSummaryX, emergencyY + 5);
+      doc.text(`Fixed Amount: Rs.${staffGuest.monthlyFixedAmount || actualCharges}`, chargesSummaryX, emergencyY + 10);
+
+      if (staffGuest.stayType === 'monthly' && staffGuest.selectedMonth) {
+        const monthName = new Date(staffGuest.selectedMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        doc.text(`Valid Month: ${monthName}`, chargesSummaryX, emergencyY + 15);
+      } else {
+        doc.text(`Stay Duration: ${dayCount} days`, chargesSummaryX, emergencyY + 15);
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.text(`Total Payable: Rs.${actualCharges}`, chargesSummaryX, emergencyY + 22);
     } else {
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(7);
