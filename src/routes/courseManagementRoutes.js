@@ -329,7 +329,8 @@ router.get('/branches/:courseId', async (req, res) => {
       name: branch.name,
       code: branch.code,
       description: branch.description || '',
-      course: branch.course,
+      metadata: branch.metadata || {},
+      additionalYears: branch.additionalYears || [],
       isActive: branch.isActive
     }));
     
@@ -360,6 +361,8 @@ router.get('/branches', async (req, res) => {
       name: branch.name,
       code: branch.code,
       description: branch.description || '',
+      metadata: branch.metadata || {},
+      additionalYears: branch.additionalYears || [],
       course: branch.course ? {
         _id: branch.course,
         name: branch.courseName,

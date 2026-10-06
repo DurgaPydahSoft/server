@@ -22,6 +22,31 @@ const normalizeName = (name) => {
     .replace(/\s+/g, '');
 };
 
+const extractAdditionalYears = (value, fieldName = '') => {
+  if (Array.isArray(value)) {
+    return value.flatMap(item => extractAdditionalYears(item, fieldName));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, item]) => {
+      const nestedFieldName = `${fieldName} ${key}`;
+      return extractAdditionalYears(item, nestedFieldName);
+    });
+  }
+
+  const normalizedFieldName = fieldName.replace(/[_\s-]+/g, '').toLowerCase();
+  if (!/additionalyears?$/.test(normalizedFieldName)) {
+    return [];
+  }
+
+  const normalizedValue = typeof value === 'number'
+    ? String(value)
+    : typeof value === 'string'
+      ? value.trim()
+      : '';
+  return /^\d+(?:-\d{4})?$/.test(normalizedValue) ? [normalizedValue] : [];
+};
+
 /**
  * Refresh cache if expired
  */
@@ -75,6 +100,13 @@ export const mapSQLCourseToMongoFormat = (sqlCourse) => {
  * Map SQL branch to MongoDB format (for backward compatibility)
  */
 export const mapSQLBranchToMongoFormat = (sqlBranch) => {
+  const metadata = sqlBranch.metadata && typeof sqlBranch.metadata === 'object'
+    ? sqlBranch.metadata
+    : sqlBranch.metadata
+      ? JSON.parse(sqlBranch.metadata)
+      : {};
+  const additionalYears = [...new Set(extractAdditionalYears(metadata))];
+
   return {
     _id: `sql_${sqlBranch.id}`, // Use SQL ID with prefix
     sqlId: sqlBranch.id, // Store actual SQL ID
@@ -82,9 +114,18 @@ export const mapSQLBranchToMongoFormat = (sqlBranch) => {
     name: sqlBranch.name,
     code: sqlBranch.code || sqlBranch.name.substring(0, 10).toUpperCase(),
     description: sqlBranch.metadata ? JSON.stringify(sqlBranch.metadata) : '',
+    metadata,
+    additionalYears: [...new Set(additionalYears)],
     course: `sql_${sqlBranch.course_id}`, // Reference to course with SQL prefix
     courseName: sqlBranch.course_name,
     courseCode: sqlBranch.course_code,
+    college: sqlBranch.college_name
+      ? {
+          id: sqlBranch.college_id,
+          name: sqlBranch.college_name,
+          code: sqlBranch.college_code,
+        }
+      : null,
     isActive: sqlBranch.is_active === 1,
     createdAt: sqlBranch.created_at,
     updatedAt: sqlBranch.updated_at

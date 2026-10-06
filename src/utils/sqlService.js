@@ -434,13 +434,17 @@ export const fetchBranchesFromSQL = async () => {
         b.name,
         b.code,
         b.metadata,
+        c.college_id,
         b.is_active,
         b.created_at,
         b.updated_at,
         c.name AS course_name,
-        c.code AS course_code
+        c.code AS course_code,
+        col.name AS college_name,
+        col.code AS college_code
       FROM course_branches b
       LEFT JOIN courses c ON c.id = b.course_id
+      LEFT JOIN colleges col ON c.college_id = col.id
       ORDER BY b.name ASC
     `;
     const result = await executeQuery(query);
@@ -463,13 +467,17 @@ export const fetchBranchesByCourseFromSQL = async (courseId) => {
         b.name,
         b.code,
         b.metadata,
+        c.college_id,
         b.is_active,
         b.created_at,
         b.updated_at,
         c.name AS course_name,
-        c.code AS course_code
+        c.code AS course_code,
+        col.name AS college_name,
+        col.code AS college_code
       FROM course_branches b
       LEFT JOIN courses c ON c.id = b.course_id
+      LEFT JOIN colleges col ON c.college_id = col.id
       WHERE b.course_id = ?
       ORDER BY b.name ASC
     `;
