@@ -489,7 +489,11 @@ export const verifySSOToken = async (req, res, next) => {
         success: true,
         data: {
           token,
-          student: buildStudentAuthPayload(enriched),
+          student: {
+            ...buildStudentAuthPayload(enriched),
+            loginMethod: 'sso'
+          },
+          loginMethod: 'sso',
           requiresPasswordChange: false
         }
       });
@@ -508,7 +512,8 @@ export const verifySSOToken = async (req, res, next) => {
       username: admin.username,
       role: admin.role,
       permissions: admin.permissions,
-      permissionAccessLevels: admin.permissionAccessLevels
+      permissionAccessLevels: admin.permissionAccessLevels,
+      loginMethod: 'sso'
     };
     if (admin.role === 'warden' && admin.hostelType) {
       adminResponse.hostelType = admin.hostelType;
@@ -532,7 +537,8 @@ export const verifySSOToken = async (req, res, next) => {
       success: true,
       data: {
         token,
-        admin: adminResponse
+        admin: adminResponse,
+        loginMethod: 'sso'
       }
     });
   } catch (error) {
