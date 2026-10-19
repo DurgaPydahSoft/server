@@ -65,6 +65,7 @@ const io = new Server(httpServer, {
     "https://c96b621851ab.ngrok-free.app",
     "https://a516003c21f5.ngrok-free.app",
     "https://*.ngrok-free.app",
+    "https://crm.pydah.edu.in",
     process.env.BACKEND_URL,
     process.env.FRONTEND_URL
   ],
@@ -88,6 +89,7 @@ app.use(cors({
     "http://localhost:5173",
     "http://localhost:3000",
     "https://hms.pydahsoft.in",
+    "https://crm.pydah.edu.in",
     "http://192.168.232.93:3000",
     "http://192.168.3.186:3000",
     "http://192.168.3.148:3000",
@@ -185,6 +187,7 @@ app.get('/api/health', (req, res) => {
       "http://localhost:5173",
       "http://localhost:3000",
       "https://hms.pydahsoft.in",
+      "https://crm.pydah.edu.in",
       "http://192.168.232.93:3000",
       "http://192.168.3.186:3000",
       "http://192.168.3.148:3000",
